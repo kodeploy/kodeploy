@@ -9,14 +9,14 @@ export default function JavaScript() {
       <Section title="빌드 방식">
         <p className="text-fg-2 mb-3">
           <Code>package.json</Code>이 있으면 별도 Dockerfile 없이 <Code>자동 빌드</Code>가
-          가능해요. 배포 폼 빌드 방식을 <Code>자동</Code>으로 두면 의존성 설치와{" "}
+          가능해요. 배포 폼 빌드 방식을 <Code>자동 감지</Code>으로 두면 의존성 설치와{" "}
           <Code>start</Code> 스크립트를 알아서 잡습니다. 직접 제어하고 싶으면 Dockerfile을
           쓰면 됩니다.
         </p>
         <CodeBlock>
 {`{
   "scripts": {
-    "start": "node server.js"   // 자동 빌드가 이 스크립트로 앱을 실행
+    "start": "node server.js"
   }
 }`}
         </CodeBlock>
@@ -25,8 +25,7 @@ export default function JavaScript() {
       <Section title="포트 바인딩 (중요)">
         <p className="text-fg-2 mb-3">
           KoDeploy가 <Code>PORT</Code> 환경변수(기본 <Code>3000</Code>)를 주입해요. 앱은
-          반드시 <Code>process.env.PORT</Code>로 들어야 트래픽을 받습니다 - 하드코딩하지
-          마세요.
+          배포 설정과 같은 포트에서 연결을 받아야 해요. <Code>process.env.PORT</Code>를 사용하면 설정 변경에도 맞춰 실행됩니다.
         </p>
         <CodeBlock>
 {`const express = require("express");
@@ -34,11 +33,11 @@ const app = express();
 
 app.get("/", (req, res) => res.send("hello from KoDeploy"));
 
-// 반드시 process.env.PORT 사용 (KoDeploy가 3000으로 주입)
-app.listen(process.env.PORT || 3000);`}
+// 배포 설정의 포트에서 외부 연결을 받습니다.
+app.listen(Number(process.env.PORT || 3000), "0.0.0.0");`}
         </CodeBlock>
         <p className="kd-t-caption mt-2" style={{ color: "var(--fg-3)" }}>
-          배포 폼의 포트는 <Code>3000</Code> 그대로 두면 됩니다.
+          기본 포트는 <Code>3000</Code>이며, 변경하면 PORT에도 변경한 값이 들어와요.
         </p>
       </Section>
 
@@ -69,8 +68,7 @@ const pool = mysql.createPool({
         </Bullet>
         <Bullet>
           <Code>정적 export</Code>(<Code>output: "export"</Code>)만 쓸 거면 서버가 필요
-          없어요 - 백엔드를 <Code>사용 안 함</Code>으로 두고 <Code>프론트엔드(정적)</Code>{" "}
-          슬롯에 빌드 커맨드·출력 디렉토리만 지정하면 됩니다.
+          없어요. <Code>프론트엔드 배포</Code> 화면에서 빌드 명령과 결과 폴더를 지정하세요.
         </Bullet>
       </Section>
 
@@ -80,7 +78,7 @@ const pool = mysql.createPool({
           <Code>재배포·재시작 때 사라져요</Code>. 업로드가 있는 앱은 영속저장소가 필요합니다.
         </Bullet>
         <Bullet>
-          배포 폼 <Code>고급 옵션 → 저장소 → 로컬 디스크</Code>를 켜고 업로드 디렉토리를
+          배포 폼 <Code>실행 환경 → 스토리지 → 영구 저장소</Code>를 켜고 업로드 디렉토리를
           마운트 경로로 지정하세요. 저장소를 꺼도 데이터는 보존됩니다.
         </Bullet>
       </Section>

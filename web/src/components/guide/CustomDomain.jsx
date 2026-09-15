@@ -6,7 +6,7 @@ export default function CustomDomain() {
     <>
       <Section title="커스텀 도메인이란">
         내가 가진 도메인(예: <Code>app.example.com</Code>)을 KoDeploy 앱 주소로 연결하는 기능이에요.
-        연결하지 않으면 앱은 기본 주소 <Code>{"{app}"}.kodeploy.com</Code> 으로만 열립니다.
+        기본 주소 <Code>{"{app}"}.kodeploy.com</Code>은 연결 후에도 사용할 수 있어요.
       </Section>
 
       <Section title="왜 CNAME을 직접 추가해야 하나요?">
@@ -16,17 +16,17 @@ export default function CustomDomain() {
           들어온 트래픽이 앱까지 오게 하려면, <Code>도메인 주인이 직접</Code> "이 도메인은 KoDeploy로 보내라"고
           DNS에 적어줘야 합니다 - 그게 CNAME 한 줄이에요.
         </div>
-        <Bullet>Vercel·Netlify·Cloudflare Pages 등 어느 서비스를 써도 동일한, 피할 수 없는 단 하나의 수동 단계예요.</Bullet>
         <Bullet>그 뒤로 인증서 발급·갱신·라우팅은 전부 자동입니다 - 직접 관리할 게 없어요.</Bullet>
       </Section>
 
       <Section title="연결 방법">
-        <Bullet>배포 폼 <Code>고급 옵션 → 커스텀 도메인</Code> 또는 <Code>활동 패널 → 부가기능</Code> 에서 도메인을 입력해요.</Bullet>
+        <Bullet>앱 상세의 <Code>설정 → 도메인 → 사용자 도메인</Code>에 도메인을 입력하고 연결하세요. <Code>https://</Code>나 경로 없이 <Code>app.example.com</Code>처럼 입력합니다.</Bullet>
         <Bullet>표시되는 CNAME 한 줄을 도메인 DNS에 추가하세요:</Bullet>
         <div className="my-3">
           <CodeBlock>{`CNAME   app.example.com   →   origin.kodeploy.com`}</CodeBlock>
         </div>
-        <Bullet>전파되면 수 분 내 인증서가 자동 발급되고 활성화됩니다 - 직접 관리할 게 없어요.</Bullet>
+        <Bullet>DNS가 전파되고 도메인·인증서 상태가 활성화되면 HTTPS로 접속할 수 있어요. 걸리는 시간은 DNS와 인증서 검증 상태에 따라 달라집니다.</Bullet>
+        <Bullet>정적 사이트가 있으면 커스텀 도메인은 정적 사이트로, 없으면 서버로 연결돼요. API 호출에는 서버의 <Code>{"{app}"}-api.kodeploy.com</Code> 주소를 사용하세요.</Bullet>
       </Section>
 
       <Section title="주의사항">

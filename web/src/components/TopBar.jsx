@@ -26,6 +26,9 @@ export default function TopBar({ onLogin }) {
   const isActive = (to) => pathname === to || pathname.startsWith(`${to}/`);
   // 대시보드는 목록(/apps)과 앱 상세(/dashboard) 두 경로를 함께 가리킨다
   const onDashboard = isActive("/apps") || isActive("/dashboard");
+  // 앱 안(작업 화면)에서는 메뉴를 전부 왼쪽 사이드바가 들고 있다(읽는 화면도 셸 안에서
+  // 열린다) — 상단바는 브레드크럼과 테마·프로필만 남긴다.
+  const inApp = /^\/(dashboard|deploy)/.test(pathname);
   const links = [
     ...NAV_ITEMS,
     ...(user && ADMIN_ROLES.includes(user.role) ? [ADMIN_NAV_ITEM] : []),
@@ -51,7 +54,7 @@ export default function TopBar({ onLogin }) {
             현재 화면이면 밑줄. 뒤로 세로 괘선 하나를 두고 나머지 링크가 같은 간격으로 이어지며,
             테마·프로필은 여백을 더 주고 맨 끝에 묶는다. 랜딩·앱 화면에서 자리가 같다. */}
         <nav className="ml-auto hidden md:flex items-center shrink-0">
-          {user && (
+          {user && !inApp && (
             <>
               <Link
                 to="/apps"
@@ -70,7 +73,7 @@ export default function TopBar({ onLogin }) {
           )}
 
           <div className="flex items-center gap-[23px]">
-            {links.map((item) => {
+            {(inApp ? [] : links).map((item) => {
               const on = isActive(item.to);
               return (
                 <Link
@@ -87,7 +90,7 @@ export default function TopBar({ onLogin }) {
             })}
           </div>
 
-          <div className="flex items-center gap-3" style={{ marginLeft: 30 }}>
+          <div className="flex items-center gap-3" style={{ marginLeft: inApp ? 0 : 30 }}>
             <ThemeToggle />
             {loading ? null : user ? (
               <UserMenu />
@@ -189,9 +192,7 @@ function ThemeToggle({ withLabel }) {
   );
 }
 
-// 앱 화면(/dashboard…)에서만 보이는 현재 위치.
-// 대시보드로 돌아가는 링크는 오른쪽 메뉴 맨 앞에 있으므로 여기서는 앱 이름만 보인다
-// (한 바 안에 "대시보드"가 두 번 나오지 않게).
+// 앱 화면(/dashboard…)에서만 보이는 현재 위치 — 상단 메뉴가 비는 자리라 여기가 돌아가는 길이다.
 function Breadcrumb() {
   const { user } = useAuth();
   const { pathname } = useLocation();
@@ -199,7 +200,17 @@ function Breadcrumb() {
   return (
     <div className="flex items-center min-w-0" style={{ marginLeft: 18 }}>
       <span aria-hidden style={{ width: 1, height: 15, background: "var(--kd-border)" }} />
-      <span className="kd-t-label text-fg-1 truncate" style={{ marginLeft: 20, fontWeight: 600 }}>
+      <Link
+        to="/apps"
+        className="kd-t-label text-fg-2 hover:text-fg-1 no-underline transition-colors"
+        style={{ marginLeft: 20 }}
+      >
+        대시보드
+      </Link>
+      <span className="kd-t-label text-fg-4" style={{ marginInline: 10 }}>
+        /
+      </span>
+      <span className="kd-t-label text-fg-1 truncate" style={{ fontWeight: 600 }}>
         {user.app_name}
       </span>
     </div>

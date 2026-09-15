@@ -96,11 +96,10 @@ export default function AppSettings() {
       `}</style>
 
       <div className="kd-page" style={{ paddingBottom: 72 }}>
-        {/* ── 페이지 헤더 (시안 제목 y192 / 설명 y243 / 우측 앱 이름 x1269) ── */}
-        <div className="flex items-start gap-6 flex-wrap" style={{ paddingTop: 28 }}>
+        {/* ── 페이지 헤더 — 제목은 셸(AppLayout)이 그리고 여기는 설명 + 앱 상태만 ── */}
+        <div className="flex items-start gap-6 flex-wrap" style={{ paddingTop: 2 }}>
           <div className="min-w-0">
-            <h1 className="kd-t-title text-fg-1">설정</h1>
-            <p className="kd-t-body-s mt-1.5 text-fg-2">서비스 주소와 실행 설정을 관리하세요.</p>
+            <p className="kd-t-body-s text-fg-2">서비스 주소와 실행 설정을 관리하세요.</p>
           </div>
           <div className="ml-auto flex items-center gap-3 shrink-0" style={{ paddingTop: 6 }}>
             <span className="kd-t-subtitle text-fg-1">{user.app_name}</span>

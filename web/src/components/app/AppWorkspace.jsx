@@ -195,9 +195,8 @@ export default function AppWorkspace() {
   const [view, setView] = useState(seed === "storage" && !storageEnabled ? "console" : seed);
   // 한 번이라도 연 뷰만 마운트해 둔다 (이후로는 display로만 감춘다).
   const [opened, setOpened] = useState(() => new Set([view]));
-  // 확대 — 작업 공간만 화면을 꽉 채운다(다른 탭은 읽는 화면이라 그대로 둔다).
-  // 상단바·탭바는 그대로 두고, 카드가 화면 폭 끝까지 + 화면 아래로도 넘치게 커진다
-  // (넘친 만큼은 이 영역만 스크롤). 되돌리기는 같은 버튼 또는 Esc.
+  // 확대 — 작업 공간만 아래로 키운다(폭은 이미 화면 끝까지 쓰므로 그대로).
+  // 화면 밖으로 넘친 만큼은 이 영역만 스크롤한다. 되돌리기는 같은 버튼 또는 Esc.
   const [wide, setWide] = useState(false);
   useEffect(() => {
     if (!wide) return;
@@ -222,32 +221,35 @@ export default function AppWorkspace() {
     <div
       className={
         wide
-          ? "kd-page-wide flex-1 min-h-0 flex flex-col overflow-y-auto scroll-thin"
+          ? "kd-page flex-1 min-h-0 flex flex-col overflow-y-auto scroll-thin"
           : "kd-page flex-1 min-h-0 flex flex-col"
       }
-      style={wide ? { paddingTop: 10, paddingBottom: 12 } : { paddingTop: 30, paddingBottom: 40 }}
+      // 제목 줄(페이지 머리)이 이미 아래 여백을 갖고 있어 카드는 곧바로 이어 붙인다.
+      // 확대해도 여백은 같은 값이다 — 여기서 달라지면 카드가 위아래로 튄다.
+      style={{ paddingTop: 0, paddingBottom: 24 }}
     >
       {/* 확대 중에는 높이를 화면 높이에 맞춰 못 박는다 — 기본 상태(화면 높이 − 상단바 −
-          탭바 − 여백)보다 약 160px 크고, 화면 밖으로 나간 부분은 스크롤로 닿는다. */}
+          제목 줄 − 여백)보다 약 160px 크고, 화면 밖으로 나간 부분은 스크롤로 닿는다. */}
       <div
         className="kd-card flex-1 min-h-0 flex flex-col overflow-hidden"
         style={wide ? { flex: "none", height: "calc(100vh - 20px)" } : undefined}
       >
         {/* ── 카드 헤더 (시안 y196→283 = 60) ── */}
         <div
-          className="shrink-0 flex items-center gap-5"
+          className="shrink-0 flex items-center gap-3 sm:gap-5"
           style={{ height: 60, paddingInline: 20, borderBottom: "1px solid var(--kd-border)" }}
         >
-          <h1 className="kd-t-subtitle text-fg-1 truncate">{user.app_name}</h1>
+          <h2 className="kd-t-subtitle text-fg-1 truncate shrink">{user.app_name}</h2>
           <PodStatus status={slotStatus?.server?.status || slotStatus?.status} />
 
-          <nav className="ml-auto flex items-center gap-6 shrink-0">
+          {/* 좁은 화면에서는 뷰 탭이 카드 밖으로 잘려 손이 닿지 않았다 — 잘리는 대신 옆으로 민다 */}
+          <nav className="ml-auto flex items-center gap-4 sm:gap-6 min-w-0 overflow-x-auto scroll-thin">
             {views.map((v) => (
               <button
                 key={v.id}
                 onClick={() => openView(v.id)}
                 aria-pressed={view === v.id}
-                className="kd-t-label flex flex-col items-center transition-colors"
+                className="kd-t-label flex flex-col items-center shrink-0 transition-colors"
                 // 밑줄(2px)과 그 위 여백(6px)만큼 위를 띄워야 글자가 행 한가운데 온다
                 style={{ color: view === v.id ? "var(--fg-1)" : "var(--fg-2)", paddingTop: 8 }}
               >
@@ -263,8 +265,12 @@ export default function AppWorkspace() {
                 />
               </button>
             ))}
-            {/* 확대 — 좌우는 화면 끝까지, 위아래는 화면 밖으로 넘치게 키운다 */}
-            <span aria-hidden style={{ width: 1, height: 16, background: "var(--kd-border)" }} />
+            {/* 확대 — 폭은 그대로, 아래로만 화면 밖까지 키운다 */}
+            <span
+              aria-hidden
+              className="shrink-0"
+              style={{ width: 1, height: 16, background: "var(--kd-border)" }}
+            />
             <IconBtn
               icon={wide ? Minimize2 : Maximize2}
               label={wide ? "기본 크기" : "확대"}
@@ -330,7 +336,7 @@ function PodStatus({ status }) {
 function PaneBar({ dark, children }) {
   return (
     <div
-      className="shrink-0 flex items-center gap-3"
+      className="shrink-0 flex items-center gap-3 overflow-x-auto scroll-thin"
       style={{
         height: "var(--row-lg)",
         paddingInline: 16,

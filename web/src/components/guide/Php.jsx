@@ -80,7 +80,7 @@ $pdo = new PDO(
           영속저장소가 필요합니다.
         </Bullet>
         <Bullet>
-          배포 폼 <Code>고급 옵션 → 저장소 → 로컬 디스크</Code>를 켜고 업로드 디렉토리를
+          배포 폼 <Code>실행 환경 → 스토리지 → 영구 저장소</Code>를 켜고 업로드 디렉토리를
           마운트 경로로 지정하세요 (그누보드 기본값: <Code>/var/www/html/data</Code>).
         </Bullet>
         <Bullet>

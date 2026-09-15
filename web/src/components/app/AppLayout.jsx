@@ -1,4 +1,5 @@
-// 앱 상세 셸 — 탭바(개요 / 작업 공간 …) + 우측 액션, 그 아래 탭별 화면(Outlet).
+// 앱 상세 셸 — 왼쪽 작업 메뉴(개요 / 작업 공간 …) + 페이지 머리(제목 · 앱 액션),
+// 그 오른쪽에 탭별 화면(Outlet).
 //
 // 데이터(빌드 목록 · Pod 상태 · 환경변수)는 여기서 한 번만 폴링해 Outlet context로 내려준다.
 // 탭마다 각자 폴링하면 같은 엔드포인트를 N배로 두드리게 되고, 탭 전환마다 로딩이 번쩍인다.
@@ -13,7 +14,7 @@ import AppInfoDrawer from "./AppInfoDrawer.jsx";
 
 const ACTIVE = new Set(["queued", "building", "built", "deploying"]);
 
-// 시안의 앱 상세 탭 5개.
+// 앱 상세 메뉴 5개. label이 곧 그 화면의 제목이다(페이지 머리에 그대로 쓴다).
 const TABS = [
   { label: "개요", to: "/dashboard", end: true },
   { label: "작업 공간", to: "/dashboard/workspace" },
@@ -21,6 +22,20 @@ const TABS = [
   { label: "환경변수", to: "/dashboard/env" },
   { label: "설정", to: "/dashboard/settings" },
 ];
+
+// 사이드바 아래쪽 — 읽는 화면. 같은 셸 안에서 열리므로 작업 화면을 벗어나지 않는다.
+// "이용 방법"은 넣지 않는다 — 여기까지 온 사람은 이미 배포를 했고, 같은 내용을 문서의
+// "첫 배포 시작하기"가 더 자세히 다룬다(랜딩 상단바에는 그대로 있다).
+const SITE_LINKS = [
+  { label: "문서", to: "/dashboard/guide" },
+  { label: "블로그", to: "/dashboard/blog" },
+  { label: "피드백", to: "/dashboard/community" },
+];
+// 관리자 화면은 앱과 무관한 운영 화면이라 셸 밖으로 나간다.
+const ADMIN_LINK = { label: "관리자", to: "/admin", away: true };
+const ADMIN_ROLES = ["admin", "root"];
+
+const SIDEBAR_W = 200;
 
 export default function AppLayout() {
   const navigate = useNavigate();
@@ -128,86 +143,173 @@ export default function AppLayout() {
     error,
   };
 
+  const isActive = (t) =>
+    t.end ? location.pathname === t.to : location.pathname.startsWith(t.to);
+  const current = [...TABS].reverse().find(isActive);
+  const siteLinks = [
+    ...SITE_LINKS,
+    ...(ADMIN_ROLES.includes(user.role) ? [ADMIN_LINK] : []),
+  ];
+  const actions = (
+    <>
+      <a
+        href={`https://${appHost}`}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="kd-t-label inline-flex items-center gap-1 text-fg-2 hover:text-fg-1 no-underline transition-colors"
+      >
+        서비스 열기
+        <ArrowUpRight size={15} strokeWidth={1.8} />
+      </a>
+      {/* 시안은 액션 사이를 세로 괘선으로 끊는다 */}
+      <span aria-hidden style={{ width: 1, height: 16, background: "var(--kd-border)" }} />
+      <button
+        onClick={() => setInfoOpen(true)}
+        className="kd-t-label inline-flex items-center gap-1.5 text-fg-2 hover:text-fg-1 transition-colors"
+      >
+        <Info size={15} strokeWidth={1.7} />
+        앱 정보
+      </button>
+      <Link
+        to="/deploy"
+        className="kd-btn-secondary kd-btn-sm inline-flex items-center gap-1.5 no-underline"
+      >
+        <RotateCw size={15} strokeWidth={1.9} />
+        재배포
+      </Link>
+    </>
+  );
+
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
-      {/* ── 탭바 — 높이 48(시안 70), 아래 1px 괘선은 콘텐츠 폭까지만 ── */}
-      <div className="kd-page shrink-0">
-        <div
-          className="flex items-center h-12 gap-2"
-          style={{ borderBottom: "1px solid var(--kd-border)" }}
-        >
-          <nav className="flex items-center gap-2">
-            {TABS.map((t) => {
-              const active = t.end
-                ? location.pathname === t.to
-                : location.pathname.startsWith(t.to);
+    <div className="flex-1 min-h-0 flex">
+      {/* ── 왼쪽 작업 메뉴 — 앱 안에서만 쓰는 세로 메뉴. 아래쪽에 읽는 화면 링크를 묶는다 ── */}
+      <aside
+        className="hidden md:flex shrink-0 flex-col"
+        style={{
+          width: SIDEBAR_W,
+          borderRight: "1px solid var(--kd-border)",
+          // 첫 항목의 가운데가 본문 제목과 같은 높이에 오도록 맞춘 값
+          paddingTop: 12,
+          paddingBottom: 22,
+        }}
+      >
+        <nav className="flex flex-col">
+          {TABS.map((t) => (
+            <SideLink key={t.to} to={t.to} active={isActive(t)}>
+              {t.label}
+            </SideLink>
+          ))}
+        </nav>
+
+        <div className="mt-auto" style={{ paddingTop: 24 }}>
+          <div
+            aria-hidden
+            style={{ height: 1, background: "var(--kd-border)", marginInline: 24, marginBottom: 12 }}
+          />
+          <nav className="flex flex-col">
+            {siteLinks.map((l) => (
+              <Link
+                key={l.to}
+                to={l.to}
+                aria-current={!l.away && isActive(l) ? "page" : undefined}
+                className="kd-t-label no-underline transition-colors"
+                style={{
+                  padding: "8px 24px",
+                  color: !l.away && isActive(l) ? "var(--fg-1)" : "var(--fg-2)",
+                  fontWeight: !l.away && isActive(l) ? 650 : 500,
+                }}
+              >
+                {l.label}
+              </Link>
+            ))}
+          </nav>
+        </div>
+
+      </aside>
+
+      <div className="kd-app-main flex-1 min-w-0 min-h-0 flex flex-col">
+        {/* 좁은 화면 — 세로 메뉴 대신 가로로 눕힌다(넘치면 옆으로 민다) */}
+        <div className="md:hidden kd-page shrink-0">
+          <div
+            className="flex items-center gap-1 h-12 overflow-x-auto scroll-thin"
+            style={{ borderBottom: "1px solid var(--kd-border)" }}
+          >
+            {[...TABS, ...siteLinks].map((t) => {
+              const on = !t.away && isActive(t);
               return (
                 <Link
                   key={t.to}
                   to={t.to}
-                  className="kd-t-label h-12 px-4 inline-flex items-center no-underline transition-colors"
+                  className="kd-t-label h-12 px-3 inline-flex items-center no-underline shrink-0 transition-colors"
                   style={{
-                    color: active ? "var(--fg-1)" : "var(--fg-2)",
-                    fontWeight: active ? 650 : 500,
-                    // 탭바 하단 괘선 위에 겹쳐 그린다 — 시안도 밑줄이 괘선을 덮는다
-                    boxShadow: active ? "inset 0 -2px 0 0 var(--accent)" : "none",
+                    color: on ? "var(--fg-1)" : "var(--fg-2)",
+                    fontWeight: on ? 650 : 500,
+                    boxShadow: on ? "inset 0 -2px 0 0 var(--accent)" : "none",
                   }}
                 >
                   {t.label}
                 </Link>
               );
             })}
-          </nav>
-
-          <div className="ml-auto flex items-center gap-4">
-            <a
-              href={`https://${appHost}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="kd-t-label inline-flex items-center gap-1 text-fg-2 hover:text-fg-1 no-underline transition-colors"
-            >
-              서비스 열기
-              <ArrowUpRight size={15} strokeWidth={1.8} />
-            </a>
-            {/* 시안은 액션 사이를 세로 괘선으로 끊는다 */}
-            <span aria-hidden style={{ width: 1, height: 16, background: "var(--kd-border)" }} />
-            <button
-              onClick={() => setInfoOpen(true)}
-              className="kd-t-label inline-flex items-center gap-1.5 text-fg-2 hover:text-fg-1 transition-colors"
-            >
-              <Info size={15} strokeWidth={1.7} />
-              앱 정보
-            </button>
-            <Link
-              to="/deploy"
-              className="kd-btn-secondary kd-btn-sm inline-flex items-center gap-1.5 no-underline"
-            >
-              <RotateCw size={15} strokeWidth={1.9} />
-              재배포
-            </Link>
           </div>
         </div>
+
+        {/* ── 페이지 머리 — 지금 화면 이름 + 앱 액션(서비스 열기 · 앱 정보 · 재배포).
+            문서·이용 방법 같은 읽는 화면은 제 제목을 갖고 오므로 머리를 달지 않는다. ── */}
+        {current && (
+          <div className="kd-page shrink-0">
+            <div
+              className="flex items-center gap-4 flex-wrap"
+              style={{ paddingTop: 20, paddingBottom: 16 }}
+            >
+              <h1 className="kd-t-title text-fg-1">{current.label}</h1>
+              <div className="ml-auto flex items-center gap-4">{actions}</div>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="kd-page shrink-0">
+            <div
+              className="kd-t-caption mt-3 px-3 py-2"
+              style={{
+                border: "1px solid var(--kd-border)",
+                borderRadius: 8,
+                color: "var(--err-fg)",
+              }}
+            >
+              {error}
+            </div>
+          </div>
+        )}
+
+        <Outlet context={ctx} />
       </div>
-
-      {error && (
-        <div className="kd-page shrink-0">
-          <div
-            className="kd-t-caption mt-3 px-3 py-2"
-            style={{
-              border: "1px solid var(--kd-border)",
-              borderRadius: 8,
-              color: "var(--err-fg)",
-            }}
-          >
-            {error}
-          </div>
-        </div>
-      )}
-
-      <Outlet context={ctx} />
 
       {infoOpen && <AppInfoDrawer ctx={ctx} onClose={() => setInfoOpen(false)} />}
     </div>
+  );
+}
+
+// 세로 메뉴 한 줄 — 활성 항목은 왼쪽 세로 바(2px)와 굵은 글씨로 표시한다.
+function SideLink({ to, active, children }) {
+  return (
+    <Link
+      to={to}
+      aria-current={active ? "page" : undefined}
+      className="kd-t-body-s no-underline transition-colors"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        height: 44,
+        paddingInline: 24,
+        color: active ? "var(--fg-1)" : "var(--fg-2)",
+        fontWeight: active ? 650 : 500,
+        boxShadow: active ? "inset 2px 0 0 0 var(--accent)" : "none",
+      }}
+    >
+      {children}
+    </Link>
   );
 }
 

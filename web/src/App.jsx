@@ -47,6 +47,11 @@ function FormView() {
   );
 }
 
+// 앱 셸 안에서 읽는 화면을 띄울 때 쓰는 스크롤 칸 — 바깥 라우트의 래퍼와 같은 모양.
+function DocPane({ children }) {
+  return <div className="flex-1 min-h-0 overflow-auto scroll-thin">{children}</div>;
+}
+
 function GuideView() {
   return (
     <div className="flex-1 overflow-auto scroll-thin">
@@ -82,6 +87,13 @@ export default function App() {
                 <Route path="history" element={<AppHistory />} />
                 <Route path="env" element={<AppEnv />} />
                 <Route path="settings" element={<AppSettings />} />
+                {/* 읽는 화면도 앱 셸 안에서 그대로 본다 — 사이드바에서 눌러도 작업 화면을
+                    벗어나지 않는다(같은 컴포넌트, 감싸는 셸만 다르다).
+                    이용 방법은 첫 배포 전 안내라 셸 안에 두지 않는다(/how 단독으로만). */}
+                <Route path="guide" element={<DocPane><Guide /></DocPane>} />
+                <Route path="guide/:section" element={<DocPane><Guide /></DocPane>} />
+                <Route path="blog" element={<DocPane><Blog /></DocPane>} />
+                <Route path="community" element={<DocPane><Community /></DocPane>} />
               </Route>
               <Route path="/admin" element={<div className="flex-1 overflow-auto scroll-thin"><Admin /></div>} />
               <Route path="/community" element={<div className="flex-1 overflow-auto scroll-thin"><Community /></div>} />

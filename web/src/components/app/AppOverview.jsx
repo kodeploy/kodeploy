@@ -56,13 +56,10 @@ export default function AppOverview() {
   return (
     <div className="flex-1 overflow-auto scroll-thin">
       <div className="kd-page" style={{ paddingBottom: 72 }}>
-        {/* ── 페이지 헤더 (시안 y153→195, 제목 잉크 35px) ── */}
-        <div className="flex items-start gap-6 flex-wrap" style={{ paddingTop: 28 }}>
+        {/* ── 페이지 헤더 — 제목은 셸(AppLayout)이 그리고 여기는 설명 + 앱 상태만 ── */}
+        <div className="flex items-start gap-6 flex-wrap" style={{ paddingTop: 2 }}>
           <div className="min-w-0">
-            <h1 className="kd-t-title text-fg-1">
-              개요
-            </h1>
-            <p className="kd-t-body-s mt-1.5 text-fg-2">현재 배포와 연결된 리소스를 확인하세요.</p>
+            <p className="kd-t-body-s text-fg-2">현재 배포와 연결된 리소스를 확인하세요.</p>
           </div>
           <div className="ml-auto flex items-center gap-3 shrink-0" style={{ paddingTop: 6 }}>
             <span className="kd-t-subtitle text-fg-1">

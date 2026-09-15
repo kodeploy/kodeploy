@@ -308,13 +308,10 @@ export default function AppEnv() {
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="flex-1 min-h-0 overflow-auto scroll-thin">
         <div className="kd-page" style={{ paddingBottom: 40 }}>
-          {/* ── 페이지 헤더 (시안 제목 잉크 y208, 설명 y262) ── */}
-          <div className="flex items-start gap-6 flex-wrap" style={{ paddingTop: 28 }}>
+          {/* ── 페이지 헤더 — 제목은 셸(AppLayout)이 그리고 여기는 설명 + 앱 상태만 ── */}
+          <div className="flex items-start gap-6 flex-wrap" style={{ paddingTop: 2 }}>
             <div className="min-w-0">
-              <h1 className="kd-t-title" style={{ color: "var(--fg-1)" }}>
-                환경변수
-              </h1>
-              <p className="kd-t-body-s" style={{ color: "var(--fg-2)", marginTop: 4 }}>
+              <p className="kd-t-body-s" style={{ color: "var(--fg-2)" }}>
                 앱 실행에 필요한 값을 관리하세요.
               </p>
             </div>

@@ -8,20 +8,20 @@ export default function Storage() {
       <Section title="어떤 걸 골라야 하나요">
         <p className="text-fg-2 mb-3">
           앱 컨테이너의 디스크는 <Code>재배포·재시작 때 초기화</Code>돼요. 데이터를 남기려면
-          배포 폼 <Code>고급 옵션 → 영속 저장소</Code>에서 둘 중 하나를 켜세요.
+          배포 폼 <Code>실행 환경 → 스토리지</Code>에서 둘 중 하나를 켜세요.
         </p>
         <Bullet>
-          <Code>로컬 (PVC)</Code> - 코드가 <Code>파일 경로에 직접 쓰는</Code> 앱.
+          <Code>영구 저장소 (PVC)</Code> - 코드가 <Code>파일 경로에 직접 쓰는</Code> 앱.
           게시판 업로드 폴더, SQLite 파일 등. 지정한 경로가 영속 디스크가 됩니다.
         </Bullet>
         <Bullet>
-          <Code>오브젝트 (R2)</Code> - 이미지·첨부파일을 <Code>URL로 서빙</Code>하는 앱.
+          <Code>객체 스토리지 (R2)</Code> - 이미지·첨부파일을 <Code>URL로 서빙</Code>하는 앱.
           앱 전용 버킷이 만들어지고 S3 호환 자격증명이 환경변수로 들어와요.
         </Bullet>
         <Bullet>한 앱에 둘 중 하나만 켤 수 있어요 (DB 한 개 정책과 동일).</Bullet>
       </Section>
 
-      <Section title="로컬 (PVC)">
+      <Section title="영구 저장소 (PVC)">
         <Bullet>
           마운트 경로(절대경로)만 입력하면 끝이에요 - 예: <Code>/var/www/html/data</Code>.
           앱은 평소처럼 그 경로에 읽고 쓰면 됩니다.
@@ -32,7 +32,7 @@ export default function Storage() {
         <Bullet>기본 용량은 5Gi입니다.</Bullet>
       </Section>
 
-      <Section title="오브젝트 (R2) - 자격증명이 자동으로 들어와요">
+      <Section title="객체 스토리지 (R2) - 자격증명이 자동으로 들어와요">
         <p className="text-fg-2 mb-3">
           켜면 앱 전용 버킷이 생기고, <Code>그 버킷에만 접근 가능한</Code> 자격증명이
           환경변수로 주입돼요:
@@ -68,7 +68,7 @@ url = f"{os.environ['S3_PUBLIC_BASE_URL']}/uploads/cat.png"`}
           <Code>항상 환경변수에서</Code> 읽으세요.
         </Bullet>
         <Bullet>
-          버킷 안 파일은 대시보드 활동 패널의 <Code>스토리지</Code>에서 확인할 수 있어요 -
+          버킷 안 파일은 앱 상세 작업 공간의 <Code>스토리지</Code>에서 확인할 수 있어요 -
           목록·이미지 미리보기·URL 복사·삭제.
         </Bullet>
       </Section>

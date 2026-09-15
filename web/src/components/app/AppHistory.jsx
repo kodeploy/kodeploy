@@ -55,13 +55,10 @@ export default function AppHistory() {
   return (
     <div className="flex-1 overflow-auto scroll-thin">
       <div className="kd-page" style={{ paddingBottom: 72 }}>
-        {/* ── 페이지 헤더 (시안 제목 y209 / 설명 y262 / 우측 앱 이름+상태 y213) ── */}
-        <div className="flex items-start gap-6 flex-wrap" style={{ paddingTop: 28 }}>
+        {/* ── 페이지 헤더 — 제목은 셸(AppLayout)이 그리고 여기는 설명 + 앱 상태만 ── */}
+        <div className="flex items-start gap-6 flex-wrap" style={{ paddingTop: 2 }}>
           <div className="min-w-0">
-            <h1 className="kd-t-title text-fg-1">배포 이력</h1>
-            <p className="kd-t-body-s text-fg-2" style={{ marginTop: 6 }}>
-              빌드 결과와 배포 내용을 확인하세요.
-            </p>
+            <p className="kd-t-body-s text-fg-2">빌드 결과와 배포 내용을 확인하세요.</p>
           </div>
           <div className="ml-auto flex items-center gap-2.5 shrink-0" style={{ paddingTop: 6 }}>
             {/* 앱 이름 — 개요 탭 헤더와 같은 크기(kd-t-subtitle)로 맞춘다 */}

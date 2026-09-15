@@ -246,6 +246,48 @@ select {
   filter: invert(1);
 }
 
+/* 랜딩 히어로 — 좌 문장 / 우 배포 흐름. 시안(1536폭)의 좌우 여백 88px 기준.
+   한 화면 안에 들어가도록 상단바(60) 아래를 세로로 채우고 가운데 정렬한다. */
+.kd-hero-page {
+  width: 100%;
+  max-width: 1360px;
+  margin-inline: auto;
+  padding-inline: clamp(20px, 5.7vw, 88px);
+}
+.kd-hero-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr);
+  align-items: center;
+  gap: clamp(32px, 5vw, 72px);
+  /* 한 화면을 채우되 상한을 둔다 — 세로로 아주 긴 창(휴대폰의 데스크탑 모드, 세로 태블릿)에서는
+     100vh를 그대로 쓰면 위아래로 600px씩 빈다. svh는 주소창 높이 변동을 타지 않는다. */
+  min-height: min(calc(100vh - 60px), 860px);
+  min-height: min(calc(100svh - 60px), 860px);
+  padding-block: 48px;
+}
+.kd-hero-art { width: 100%; max-width: 560px; margin-inline: auto; }
+/* 앱 창 아래 옅은 타원 그림자 — 시안에서 잰 폭(창보다 10% 넓게)과 농도. 잉크가 아니라
+   면이라 .kd-flow-art(다크 반전)에 태우지 않고 테마별 색을 따로 준다. */
+.kd-art-shadow {
+  width: 110%;
+  margin-left: -5%;
+  height: 58px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0));
+  filter: blur(6px);
+}
+[data-theme="dark"] .kd-art-shadow {
+  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0));
+}
+@media (max-width: 900px) {
+  .kd-hero-grid {
+    grid-template-columns: minmax(0, 1fr);
+    min-height: 0;
+    padding-block: 40px 24px;
+  }
+}
+
 /* 랜딩 운영 섹션 3열 — 셀 사이를 세로 괘선으로 나눈다(시안 열 시작 0 / 37.8 / 72.6%) */
 .kd-ops-grid {
   display: grid;
@@ -390,6 +432,8 @@ select {
 }
 .kd-input::placeholder { color: var(--fg-placeholder); }
 .kd-input:focus { outline: none; border-color: var(--fg-3); }
+/* select·input을 품은 입력 상자(앞에 아이콘이 붙는 형태) — 자식이 포커스돼도 테두리가 같이 반응한다 */
+.kd-input:focus-within { border-color: var(--fg-3); }
 textarea.kd-input { height: auto; padding-block: 10px; line-height: 1.6; resize: vertical; }
 
 .kd-chip {
@@ -454,6 +498,17 @@ textarea.kd-input { height: auto; padding-block: 10px; line-height: 1.6; resize:
   border-radius: 8px;
   background: var(--kd-surface);
   overflow: hidden;
+}
+
+/* 앱 셸 본문 — 작업 화면은 읽는 화면이 아니라 도구다. 가운데 정렬·폭 상한을 풀고
+   왼쪽 세로 메뉴 옆에서 화면 오른쪽 끝까지 쓴다(좌우 거터만 남긴다). */
+.kd-app-main .kd-page {
+  max-width: none;
+  margin-inline: 0;
+  padding-inline: 24px;
+}
+@media (max-width: 767px) {
+  .kd-app-main .kd-page { padding-inline: 16px; }
 }
 
 /* 확대 — 작업 공간을 화면 폭 끝까지 쓴다(좌우 거터만 남긴다) */

@@ -7,11 +7,10 @@
 //   (상단바 괘선이 y=73 → 코드의 TopBar 높이 60px 기준 스케일 1.217).
 // 글자 크기는 시안 실측이 아니라 index.css의 타입 램프를 따른다.
 //
-// 문서 목록(GUIDES)·라우트·각 문서 컴포넌트는 기존 구조 그대로다. 시안의 레일 그룹
-// (시작하기 / 작업 공간 / 설정)은 없는 문서를 만들지 않고 기존 가이드를 묶기만 한 것이고,
-// 우측 목차는 본문 컴포넌트가 실제로 렌더한 h2/h3를 훑어서 만든다(가이드마다 목차를 손으로 적지 않는다).
+// 문서 목록(GUIDES)을 시작하기 / 작업 공간 / 설정으로 묶는다.
+// 우측 목차는 본문 컴포넌트가 렌더한 h2/h3에서 만든다.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { Search } from "lucide-react";
 import Basics from "./guide/Basics.jsx";
 import Java from "./guide/Java.jsx";
@@ -23,16 +22,27 @@ import Storage from "./guide/Storage.jsx";
 import CustomDomain from "./guide/CustomDomain.jsx";
 import Troubleshooting from "./guide/Troubleshooting.jsx";
 import { DocScale } from "./guide/atoms.jsx";
+import GettingStarted from "./guide/GettingStarted.jsx";
+import Database from "./guide/Database.jsx";
+import Workspace from "./guide/Workspace.jsx";
+import Environment from "./guide/Environment.jsx";
 
 // 가이드 목록 — 미래 가이드 추가 시 항목만 추가. 첫 탭 path가 사이드바 링크.
 const GUIDES = [
   {
+    id: "getting-started",
+    label: "첫 배포 시작하기",
+    title: "첫 배포 시작하기",
+    desc: "GitHub 저장소 연결부터 앱 주소 확인까지, 첫 배포 순서를 안내해요.",
+    tabs: [{ id: "getting-started", label: "개요", path: "/guide", Component: GettingStarted }],
+  },
+  {
     id: "dockerfile",
-    label: "Dockerfile 작성",
-    title: "Dockerfile 작성",
-    desc: "KoDeploy는 BuildKit으로 git 저장소를 그대로 빌드해요. 런타임별 권장 패턴을 확인하세요.",
+    label: "서버 앱 배포",
+    title: "서버 앱 배포",
+    desc: "자동 빌드와 Dockerfile 사용법, 런타임별 실행 설정을 확인하세요.",
     tabs: [
-      { id: "basics", label: "기본 규칙", path: "/guide", Component: Basics },
+      { id: "basics", label: "기본 규칙", path: "/guide/basics", Component: Basics },
       { id: "python", label: "Python", path: "/guide/python", Component: Python },
       { id: "java", label: "Java", path: "/guide/java", Component: Java },
       { id: "php", label: "PHP", path: "/guide/php", Component: Php },
@@ -47,6 +57,27 @@ const GUIDES = [
     tabs: [
       { id: "static", label: "개요", path: "/guide/static", Component: Static },
     ],
+  },
+  {
+    id: "workspace",
+    label: "터미널과 로그",
+    title: "터미널과 로그",
+    desc: "실행 중인 앱을 확인하고, 빌드 로그와 실행 로그로 문제를 살펴보세요.",
+    tabs: [{ id: "workspace", label: "개요", path: "/guide/workspace", Component: Workspace }],
+  },
+  {
+    id: "database",
+    label: "데이터베이스와 Redis",
+    title: "데이터베이스와 Redis",
+    desc: "DB 연결, SQL 실행, 데이터 보존과 Redis 캐시 사용법을 안내해요.",
+    tabs: [{ id: "database", label: "개요", path: "/guide/database", Component: Database }],
+  },
+  {
+    id: "environment",
+    label: "환경변수",
+    title: "환경변수",
+    desc: "서버 실행 설정과 프론트엔드 빌드에 필요한 값을 관리하세요.",
+    tabs: [{ id: "environment", label: "개요", path: "/guide/environment", Component: Environment }],
   },
   {
     id: "storage",
@@ -77,11 +108,11 @@ const GUIDES = [
   },
 ];
 
-// 시안 좌측 레일의 그룹. 문서를 새로 만들지 않고 기존 GUIDES를 세 묶음으로 나눈 것뿐이다.
+// 좌측 레일과 이전/다음 문서가 공유하는 읽기 순서.
 const GROUPS = [
-  { label: "시작하기", ids: ["dockerfile", "static"] },
-  { label: "작업 공간", ids: ["storage", "troubleshooting"] },
-  { label: "설정", ids: ["custom-domain"] },
+  { label: "시작하기", ids: ["getting-started", "dockerfile", "static"] },
+  { label: "작업 공간", ids: ["workspace", "database", "storage", "troubleshooting"] },
+  { label: "설정", ids: ["environment", "custom-domain"] },
 ];
 
 // 모든 탭을 평탄화해 URL section → 탭/가이드 역매핑.
@@ -103,6 +134,14 @@ const DOC_ORDER = GROUPS.flatMap((group) =>
     }));
   }),
 );
+
+// 문서는 단독 화면(/guide)과 대시보드 안(/dashboard/guide) 두 곳에서 같은 컴포넌트로 뜬다.
+// 링크는 지금 서 있는 쪽을 따라가야 화면 밖으로 튕기지 않는다.
+function useDocHref() {
+  const { pathname } = useLocation();
+  const base = pathname.startsWith("/dashboard") ? "/dashboard/guide" : "/guide";
+  return (p) => base + p.slice("/guide".length);
+}
 
 export default function Guide() {
   const { section } = useParams();
@@ -356,9 +395,10 @@ export default function Guide() {
 
 // 레일 한 줄 — 활성 항목은 옅은 채움 + 왼쪽 잉크 바(시안 x63, 폭 4 → 3).
 function RailRow({ to, label, sub, active, open }) {
+  const href = useDocHref();
   return (
     <Link
-      to={to}
+      to={href(to)}
       className="kd-t-body-s relative flex items-center no-underline transition-colors"
       style={{
         height: "var(--row-sm)",
@@ -390,9 +430,10 @@ function RailRow({ to, label, sub, active, open }) {
 
 // 바닥 이전/다음 문서 — 밑줄 친 문서 이름만. 방향은 좌/우 배치로 읽는다.
 function DocNavLink({ doc }) {
+  const href = useDocHref();
   return (
     <Link
-      to={doc.path}
+      to={href(doc.path)}
       className="kd-t-body-s flex items-center gap-2 no-underline"
       style={{ color: "var(--fg-1)" }}
     >

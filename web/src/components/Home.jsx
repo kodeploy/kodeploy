@@ -21,7 +21,11 @@ import {
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { listBuilds } from "../api/deploy.js";
 import SiteFooter from "./marketing/SiteFooter.jsx";
-import flowArt from "../assets/deploy_flow.png";
+import artRepo from "../assets/flow-repo.png";
+import artArrow from "../assets/flow-arrow.png";
+import artArrowShort from "../assets/flow-arrow-short.png";
+import artCube from "../assets/flow-cube.png";
+import artApp from "../assets/flow-app.png";
 
 // 운영 섹션 하단 3열
 const OPS = [
@@ -152,38 +156,32 @@ export default function Home() {
 
   return (
     <div className="flex-1 overflow-auto scroll-thin">
-      {/* ── Hero + 배포 흐름 일러스트 (한 화면) ── */}
-      <Container>
-        <section
-          // 시안(1024폭 렌더)에서 상단바 아래 63 → 구분선 730, 즉 히어로 블록은 616px이다.
-          // 100vh로 잡으면 아래 섹션이 전부 접힘선 밖으로 밀린다.
-          className="kd-fade-in flex flex-col"
-          style={{ paddingTop: 56, paddingBottom: 38 }}
-        >
-          <div className="text-center">
+      {/* ── Hero — 좌 문장 / 우 배포 흐름 (한 화면) ── */}
+      <div className="kd-hero-page">
+        <section className="kd-fade-in kd-hero-grid">
+          <div className="min-w-0">
             {/* 시안 잉크 62px → 57 ÷ 0.76 ≈ 75px */}
-            <h1
-              className="kd-t-hero text-fg-strong mx-auto"
-              style={{ maxWidth: 860 }}
-            >
+            <h1 className="kd-t-hero text-fg-strong">
               만든 서비스,
               <br />
-              배포와 운영을 가볍게.
+              배포와 운영을
+              <br />
+              가볍게.
             </h1>
 
             <p
-              className="kd-t-lead mt-4 text-fg-2 mx-auto"
-              style={{ maxWidth: 620, wordBreak: "keep-all" }}
+              className="kd-t-lead mt-5 text-fg-2"
+              style={{ maxWidth: 520, wordBreak: "keep-all" }}
             >
               GitHub 저장소를 연결하면, 빌드부터 앱 서버 실행까지.
               <br />
               터미널과 로그, 데이터베이스도 한곳에서 관리하세요.
             </p>
 
-            <div className="mt-6 flex flex-col items-center gap-4">
+            <div className="mt-8 flex items-center gap-7 flex-wrap">
               <button
                 onClick={handleStart}
-                className="kd-btn-primary kd-btn-lg inline-flex items-center justify-center gap-2.5"
+                className="kd-btn-primary kd-btn-lg inline-flex items-center justify-center"
               >
                 {hasApp ? "대시보드 열기" : "프로젝트 배포하기"}
               </button>
@@ -197,11 +195,9 @@ export default function Home() {
             </div>
           </div>
 
-          <div style={{ marginTop: 30 }}>
-            <DeployFlow />
-          </div>
+          <DeployFlow />
         </section>
-      </Container>
+      </div>
 
       <Rule />
 
@@ -311,66 +307,121 @@ function FaqRow({ q, a }) {
   );
 }
 
-// ── Hero 일러스트 ──────────────────────────────────────────────────────────
-// 시안 일러스트 원본을 그대로 쓴다(체크무늬 배경을 키잉해 투명 PNG로 추출).
-// 라벨만 분리해 HTML 텍스트로 얹으며, 가로 위치는 원본 PNG에서 잰 각 덩어리의 중심이다.
+// ── Hero 일러스트 ─────────────────────────────────────────────────────────
+// design/의 조각 그림(저장소 · 화살표 · 큐브 · 앱 창)을 얹어 흐름을 다시 만든다.
+// 조각을 따로 두는 이유는 순서대로 등장시키기 위해서다: 저장소 → 자동 빌드 → 앱 실행.
+//
+// 좌표는 시안(1536폭 렌더)에서 각 덩어리의 잉크 경계를 재서 얻은 값이다.
+// 시안의 일러스트 영역 x871-1392 / y208-860 을 상자 560×700 으로 옮기면 배율이
+// 가로 0.19195 %/px, 세로 0.15337 %/px 다 — 아래 %는 전부 그 환산값.
 // 시안은 my-api.kodeploy.app 이지만 실제 기본 도메인은 .kodeploy.com 이다(AppLayout과 동일).
 const EXAMPLE_HOST = "my-api.kodeploy.com";
-const FLOW = {
-  repo: "12.0%",    // 겹친 문서 두 장
-  build: "30.4%",   // 첫 화살표
-  run: "57.0%",     // 둘째 화살표
-  app: "83.2%",     // 브라우저 창
-};
+
+// 등장 순서 — 한 단계 안의 그림과 글자는 같이 뜬다.
+const FLOW_STEP = { repo: 0, build: 1, cube: 2, run: 3, app: 4 };
+const STEP_MS = 420;
 
 function DeployFlow() {
+  // 접힘선 위라 스크롤 관측 없이 마운트와 함께 시작한다.
+  const [step, setStep] = useState(0);
+  const reduced =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+
+  useEffect(() => {
+    if (reduced) {
+      setStep(99); // 모션을 끄면 처음부터 전부 보인다
+      return;
+    }
+    const timers = [1, 2, 3, 4].map((i) =>
+      setTimeout(() => setStep(i), STEP_MS * i + 260),
+    );
+    return () => timers.forEach(clearTimeout);
+  }, [reduced]);
+
+  // 단계가 오면 떠오른다(아래에서 살짝 올라오며 페이드). rotate가 있는 조각은 따로 넘긴다.
+  const on = (at, rotate) => ({
+    opacity: step >= at ? 1 : 0,
+    transform: `${step >= at ? "" : "translateY(10px) "}${rotate || ""}`.trim() || "none",
+    transition: reduced
+      ? "none"
+      : "opacity 520ms ease, transform 520ms cubic-bezier(0.22, 1, 0.36, 1)",
+  });
+
   return (
-    <figure className="relative m-0" style={{ paddingBottom: 48 }}>
-      <div className="relative">
+    <figure className="kd-hero-art m-0">
+      <div className="relative w-full" style={{ aspectRatio: "560 / 700" }}>
+        {/* 1. 내 GitHub 저장소 — 시안 x871 y226 w225 */}
         <img
-          src={flowArt}
-          alt="내 GitHub 저장소를 연결하면 자동으로 빌드돼 앱이 실행되는 흐름"
-          className="kd-flow-art block w-full"
+          src={artRepo}
+          alt=""
+          className="kd-flow-art absolute"
+          style={{ left: "0%", top: "2.8%", width: "43.2%", ...on(FLOW_STEP.repo) }}
         />
-        {/* 화살표 위 라벨 — 화살표 곡선이 이미지 높이의 56% 지점에서 시작한다 */}
-        <FlowNote at={FLOW.build}>자동 빌드</FlowNote>
-        <FlowNote at={FLOW.run}>앱 실행</FlowNote>
+        <figcaption
+          className="kd-t-body absolute text-fg-1 whitespace-nowrap"
+          style={{ left: "28.8%", top: "0%", ...on(FLOW_STEP.repo) }}
+        >
+          내 GitHub 저장소
+        </figcaption>
+
+        {/* 2. 자동 빌드 — 화살표 x1100 y308 w102 / 글자 x1169 y296 */}
+        <img
+          src={artArrow}
+          alt=""
+          className="kd-flow-art absolute"
+          style={{ left: "44%", top: "15.3%", width: "19.6%", ...on(FLOW_STEP.build) }}
+        />
+        <figcaption
+          className="kd-t-body absolute text-fg-1 whitespace-nowrap"
+          style={{ left: "57.2%", top: "13.5%", ...on(FLOW_STEP.build) }}
+        >
+          자동 빌드
+        </figcaption>
+
+        {/* 3. 빌드 결과 — 시안 x1142 y386 w96 */}
+        <img
+          src={artCube}
+          alt=""
+          className="kd-flow-art absolute"
+          style={{ left: "52%", top: "27.3%", width: "18.4%", ...on(FLOW_STEP.cube) }}
+        />
+
+        {/* 4. 앱 실행 — 시안의 둘째 화살표는 더 가파르다. 첫 화살표를 줄여 쓰면 획까지 얇아지므로
+            (획 3.4px → 1.8px) 짧은 화살표 조각을 돌려서 쓴다. 원본 획은 둘 다 ~35px이고
+            가로폭이 934 : 905라, 이 크기에서 획 두께가 맞는다. */}
+        <img
+          src={artArrowShort}
+          alt=""
+          className="kd-flow-art absolute"
+          style={{
+            left: "68.8%",
+            top: "37.5%",
+            width: "16%",
+            ...on(FLOW_STEP.run, "rotate(38deg)"),
+          }}
+        />
+        <figcaption
+          className="kd-t-body absolute text-fg-1 whitespace-nowrap"
+          style={{ left: "86%", top: "40%", ...on(FLOW_STEP.run) }}
+        >
+          앱 실행
+        </figcaption>
+
+        {/* 5. 실행 중인 앱 — 창 x886 y529 w507, 그 아래 주소와 옅은 그림자(시안 y806-860) */}
+        <div
+          className="absolute"
+          style={{ left: "2.9%", top: "49.2%", width: "97.3%", ...on(FLOW_STEP.app) }}
+        >
+          <img src={artApp} alt="배포된 앱이 실행 중인 화면" className="kd-flow-art block w-full" />
+          <figcaption className="kd-t-body text-center text-fg-2" style={{ marginTop: 8 }}>
+            {EXAMPLE_HOST}
+          </figcaption>
+          {/* 시안은 창+주소 덩어리 아래에 넓고 옅은 타원 그림자를 깔았다(가장 짙은 곳이 배경보다 7% 어둡다) */}
+          <div aria-hidden className="kd-art-shadow" />
+        </div>
       </div>
-      <FlowLabel at={FLOW.repo}>내 GitHub 저장소</FlowLabel>
-      {/* 배포 결과는 앱 이름으로 도메인이 잡힌다 — 주소를 먼저 보이고 "배포 예시"는 그 주석으로 */}
-      <FlowLabel at={FLOW.app} note="배포 예시">
-        {EXAMPLE_HOST}
-      </FlowLabel>
     </figure>
-  );
-}
-
-// 화살표 바로 위에 얹는 라벨
-function FlowNote({ at, children }) {
-  return (
-    <figcaption
-      className="kd-t-label absolute -translate-x-1/2 whitespace-nowrap text-fg-2"
-      style={{ left: at, bottom: "48%" }}
-    >
-      {children}
-    </figcaption>
-  );
-}
-
-// 그림 아래 라벨 — 해당 요소의 가로 중심에 맞춰 띄운다. note는 그 아래 작은 주석.
-function FlowLabel({ at, note, children }) {
-  return (
-    <figcaption
-      className="absolute bottom-0 -translate-x-1/2 whitespace-nowrap text-center"
-      style={{ left: at }}
-    >
-      <span className="kd-t-label text-fg-2 block">{children}</span>
-      {note && (
-        <span className="kd-t-micro text-fg-4 block" style={{ marginTop: 6 }}>
-          {note}
-        </span>
-      )}
-    </figcaption>
   );
 }
 
