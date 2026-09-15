@@ -195,16 +195,11 @@ export default function BuildDetail({ build: initialBuild, number }) {
             )}
             <button
               onClick={() => setTab(t.id)}
-              className="kd-t-label inline-flex items-center transition-colors"
-              style={{
-                height: "var(--tabbar-h)",
-                paddingInline: 17,
-                color: active === t.id ? "var(--fg-1)" : "var(--fg-3)",
-                // 밑줄은 탭바 하단 괘선 위에 겹쳐 그린다 (AppLayout 탭바와 같은 방식)
-                boxShadow: active === t.id ? "inset 0 -2px 0 0 var(--accent)" : "none",
-              }}
+              aria-pressed={active === t.id}
+              className="kd-t-label kd-pick-x kd-pick-x-edge inline-flex items-center"
+              style={{ height: "var(--tabbar-h)", paddingInline: 17, color: "var(--fg-3)" }}
             >
-              {t.label}
+              <span className="kd-pick-name">{t.label}</span>
             </button>
           </Fragment>
         ))}
@@ -275,7 +270,7 @@ function InkFace({ boxRef, text, highlightErrors, expanded, onToggleExpand }) {
       style={{
         position: "relative",
         marginTop: 14,
-        borderRadius: 8,
+        borderRadius: 4,
         border: "1px solid var(--kd-border)",
         background: "var(--term-bg)",
         overflow: "hidden",
@@ -450,7 +445,7 @@ function Diagnosis({ build }) {
               style={{
                 marginTop: 6,
                 padding: "10px 12px",
-                borderRadius: 8,
+                borderRadius: 4,
                 background: "var(--kd-surface)",
                 border: "1px solid var(--kd-border)",
                 color: "var(--fg-2)",

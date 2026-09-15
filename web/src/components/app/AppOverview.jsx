@@ -20,7 +20,6 @@ import {
   Loader,
   SquareChevronRight,
 } from "lucide-react";
-import { APP_STATUS_STYLES } from "../AppStatusBadge.jsx";
 import { STYLES_BUILD, STYLES_ENV } from "../StatusBadge.jsx";
 import { relativeTime, repoSlug } from "../../lib/format.js";
 
@@ -42,7 +41,7 @@ function resultIcon(status, size = 21) {
 }
 
 export default function AppOverview() {
-  const { user, builds, serverBuild, slotStatus, envVars } = useOutletContext();
+  const { builds, serverBuild, envVars } = useOutletContext();
 
   // 빌드 번호(#N) — env_change는 번호를 안 매긴다(위젯과 같은 규칙).
   const numbered = new Map();
@@ -51,28 +50,13 @@ export default function AppOverview() {
 
   const latest = builds[0] || null;
   const previous = builds.slice(1, 3);
-  const podStatus = slotStatus?.server?.status || slotStatus?.status || null;
 
   return (
     <div className="flex-1 overflow-auto scroll-thin">
-      <div className="kd-page" style={{ paddingBottom: 72 }}>
-        {/* ── 페이지 헤더 — 제목은 셸(AppLayout)이 그리고 여기는 설명 + 앱 상태만 ── */}
-        <div className="flex items-start gap-6 flex-wrap" style={{ paddingTop: 2 }}>
-          <div className="min-w-0">
-            <p className="kd-t-body-s text-fg-2">현재 배포와 연결된 리소스를 확인하세요.</p>
-          </div>
-          <div className="ml-auto flex items-center gap-3 shrink-0" style={{ paddingTop: 6 }}>
-            <span className="kd-t-subtitle text-fg-1">
-              {user.app_name}
-            </span>
-            <PodStatus status={podStatus} />
-          </div>
-        </div>
-
+      <div className="kd-page" style={{ paddingTop: 28, paddingBottom: 72 }}>
         {/* ── 2단 그리드 (좌 본문 / 우 사이드 310px) ── */}
         <div
           className="kd-overview-grid"
-          style={{ marginTop: 32 }}
         >
           {/* ─────────── 좌: 본문 ─────────── */}
           <div style={{ paddingRight: 40 }}>
@@ -365,24 +349,3 @@ function ResultChip({ build }) {
   );
 }
 
-// Pod 상태 — 지금 살아 있나. AppStatusBadge의 라벨 맵 재사용.
-function PodStatus({ status }) {
-  if (!status) return null;
-  const s = APP_STATUS_STYLES[status] || { label: status };
-  const ok = status === "running";
-  const bad = status === "crashing";
-  return (
-    <span className="kd-t-label inline-flex items-center gap-1.5 text-fg-2">
-      {bad ? (
-        <CircleX size={18} strokeWidth={1.6} style={{ color: "var(--err-fg)" }} />
-      ) : (
-        <CircleCheck
-          size={18}
-          strokeWidth={1.6}
-          style={{ color: ok ? "var(--ok-fg)" : "var(--fg-4)" }}
-        />
-      )}
-      {s.label}
-    </span>
-  );
-}

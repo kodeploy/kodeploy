@@ -11,8 +11,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import {
   ChevronRight,
-  CircleCheck,
-  CircleX,
   Copy,
   Download,
   Eye,
@@ -23,7 +21,6 @@ import {
   Upload,
 } from "lucide-react";
 import { getReservedKeys, setEnvVars } from "../../api/deploy.js";
-import { APP_STATUS_STYLES } from "../AppStatusBadge.jsx";
 
 // 백엔드 검증과 같은 규칙 (core/app/deploy/stack/env.py) — 여기서 먼저 막아 왕복을 아낀다.
 const KEY_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
@@ -133,7 +130,7 @@ const sameEnv = (a, b) => {
 };
 
 export default function AppEnv() {
-  const { user, serverBuild, slotStatus, envVars } = useOutletContext();
+  const { serverBuild, envVars } = useOutletContext();
 
   const [rows, setRows] = useState(null); // null = 아직 초기 로드 전
   const [saved, setSaved] = useState(null); // 마지막으로 저장된 env (변경 여부 판정 기준)
@@ -297,7 +294,6 @@ export default function AppEnv() {
     }
   };
 
-  const podStatus = slotStatus?.server?.status || slotStatus?.status || null;
   const footer = error || issue
     ? { text: error || issue, color: "var(--err-fg)" }
     : notice
@@ -307,24 +303,7 @@ export default function AppEnv() {
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <div className="flex-1 min-h-0 overflow-auto scroll-thin">
-        <div className="kd-page" style={{ paddingBottom: 40 }}>
-          {/* ── 페이지 헤더 — 제목은 셸(AppLayout)이 그리고 여기는 설명 + 앱 상태만 ── */}
-          <div className="flex items-start gap-6 flex-wrap" style={{ paddingTop: 2 }}>
-            <div className="min-w-0">
-              <p className="kd-t-body-s" style={{ color: "var(--fg-2)" }}>
-                앱 실행에 필요한 값을 관리하세요.
-              </p>
-            </div>
-            <div className="ml-auto flex items-center gap-2.5 shrink-0" style={{ paddingTop: 6 }}>
-              <span className="kd-t-section" style={{ color: "var(--fg-1)" }}>
-                {user.app_name}
-              </span>
-              <span className="kd-t-label" style={{ color: "var(--fg-4)" }}>
-                ·
-              </span>
-              <PodStatus status={podStatus} />
-            </div>
-          </div>
+        <div className="kd-page" style={{ paddingTop: 28, paddingBottom: 40 }}>
 
           {/* ── 표 위 액션 (시안: 버튼 우측 정렬, 상자 137x41 → 94x28) ── */}
           <div className="flex items-center justify-end gap-4 flex-wrap" style={{ marginTop: 2 }}>
@@ -369,7 +348,7 @@ export default function AppEnv() {
               background: "var(--kd-surface)",
               // 시안은 표가 네 변이 닫힌 상자다(예전엔 행 아래 헤어라인만 있었다)
               border: "1px solid var(--kd-border)",
-              borderRadius: 8,
+              borderRadius: 4,
               overflow: "hidden",
             }}
           >
@@ -640,7 +619,7 @@ function RowMenu({ row, onPatch, onRemove }) {
             paddingBlock: 4,
             background: "var(--kd-surface)",
             border: "1px solid var(--kd-border)",
-            borderRadius: 8,
+            borderRadius: 4,
             boxShadow: "var(--shadow-pop)",
             zIndex: 30,
           }}
@@ -706,24 +685,3 @@ function QuietButton({ icon: Icon, onClick, disabled, children }) {
   );
 }
 
-// 지금 살아 있나 — AppStatusBadge의 라벨 맵 재사용(단일 진실원).
-function PodStatus({ status }) {
-  if (!status) return null;
-  const s = APP_STATUS_STYLES[status] || { label: status };
-  const ok = status === "running";
-  const bad = status === "crashing";
-  return (
-    <span className="kd-t-label inline-flex items-center gap-1.5" style={{ color: "var(--fg-2)" }}>
-      {bad ? (
-        <CircleX size={18} strokeWidth={1.6} style={{ color: "var(--err-fg)" }} />
-      ) : (
-        <CircleCheck
-          size={18}
-          strokeWidth={1.6}
-          style={{ color: ok ? "var(--ok-fg)" : "var(--fg-4)" }}
-        />
-      )}
-      {s.label}
-    </span>
-  );
-}

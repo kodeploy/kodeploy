@@ -172,7 +172,7 @@ export default function Admin() {
           style={{
             marginTop: 16,
             padding: "10px 14px",
-            borderRadius: 8,
+            borderRadius: 4,
             border: "1px solid var(--kd-border)",
             color: "var(--err-fg)",
           }}

@@ -45,7 +45,7 @@ export default function LoginModal({ onClose }) {
         className="relative w-[422px] max-w-[92vw]"
         style={{
           background: "var(--kd-surface)",
-          borderRadius: 12,
+          borderRadius: 6,
           paddingInline: 24,
           paddingTop: 16,
           paddingBottom: 22,

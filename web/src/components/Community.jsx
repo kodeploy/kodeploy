@@ -255,7 +255,7 @@ function PostDetailPane({ post, onDelete, onChanged, onCountChanged }) {
             onClick={onDelete}
             title="의견 삭제"
             className="ml-auto shrink-0 kd-hoverable"
-            style={{ border: "none", background: "none", cursor: "pointer", padding: 4, borderRadius: 8 }}
+            style={{ border: "none", background: "none", cursor: "pointer", padding: 4, borderRadius: 4 }}
           >
             <Trash2 size={15} strokeWidth={1.8} style={{ color: "var(--fg-4)" }} />
           </button>
@@ -295,7 +295,7 @@ function PostDetailPane({ post, onDelete, onChanged, onCountChanged }) {
                 onClick={() => removeComment(c.id)}
                 title="댓글 삭제"
                 className="ml-auto shrink-0 kd-hoverable"
-                style={{ border: "none", background: "none", cursor: "pointer", padding: 4, borderRadius: 8 }}
+                style={{ border: "none", background: "none", cursor: "pointer", padding: 4, borderRadius: 4 }}
               >
                 <Trash2 size={15} strokeWidth={1.8} style={{ color: "var(--fg-4)" }} />
               </button>

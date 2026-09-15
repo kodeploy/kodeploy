@@ -20,8 +20,6 @@ import { Link, useOutletContext, useSearchParams } from "react-router-dom";
 import {
   Check,
   ChevronRight,
-  CircleCheck,
-  CircleX,
   Copy,
   Download,
   ArrowUpRight,
@@ -35,7 +33,6 @@ import {
   restoreDb,
   setDomain,
 } from "../../api/deploy.js";
-import { APP_STATUS_STYLES } from "../AppStatusBadge.jsx";
 import DomainStatusBadge from "../DomainStatusBadge.jsx";
 import DeleteAppModal from "../DeleteAppModal.jsx";
 import { repoSlug } from "../../lib/format.js";
@@ -69,7 +66,7 @@ const LABEL_W = 114;
 const INPUT_W = 518;
 
 export default function AppSettings() {
-  const { user, serverBuild, slotStatus, appHost } = useOutletContext();
+  const { user, serverBuild, appHost } = useOutletContext();
   const [params, setParams] = useSearchParams();
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -78,7 +75,6 @@ export default function AppSettings() {
   const section = SECTION_IDS.has(q) ? q : "domain"; // 시안 기본 선택 = 도메인
   const select = (id) => setParams({ section: id }, { replace: true });
 
-  const podStatus = slotStatus?.server?.status || slotStatus?.status || null;
 
   return (
     <div className="flex-1 overflow-auto scroll-thin">
@@ -95,20 +91,9 @@ export default function AppSettings() {
         }
       `}</style>
 
-      <div className="kd-page" style={{ paddingBottom: 72 }}>
-        {/* ── 페이지 헤더 — 제목은 셸(AppLayout)이 그리고 여기는 설명 + 앱 상태만 ── */}
-        <div className="flex items-start gap-6 flex-wrap" style={{ paddingTop: 2 }}>
-          <div className="min-w-0">
-            <p className="kd-t-body-s text-fg-2">서비스 주소와 실행 설정을 관리하세요.</p>
-          </div>
-          <div className="ml-auto flex items-center gap-3 shrink-0" style={{ paddingTop: 6 }}>
-            <span className="kd-t-subtitle text-fg-1">{user.app_name}</span>
-            <PodStatus status={podStatus} />
-          </div>
-        </div>
-
+      <div className="kd-page" style={{ paddingTop: 28, paddingBottom: 72 }}>
         {/* ── 본문 2단 (좌 내비 197 / 세로 괘선 / 우 섹션, 시안 y296~) ── */}
-        <div className="kd-set-grid" style={{ marginTop: 32 }}>
+        <div className="kd-set-grid">
           {/* 서브내비 — 활성 항목은 잉크 워시 + 좌측 2px 바 (시안 x56-323 / 바 x56-59) */}
           <nav
             className="flex flex-col"
@@ -120,23 +105,11 @@ export default function AppSettings() {
                 <button
                   key={s.id}
                   onClick={() => select(s.id)}
-                  className={`kd-t-label relative flex items-center text-left ${on ? "" : "kd-hoverable"}`}
-                  style={{
-                    height: "var(--row-sm)",
-                    paddingLeft: 13,
-                    borderRadius: 8,
-                    background: on ? "var(--sel-soft)" : "transparent",
-                    color: on ? "var(--fg-1)" : "var(--fg-2)",
-                  }}
+                  className="kd-t-label kd-pick flex items-center text-left"
+                  style={{ height: "var(--row-sm)", paddingLeft: 13, color: "var(--fg-2)" }}
                   aria-current={on ? "page" : undefined}
                 >
-                  {on && (
-                    <span
-                      className="absolute left-0"
-                      style={{ top: 2, bottom: 2, width: 2, borderRadius: 1, background: "var(--accent)" }}
-                    />
-                  )}
-                  {s.nav}
+                  <span className="kd-pick-name">{s.nav}</span>
                 </button>
               );
             })}
@@ -667,7 +640,7 @@ function StorageSection({ build }) {
               style={{
                 marginTop: 12,
                 padding: 12,
-                borderRadius: 8,
+                borderRadius: 4,
                 background: "var(--kd-surface)",
                 border: "1px solid var(--kd-border)",
                 color: msg.kind === "ok" ? "var(--ok-fg)" : "var(--err-fg)",
@@ -760,24 +733,3 @@ function CopyButton({ text, title = "복사" }) {
   );
 }
 
-// Pod 상태 — AppStatusBadge의 라벨 맵을 그대로 쓴다(단일 진실원). 개요 탭 헤더와 같은 모양.
-function PodStatus({ status }) {
-  if (!status) return null;
-  const s = APP_STATUS_STYLES[status] || { label: status };
-  const ok = status === "running";
-  const bad = status === "crashing";
-  return (
-    <span className="kd-t-label inline-flex items-center gap-1.5 text-fg-2">
-      {bad ? (
-        <CircleX size={18} strokeWidth={1.6} style={{ color: "var(--err-fg)" }} />
-      ) : (
-        <CircleCheck
-          size={18}
-          strokeWidth={1.6}
-          style={{ color: ok ? "var(--ok-fg)" : "var(--fg-4)" }}
-        />
-      )}
-      {s.label}
-    </span>
-  );
-}

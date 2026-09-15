@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { LogOut, Menu, Moon, Sun, X } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
+import { APP_STATUS_STYLES } from "./AppStatusBadge.jsx";
 import Brand from "./Brand.jsx";
+import { useAppShell } from "../contexts/AppShellContext.jsx";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { useTheme } from "../contexts/ThemeContext.jsx";
 
@@ -37,10 +39,31 @@ export default function TopBar({ onLogin }) {
   // 라우트가 바뀌면 모바일 메뉴는 닫는다.
   useEffect(() => setMenu(false), [pathname]);
 
+  // 랜딩은 상단바와 본문 배경이 같은 색이고 히어로 위 여백도 넉넉해서, 맨 위에서는 괘선이
+  // 없는 편이 담백하다. 대신 내용이 바 밑으로 지나가기 시작하면 옅은 선으로 경계를 준다.
+  // (상단바는 고정이고 스크롤은 라우트 쪽 칸이 한다 — data-kd-scroll="page"로 찾는다.)
+  const onLanding = pathname === "/";
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    if (!onLanding) return;
+    const el = document.querySelector('[data-kd-scroll="page"]');
+    if (!el) return;
+    const onScroll = () => setScrolled(el.scrollTop > 2);
+    onScroll();
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [onLanding, pathname]);
+  // 선이 사라져도 자리는 남긴다(transparent) — 색만 바뀌어야 본문이 1px 튀지 않는다.
+  const edge = !onLanding ? "var(--kd-border)" : scrolled ? "var(--kd-rule)" : "transparent";
+
   return (
     <header
       className="shrink-0"
-      style={{ borderBottom: "1px solid var(--kd-border)", background: "var(--nav-bg)" }}
+      style={{
+        borderBottom: `1px solid ${edge}`,
+        background: "var(--nav-bg)",
+        transition: "border-color 220ms ease",
+      }}
     >
       <div className="flex items-center h-[60px] px-7 gap-4">
         {/* Brand (left) + 앱 화면에서는 브레드크럼 (KoDeploy | 대시보드 / my-api) */}
@@ -195,14 +218,18 @@ function ThemeToggle({ withLabel }) {
 // 앱 화면(/dashboard…)에서만 보이는 현재 위치 — 상단 메뉴가 비는 자리라 여기가 돌아가는 길이다.
 function Breadcrumb() {
   const { user } = useAuth();
+  const { podStatus } = useAppShell();
   const { pathname } = useLocation();
   if (!user?.app_name || !/^\/(dashboard|deploy)/.test(pathname)) return null;
+  // 앱 화면에서는 "지금 살아 있나"가 항상 보여야 한다 — 작업 공간이 제 화면 안에서 앱 이름과
+  // 상태를 다시 적지 않는 대신, 브레드크럼이 그 자리를 맡는다(폴링은 AppLayout 한 곳).
+  const st = podStatus ? APP_STATUS_STYLES[podStatus] : null;
   return (
     <div className="flex items-center min-w-0" style={{ marginLeft: 18 }}>
       <span aria-hidden style={{ width: 1, height: 15, background: "var(--kd-border)" }} />
       <Link
         to="/apps"
-        className="kd-t-label text-fg-2 hover:text-fg-1 no-underline transition-colors"
+        className="kd-t-label text-fg-2 hover:text-fg-1 no-underline transition-colors whitespace-nowrap"
         style={{ marginLeft: 20 }}
       >
         대시보드
@@ -213,6 +240,19 @@ function Breadcrumb() {
       <span className="kd-t-label text-fg-1 truncate" style={{ fontWeight: 600 }}>
         {user.app_name}
       </span>
+      {st && (
+        <span
+          className="kd-t-label inline-flex items-center gap-2 text-fg-2 shrink-0 whitespace-nowrap"
+          style={{ marginLeft: 20 }}
+        >
+          <span
+            aria-hidden
+            className={`w-1.5 h-1.5 rounded-full shrink-0 ${st.pulse ? "kd-pulse-soft" : ""}`}
+            style={{ background: st.color }}
+          />
+          {st.label}
+        </span>
+      )}
     </div>
   );
 }

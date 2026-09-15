@@ -466,7 +466,7 @@ function IconButton({ label, onClick, children }) {
       style={{
         width: "var(--row-md)",
         height: "var(--row-md)",
-        borderRadius: 8,
+        borderRadius: 4,
         display: "flex",
         alignItems: "center",
         justifyContent: "center",

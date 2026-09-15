@@ -383,7 +383,7 @@ function ResultCard({ repo, port }) {
         style={{
           background: "var(--term-bg)",
           color: "var(--term-fg)",
-          borderRadius: 8,
+          borderRadius: 4,
           padding: "10px 12px",
           lineHeight: 1.55,
         }}

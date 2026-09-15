@@ -164,12 +164,13 @@ export default function Home() {
   };
 
   return (
-    <div className="flex-1 overflow-auto scroll-thin">
+    // 상단바가 "맨 위에서는 괘선 없이, 스크롤하면 옅은 선"으로 바뀌려면 어느 칸이 페이지
+    // 스크롤인지 알아야 한다 — 상단바는 라우트 바깥이라 이 표시를 보고 찾아간다.
+    <div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page">
       {/* ── Hero — 좌 문장 / 우 배포 흐름 (한 화면) ── */}
       <div className="kd-page-narrow">
         <section className="kd-fade-in kd-hero-grid">
           <div className="min-w-0">
-            {/* 시안 잉크 62px → 57 ÷ 0.76 ≈ 75px */}
             <h1 className="kd-t-hero text-fg-strong">
               만든 서비스,
               <br />
@@ -320,19 +321,22 @@ function FaqRow({ q, a }) {
 // design/의 조각 그림(저장소 · 화살표 · 큐브 · 앱 창)을 얹어 흐름을 만든다.
 // 조각을 따로 두는 이유는 순서대로 등장시키기 위해서다: 저장소 → 자동 빌드 → 앱 실행.
 //
-// 좌표는 시안 이미지에서 조각마다 잉크 경계를 재서 얻은 값이다(1761폭 렌더 기준):
-//   저장소 x1011 y62 308×278 · 화살표1 x1321 y173 141×97 · 큐브 x1378 y278 133×150
-//   화살표2 x1542 y373 54×83 · 창 x1061 y458 659×278 · 주소 x1228 y767
-//   라벨 내GitHub저장소 x1218 y48 · 자동빌드 x1408 y167 · 앱실행 x1587 y381
-// 콘텐츠 상자는 x1011-1720 / y48-796 = 709×748 (가로세로비 0.948) — 아래 %는 그 환산값이다.
+// 조각은 시안 합성본(design/00-deployment-flow-2x.png, 2364폭)에서 잘라냈고 좌표도 같은
+// 이미지에서 잰 값이다 — 그래서 조각을 제자리에 놓으면 시안이 그대로 복원된다:
+//   저장소 x217 y193 970×866 · 화살표1 x1221 y607 364×256 · 큐브 x1359 y813 473×500
+//   화살표2 x1741 y1148 184×264 · 창 x173 y1437 2018×908 · 주소 잉크 y2389
+//   라벨 잉크 내GitHub저장소 x900-1554 y232 · 자동빌드 x1464 y557 · 앱실행 x1904-2171 y1189
+// 기준 상자는 창의 왼쪽 끝(x173)에서 오른쪽 끝(x2191), 저장소 위(y193)에서 창 아래(y2345)까지
+// = 2018×2152, 여기에 창 아래 주소 한 줄을 더해 상자는 2018×2305 (가로세로비 0.875)다.
+// 아래 %는 그 환산값이고, 창이 상자 폭을 그대로 채운다.
 // ⚠️ 상자 비율을 바꾸면 조각이 전부 어긋난다. 조각 이미지의 가로세로비도 시안과 같아야 한다
-//    (저장소 1.107 · 화살표1 1.453 · 큐브 0.888 · 창 2.387 — 시안 실측과 1% 이내).
-// 시안은 my-api.kodeploy.app 이지만 실제 기본 도메인은 .kodeploy.com 이다(AppLayout과 동일).
+//    (저장소 1.121 · 화살표1 1.422 · 큐브 0.946 · 화살표2 0.697 · 창 2.222).
 const EXAMPLE_HOST = "my-api.kodeploy.com";
 
 // 등장 순서 — 한 단계 안의 그림과 글자는 같이 뜬다.
 const FLOW_STEP = { repo: 0, build: 1, cube: 2, run: 3, app: 4 };
-const STEP_MS = 300;
+// 한 단계 간격 — 300은 조각이 튀듯 지나가서 420으로 늦췄다(전체 1.8초).
+const STEP_MS = 420;
 
 function DeployFlow() {
   // 접힘선 위라 스크롤 관측 없이 마운트와 함께 시작한다.
@@ -354,7 +358,7 @@ function DeployFlow() {
     transform: step >= at ? "none" : "translateY(10px)",
     transition: reduced
       ? "none"
-      : "opacity 420ms ease, transform 420ms cubic-bezier(0.22, 1, 0.36, 1)",
+      : "opacity 520ms ease, transform 520ms cubic-bezier(0.22, 1, 0.36, 1)",
   });
 
   return (
@@ -362,17 +366,18 @@ function DeployFlow() {
       className="kd-hero-art m-0"
       aria-label="배포 흐름: 내 GitHub 저장소 → 자동 빌드 → 앱 실행"
     >
-      <div className="relative w-full" style={{ aspectRatio: "709 / 748" }}>
-        {/* 1. 내 GitHub 저장소 */}
+      <div className="relative w-full" style={{ aspectRatio: "2018 / 2305" }}>
+        {/* 1. 내 GitHub 저장소 — 라벨은 시안에서 상자의 52.5% 지점에 중심이 온다.
+            글꼴이 시안과 달라 글자 폭이 다르므로 왼쪽 끝이 아니라 중심을 맞춘다. */}
         <img
           src={artRepo}
           alt=""
           className="kd-flow-art absolute"
-          style={{ left: "0%", top: "1.87%", width: "40.50%", ...on(FLOW_STEP.repo) }}
+          style={{ left: "2.18%", top: "0%", width: "48.07%", ...on(FLOW_STEP.repo) }}
         />
         <div
-          className="kd-flow-label absolute text-fg-1 whitespace-nowrap"
-          style={{ left: "27.60%", top: "0%", ...on(FLOW_STEP.repo) }}
+          className="kd-flow-label absolute text-center text-fg-1 whitespace-nowrap"
+          style={{ left: "12.23%", top: "1.21%", width: "80%", ...on(FLOW_STEP.repo) }}
         >
           내 GitHub 저장소
         </div>
@@ -382,47 +387,45 @@ function DeployFlow() {
           src={artArrow}
           alt=""
           className="kd-flow-art absolute"
-          style={{ left: "43.72%", top: "16.71%", width: "19.89%", ...on(FLOW_STEP.build) }}
+          style={{ left: "51.93%", top: "17.96%", width: "18.04%", ...on(FLOW_STEP.build) }}
         />
         <div
           className="kd-flow-label absolute text-fg-1 whitespace-nowrap"
-          style={{ left: "59.30%", top: "15.10%", ...on(FLOW_STEP.build) }}
+          style={{ left: "63.34%", top: "15.30%", ...on(FLOW_STEP.build) }}
         >
           자동 빌드
         </div>
 
-        {/* 3. 빌드 결과 — 시안 좌표(51.76%)면 왼쪽 화살표에 붙고 오른쪽 화살표와는 4.4% 떠서
-            두 화살표 사이에서 왼쪽으로 치우쳐 보인다. 가운데로 2.8% 옮겼다. */}
+        {/* 3. 빌드 결과 — 조각에 오른쪽 위 반짝임이 붙어 있어 폭이 큐브 자체보다 넓다. */}
         <img
           src={artCube}
           alt=""
           className="kd-flow-art absolute"
-          style={{ left: "57.00%", top: "30.75%", width: "18.76%", ...on(FLOW_STEP.cube) }}
+          style={{ left: "58.77%", top: "26.90%", width: "23.44%", ...on(FLOW_STEP.cube) }}
         />
 
-        {/* 4. 앱 실행 — 시안의 둘째 화살표는 짧고 가파른 갈고리라 다른 조각으로 돌려 쓸 수 없다.
-            시안 렌더에서 그 화살표만 떼어 왔다(회전 없음, 시안과 같은 모양).
-            시안은 화살촉이 창 윗변에 0.6px까지 붙는데, 확대해 보면 겹쳐 보여 9px 띄웠다. */}
+        {/* 4. 앱 실행 — 라벨이 상자 오른쪽 끝에 거의 닿아서, 왼쪽이 아니라 오른쪽을 맞춘다
+            (글자 폭이 시안보다 넓은 글꼴이라 왼쪽 기준이면 상자 밖으로 나간다). */}
         <img
           src={artArrow2}
           alt=""
           className="kd-flow-art absolute"
-          style={{ left: "76.40%", top: "40.60%", width: "7.62%", ...on(FLOW_STEP.run) }}
+          style={{ left: "77.70%", top: "41.43%", width: "9.12%", ...on(FLOW_STEP.run) }}
         />
         <div
           className="kd-flow-label absolute text-fg-1 whitespace-nowrap"
-          style={{ left: "84.90%", top: "43.20%", ...on(FLOW_STEP.run) }}
+          style={{ right: "0.47%", top: "42.72%", ...on(FLOW_STEP.run) }}
         >
           앱 실행
         </div>
 
-        {/* 5. 실행 중인 앱 — 창 아래 주소와 옅은 타원 그림자 */}
+        {/* 5. 실행 중인 앱 — 창이 상자 폭을 그대로 채운다. 아래는 주소와 옅은 타원 그림자. */}
         <div
           className="absolute"
-          style={{ left: "6.80%", top: "54.81%", width: "93.20%", ...on(FLOW_STEP.app) }}
+          style={{ left: "0%", top: "53.97%", width: "100%", ...on(FLOW_STEP.app) }}
         >
           <img src={artApp} alt="배포된 앱이 실행 중인 화면" className="kd-flow-art block w-full" />
-          <div className="kd-flow-label text-center text-fg-2" style={{ marginTop: 17 }}>
+          <div className="kd-flow-label text-center text-fg-2" style={{ marginTop: 6 }}>
             {EXAMPLE_HOST}
           </div>
           <div aria-hidden className="kd-art-shadow" />
@@ -502,31 +505,23 @@ function WorkspaceExample() {
           <CheckDot />
           실행 중
         </span>
-        {/* 좁은 화면에서는 네 칸이 한 줄에 안 들어간다 — 글자를 접지 말고(30px 칸을 넘친다)
-            줄을 바꾸게 둔다. 카드 헤더가 그만큼 늘어난다(minHeight만 48). */}
-        <div className="ml-auto flex items-center gap-1 flex-wrap justify-end">
-          {EX_VIEWS.map((v) => {
-            const on = view === v.id;
-            return (
-              <button
-                key={v.id}
-                type="button"
-                onClick={() => setView(v.id)}
-                aria-pressed={on}
-                className="kd-t-label transition-colors whitespace-nowrap"
-                style={{
-                  height: 30,
-                  paddingInline: 10,
-                  borderRadius: 6,
-                  color: on ? "var(--fg-1)" : "var(--fg-3)",
-                  fontWeight: on ? 600 : 500,
-                  background: on ? "var(--sel-soft)" : "transparent",
-                }}
-              >
-                {v.label}
-              </button>
-            );
-          })}
+        {/* 좁은 화면에서는 네 칸이 한 줄에 안 들어간다 — 글자를 접지 말고 줄을 바꾸게 둔다.
+            카드 헤더가 그만큼 늘어난다(minHeight만 48).
+            선택 표시는 실제 작업 공간과 같은 규칙이다 — 면을 깔지 않고 잉크 밑줄 + 중간 굵기. */}
+        <div className="ml-auto flex items-end gap-4 sm:gap-5 flex-wrap justify-end">
+          {EX_VIEWS.map((v) => (
+            <button
+              key={v.id}
+              type="button"
+              onClick={() => setView(v.id)}
+              aria-pressed={view === v.id}
+              className="kd-t-label kd-pick-x flex flex-col items-center whitespace-nowrap"
+              style={{ color: "var(--fg-3)", fontWeight: 500 }}
+            >
+              <span className="kd-pick-name">{v.label}</span>
+              <span className="kd-pick-bar" style={{ marginTop: 5 }} />
+            </button>
+          ))}
         </div>
       </div>
 
@@ -756,7 +751,7 @@ function ExDatabase() {
         <span className="kd-t-body-s text-fg-1 truncate">PostgreSQL</span>
         <div
           className="ml-auto flex items-center shrink-0"
-          style={{ padding: 2, borderRadius: 8, background: "var(--sel-soft)" }}
+          style={{ padding: 2, borderRadius: 4, background: "var(--sel-soft)" }}
         >
           {["표", "터미널"].map((m) => {
             const on = mode === m;
@@ -910,7 +905,7 @@ function ExStorage() {
         <div className="flex-1 min-h-0 p-3.5">
           <div
             className="w-full h-full overflow-hidden"
-            style={{ borderRadius: 8, background: file.kind === "text" ? "var(--term-bg)" : "var(--sel-soft)" }}
+            style={{ borderRadius: 4, background: file.kind === "text" ? "var(--term-bg)" : "var(--sel-soft)" }}
           >
             {file.kind === "image" && (
               <div className="w-full h-full flex items-center justify-center">

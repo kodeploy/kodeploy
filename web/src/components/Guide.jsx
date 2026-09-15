@@ -399,31 +399,16 @@ function RailRow({ to, label, sub, active, open }) {
   return (
     <Link
       to={href(to)}
-      className="kd-t-body-s relative flex items-center no-underline transition-colors"
+      aria-current={active ? "page" : undefined}
+      className="kd-t-body-s kd-pick flex items-center no-underline"
       style={{
         height: "var(--row-sm)",
         paddingLeft: sub ? 28 : 15,
         paddingRight: 10,
-        borderRadius: 4,
-        color: active || open ? "var(--fg-1)" : "var(--fg-2)",
-        fontWeight: active ? 600 : 400,
-        background: active ? "var(--sel-soft)" : "transparent",
-      }}
-      onMouseEnter={(e) => {
-        if (!active) e.currentTarget.style.background = "var(--line-1)";
-      }}
-      onMouseLeave={(e) => {
-        if (!active) e.currentTarget.style.background = "transparent";
+        color: open ? "var(--fg-1)" : "var(--fg-2)",
       }}
     >
-      {active && (
-        <span
-          aria-hidden
-          className="absolute"
-          style={{ left: 0, top: 0, bottom: 0, width: 3, background: "var(--fg-1)" }}
-        />
-      )}
-      <span className="truncate">{label}</span>
+      <span className="kd-pick-name truncate">{label}</span>
     </Link>
   );
 }

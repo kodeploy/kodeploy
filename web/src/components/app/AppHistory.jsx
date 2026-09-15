@@ -10,8 +10,7 @@
 // Build 모델에 없어서(시안의 "a81c92f" 자리) 빌드 ID로 대체했다 — 없는 값은 만들지 않는다.
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
-import { ArrowUpRight, CircleCheck, CircleX } from "lucide-react";
-import { APP_STATUS_STYLES } from "../AppStatusBadge.jsx";
+import { ArrowUpRight } from "lucide-react";
 import { listRecentCommits } from "../../api/deploy.js";
 import { formatDuration, formatFull, parseDate, relativeTime } from "../../lib/format.js";
 import BuildDetail, { resultIcon, statusLabel } from "./BuildDetail.jsx";
@@ -33,7 +32,7 @@ function dayTime(iso) {
 }
 
 export default function AppHistory() {
-  const { user, builds, slotStatus } = useOutletContext();
+  const { builds } = useOutletContext();
   const [searchParams, setSearchParams] = useSearchParams();
   const pinnedBuildId = searchParams.get("build");
 
@@ -47,31 +46,16 @@ export default function AppHistory() {
 
   // 쿼리가 가리키는 빌드가 목록에 없으면(삭제·다른 앱) 조용히 최신으로 떨어진다.
   const selected = builds.find((b) => b.build_id === pinnedBuildId) || builds[0] || null;
-  const podStatus = slotStatus?.server?.status || slotStatus?.status || null;
 
   // replace — 행을 훑을 때마다 뒤로가기 스택이 쌓이면 탭을 빠져나가기 어려워진다.
   const select = (buildId) => setSearchParams({ build: buildId }, { replace: true });
 
   return (
     <div className="flex-1 overflow-auto scroll-thin">
-      <div className="kd-page" style={{ paddingBottom: 72 }}>
-        {/* ── 페이지 헤더 — 제목은 셸(AppLayout)이 그리고 여기는 설명 + 앱 상태만 ── */}
-        <div className="flex items-start gap-6 flex-wrap" style={{ paddingTop: 2 }}>
-          <div className="min-w-0">
-            <p className="kd-t-body-s text-fg-2">빌드 결과와 배포 내용을 확인하세요.</p>
-          </div>
-          <div className="ml-auto flex items-center gap-2.5 shrink-0" style={{ paddingTop: 6 }}>
-            {/* 앱 이름 — 개요 탭 헤더와 같은 크기(kd-t-subtitle)로 맞춘다 */}
-            <span className="kd-t-subtitle text-fg-1">{user.app_name}</span>
-            <span className="kd-t-label text-fg-4">·</span>
-            <PodStatus status={podStatus} />
-          </div>
-        </div>
-
+      <div className="kd-page" style={{ paddingTop: 28, paddingBottom: 72 }}>
         {/* ── 2단 — 좌 목록 440(시안 세로 괘선 x657) / 우 상세(시안 x692에서 시작) ── */}
         <div
           className="grid grid-cols-1 lg:grid-cols-[440px_minmax(0,1fr)] border-kd-border"
-          style={{ marginTop: 28 }}
         >
           {/* 좌 440 = 시안 세로 괘선 x657 */}
           <div className="lg:border-r border-kd-border lg:pr-5">
@@ -113,30 +97,30 @@ export default function AppHistory() {
 }
 
 // 목록 행 — 높이 80(시안 110.5). 윗줄 #N·아이콘·상태·시각, 아랫줄 브랜치·빌드ID·소요.
-// 선택 행은 잉크 테두리 + 옅은 활성 면. 시안에서 테두리 상자가 본문 좌측보다 4px 바깥(x51)이라
-// 안쪽 상자에 marginInline:-4를 줘서 번호(#N)는 제목과 같은 세로선에 남게 한다.
+// 선택 행은 사이드바·설정과 같은 규칙이다 — 면을 깔지 않고 왼쪽 2px 잉크 선.
+// 번호와 상태는 굵기까지 올리고, 날짜·커밋·소요는 색만 한 단계 진해진다(굵기를 그대로 둬야
+// 글자 폭이 안 변해서 고를 때 줄이 흔들리지 않는다).
+// 선이 들어설 자리를 왼쪽에 따로 비운다(사이드바가 선 2 + 여백 22를 쓰는 것과 같은 리듬).
+// 선택 여부와 상관없이 늘 비워 두므로 고를 때 글자가 움직이지 않는다.
 function BuildRow({ build, number, selected, onSelect }) {
   const isEnv = (build.kind || "build") === "env_change";
   const failed = build.status === "failed";
   return (
     <button
       onClick={onSelect}
-      className="block w-full text-left"
+      aria-current={selected ? "true" : undefined}
+      className="kd-pick block w-full text-left"
       style={{ height: 80, paddingBlock: 2, borderBottom: "1px solid var(--kd-border)" }}
     >
       <div
-        className={`h-full flex items-center ${selected ? "" : "kd-hoverable"}`}
+        className="h-full flex items-center"
         style={{
-          marginInline: -4,
-          paddingLeft: 11, // 시안: 번호 좌측 x66 → 상자 안쪽 11
+          paddingLeft: 20, // 선(2) + 여백 18
           paddingRight: 16,
-          borderRadius: 8,
-          border: `1px solid ${selected ? "var(--fg-1)" : "transparent"}`,
-          background: selected ? "var(--sel-soft)" : undefined,
         }}
       >
         {/* 번호 열 — 폭 44 + 간격 8 = 아이콘 시작 58.5(시안 x136) */}
-        <span className="kd-t-label text-fg-1 tabular-nums shrink-0" style={{ width: 44 }}>
+        <span className="kd-t-label kd-pick-name text-fg-1 tabular-nums shrink-0" style={{ width: 44 }}>
           {isEnv ? "" : `#${number}`}
         </span>
 
@@ -145,14 +129,15 @@ function BuildRow({ build, number, selected, onSelect }) {
             <span className="shrink-0 flex">{resultIcon(build.status, 18)}</span>
             <span
               className="kd-t-label truncate"
-              style={{ color: failed ? "var(--err-fg)" : "var(--fg-1)" }}
+              /* 실패 행은 빨강을 지켜야 해서 색은 그대로 두고 굵기만 올린다 */
+              style={{ color: failed ? "var(--err-fg)" : "var(--fg-1)", fontWeight: selected ? 600 : undefined }}
             >
               {isEnv ? "환경변수 변경" : statusLabel(build)}
             </span>
           </span>
           {/* 아랫줄은 아이콘 왼쪽선에 맞춘다(시안 x137 ≈ 아이콘 x136) */}
           <span
-            className="kd-t-caption text-fg-3 truncate block"
+            className="kd-t-caption kd-pick-sub text-fg-3 truncate block"
             style={{ marginTop: 4, paddingLeft: 28 }}
           >
             {isEnv
@@ -162,10 +147,10 @@ function BuildRow({ build, number, selected, onSelect }) {
         </span>
 
         <span className="shrink-0 text-right" style={{ marginLeft: 12 }}>
-          <span className="kd-t-label text-fg-2 block tabular-nums">
+          <span className="kd-t-label kd-pick-mid text-fg-2 block tabular-nums">
             {dayTime(build.created_at)}
           </span>
-          <span className="kd-t-caption text-fg-3 block tabular-nums" style={{ marginTop: 4 }}>
+          <span className="kd-t-caption kd-pick-sub text-fg-3 block tabular-nums" style={{ marginTop: 4 }}>
             {formatDuration(build.total_seconds) || "—"}
           </span>
         </span>
@@ -220,23 +205,3 @@ function RecentCommits() {
   );
 }
 
-// 헤더 우측 Pod 상태 — 지금 살아 있나. AppStatusBadge의 라벨 맵 재사용.
-function PodStatus({ status }) {
-  if (!status) return null;
-  const s = APP_STATUS_STYLES[status] || { label: status };
-  const bad = status === "crashing";
-  return (
-    <span className="kd-t-label text-fg-2 inline-flex items-center gap-1.5">
-      {bad ? (
-        <CircleX size={18} strokeWidth={1.6} style={{ color: "var(--err-fg)" }} />
-      ) : (
-        <CircleCheck
-          size={18}
-          strokeWidth={1.6}
-          style={{ color: status === "running" ? "var(--ok-fg)" : "var(--fg-4)" }}
-        />
-      )}
-      {s.label}
-    </span>
-  );
-}

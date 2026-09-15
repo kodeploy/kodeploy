@@ -255,7 +255,7 @@ export default function DeployProgress() {
       <div
         style={{
           marginTop: 32,
-          borderRadius: 8,
+          borderRadius: 4,
           border: "1px solid var(--kd-border)",
           background: "var(--term-bg)",
           overflow: "hidden",

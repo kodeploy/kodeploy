@@ -68,7 +68,7 @@ export default function StepRepo({
           className="scroll-thin"
           style={{
             marginTop: 8,
-            borderRadius: 8,
+            borderRadius: 4,
             border: "1px solid var(--kd-border)",
             background: "var(--kd-surface)",
             maxHeight: 96,

@@ -347,7 +347,7 @@ function MetricChart({ data, fmt, id }) {
       {!data || data.length === 0 ? (
         <div
           className="w-full h-full flex items-center justify-center kd-t-caption text-fg-4"
-          style={{ borderRadius: 8, background: "var(--sel-soft)" }}
+          style={{ borderRadius: 4, background: "var(--sel-soft)" }}
         >
           아직 수집된 데이터가 없어요.
         </div>

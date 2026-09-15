@@ -19,6 +19,7 @@ import GuidePanel from "./components/GuidePanel.jsx";
 import Home from "./components/Home.jsx";
 import LoginModal from "./components/LoginModal.jsx";
 import TopBar from "./components/TopBar.jsx";
+import { AppShellProvider } from "./contexts/AppShellContext.jsx";
 import { AuthProvider } from "./contexts/AuthContext.jsx";
 import { ThemeProvider } from "./contexts/ThemeContext.jsx";
 
@@ -69,6 +70,7 @@ export default function App() {
     <BrowserRouter>
       <ThemeProvider>
       <AuthProvider onOpenLogin={() => setShowLogin(true)}>
+        <AppShellProvider>
         <div className="h-screen w-screen flex flex-col" style={{ background: "var(--kd-bg)" }}>
           <TopBar onLogin={() => setShowLogin(true)} />
           <div className="flex-1 min-h-0 flex flex-col" style={{ background: "var(--kd-panel)" }}>
@@ -106,6 +108,7 @@ export default function App() {
           </div>
           {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
         </div>
+        </AppShellProvider>
       </AuthProvider>
       </ThemeProvider>
     </BrowserRouter>

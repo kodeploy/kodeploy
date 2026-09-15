@@ -1,13 +1,14 @@
 // 앱 상세 · 작업 공간 탭 — design/라이트모드-시안/10~13 기준.
 //
-// 화면은 카드 하나다. 헤더(앱 이름 + Pod 상태 + 뷰 탭 + 레이아웃 메뉴) 아래에 뷰 하나가 열린다.
+// 화면은 뷰 탭 줄 하나 + 카드 하나다. 카드 안에 뷰 하나가 열린다.
+// 앱 이름·실행 상태는 상단바가, 앱 액션(서비스 열기·앱 정보·재배포)은 사이드바가 맡는다.
 //   터미널·로그 — 좌 터미널(대상 선택) / 우 런타임 로그   ← 들어오면 바로 이 뷰
 //   데이터베이스 — SQL 편집기 + 조회 결과 (또는 DB 터미널)
 //   스토리지    — 파일 목록 + 미리보기 (use_storage일 때만 탭이 뜬다)
 //   모니터링    — 현재 사용량 표
 //
 // 치수 주석의 숫자는 시안 원본 px, 실제 값은 ÷1.45(시안 스케일)한 CSS px이다.
-//   카드 폭 1426→982(kd-page 내부 폭) · 카드 헤더 87→60 · 패널 헤더 62→42(--row-lg)
+//   카드 폭 1426→982(kd-page 내부 폭) · 뷰 탭 줄 44 · 패널 헤더 62→42(--row-lg)
 //   터미널:로그 = 775:649 → 55:45 · 스토리지 목록:미리보기 = 802:622 → 56:44
 //
 // 뷰 전환은 unmount가 아니라 display 토글이다(Pane.jsx가 탭을 다루는 방식과 같다).
@@ -30,8 +31,6 @@ import {
   ChevronRight,
   ChevronUp,
   ChevronsUpDown,
-  CircleCheck,
-  CircleX,
   Copy,
   Database,
   Download,
@@ -63,7 +62,6 @@ import {
 import { parseDate } from "../../lib/format.js";
 import { xtermTheme } from "../../lib/xtermTheme.js";
 import { useTheme } from "../../contexts/ThemeContext.jsx";
-import { APP_STATUS_STYLES } from "../AppStatusBadge.jsx";
 import DbTerminalPanel from "../panels/DbTerminalPanel.jsx";
 import MetricsView from "./MetricsView.jsx";
 
@@ -169,7 +167,7 @@ function Divider({ axis, onMouseDown }) {
 // 화면 본체
 // ────────────────────────────────────────────────────────────────────────────
 export default function AppWorkspace() {
-  const { user, builds, serverBuild, slotStatus } = useOutletContext();
+  const { builds, serverBuild, slotStatus } = useOutletContext();
   const [searchParams] = useSearchParams();
 
   // 빌드 선택 — ?build=<id> 우선, 없으면 자동 선택 (기존 동작 유지)
@@ -195,15 +193,6 @@ export default function AppWorkspace() {
   const [view, setView] = useState(seed === "storage" && !storageEnabled ? "console" : seed);
   // 한 번이라도 연 뷰만 마운트해 둔다 (이후로는 display로만 감춘다).
   const [opened, setOpened] = useState(() => new Set([view]));
-  // 확대 — 작업 공간만 아래로 키운다(폭은 이미 화면 끝까지 쓰므로 그대로).
-  // 화면 밖으로 넘친 만큼은 이 영역만 스크롤한다. 되돌리기는 같은 버튼 또는 Esc.
-  const [wide, setWide] = useState(false);
-  useEffect(() => {
-    if (!wide) return;
-    const onKey = (e) => e.key === "Escape" && setWide(false);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [wide]);
   const openView = (id) => {
     setView(id);
     setOpened((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
@@ -219,66 +208,39 @@ export default function AppWorkspace() {
 
   return (
     <div
-      className={
-        wide
-          ? "kd-page flex-1 min-h-0 flex flex-col overflow-y-auto scroll-thin"
-          : "kd-page flex-1 min-h-0 flex flex-col"
-      }
-      // 제목 줄(페이지 머리)이 이미 아래 여백을 갖고 있어 카드는 곧바로 이어 붙인다.
-      // 확대해도 여백은 같은 값이다 — 여기서 달라지면 카드가 위아래로 튄다.
+      className="kd-page flex-1 min-h-0 flex flex-col"
+      // 탭 줄이 이 화면 안에 있으므로 위 여백은 0이다(줄 자체가 높이 44를 갖는다).
       style={{ paddingTop: 0, paddingBottom: 24 }}
     >
-      {/* 확대 중에는 높이를 화면 높이에 맞춰 못 박는다 — 기본 상태(화면 높이 − 상단바 −
-          제목 줄 − 여백)보다 약 160px 크고, 화면 밖으로 나간 부분은 스크롤로 닿는다. */}
+      {/* ── 뷰 탭 줄 — 아래 괘선은 두지 않는다(바로 밑 카드 테두리와 두 줄로 겹쳐 보였다).
+          여백은 밑줄이 아니라 글자를 기준으로 맞춘다: 상단바 ~ 카드 58px 안에서 글자 위 23.5 /
+          글자 아래 22.5 (밑줄은 글자 아래 6px에 얹히는 덤이라 가운데 계산에서 뺀다). ── */}
+      <div className="shrink-0 flex items-end" style={{ height: 48 }}>
+        {/* 탭 줄이 다 안 들어가면(아주 좁은 화면) 잘리는 대신 옆으로 민다 */}
+        <nav
+          className="flex items-end gap-6 sm:gap-10 shrink-0 overflow-x-auto scroll-thin"
+          style={{ paddingBottom: 0, maxWidth: "100%" }}
+        >
+          {views.map((v) => (
+            <button
+              key={v.id}
+              onClick={() => openView(v.id)}
+              aria-pressed={view === v.id}
+              className="kd-t-body-s kd-pick-x flex flex-col items-center shrink-0"
+              style={{ color: "var(--fg-2)", fontWeight: 500 }}
+            >
+              <span className="kd-pick-name">{v.label}</span>
+              {/* 활성 밑줄 — 세로 메뉴의 선과 같은 2px 잉크 바, 글자 아래 6px */}
+              <span className="kd-pick-bar" style={{ marginTop: 6 }} />
+            </button>
+          ))}
+        </nav>
+      </div>
+
       <div
         className="kd-card flex-1 min-h-0 flex flex-col overflow-hidden"
-        style={wide ? { flex: "none", height: "calc(100vh - 20px)" } : undefined}
+        style={{ marginTop: 10 }}
       >
-        {/* ── 카드 헤더 (시안 y196→283 = 60) ── */}
-        <div
-          className="shrink-0 flex items-center gap-3 sm:gap-5"
-          style={{ height: 60, paddingInline: 20, borderBottom: "1px solid var(--kd-border)" }}
-        >
-          <h2 className="kd-t-subtitle text-fg-1 truncate shrink">{user.app_name}</h2>
-          <PodStatus status={slotStatus?.server?.status || slotStatus?.status} />
-
-          {/* 좁은 화면에서는 뷰 탭이 카드 밖으로 잘려 손이 닿지 않았다 — 잘리는 대신 옆으로 민다 */}
-          <nav className="ml-auto flex items-center gap-4 sm:gap-6 min-w-0 overflow-x-auto scroll-thin">
-            {views.map((v) => (
-              <button
-                key={v.id}
-                onClick={() => openView(v.id)}
-                aria-pressed={view === v.id}
-                className="kd-t-label flex flex-col items-center shrink-0 transition-colors"
-                // 밑줄(2px)과 그 위 여백(6px)만큼 위를 띄워야 글자가 행 한가운데 온다
-                style={{ color: view === v.id ? "var(--fg-1)" : "var(--fg-2)", paddingTop: 8 }}
-              >
-                {v.label}
-                {/* 활성 밑줄 — 시안은 글자 아래 6px에 2px 바 */}
-                <span
-                  className="w-full"
-                  style={{
-                    height: 2,
-                    marginTop: 6,
-                    background: view === v.id ? "var(--accent)" : "transparent",
-                  }}
-                />
-              </button>
-            ))}
-            {/* 확대 — 폭은 그대로, 아래로만 화면 밖까지 키운다 */}
-            <span
-              aria-hidden
-              className="shrink-0"
-              style={{ width: 1, height: 16, background: "var(--kd-border)" }}
-            />
-            <IconBtn
-              icon={wide ? Minimize2 : Maximize2}
-              label={wide ? "기본 크기" : "확대"}
-              onClick={() => setWide((v) => !v)}
-            />
-          </nav>
-        </div>
-
         {/* ── 본문 — 한 번에 한 뷰. 분할 대신 각 칸의 "크게 보기"로 넓힌다. ── */}
         <div className="flex-1 min-h-0 flex">
           <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
@@ -303,27 +265,6 @@ export default function AppWorkspace() {
         </div>
       </div>
     </div>
-  );
-}
-
-// Pod 상태 — 지금 살아 있나. 라벨은 AppStatusBadge의 맵이 단일 진실원.
-function PodStatus({ status }) {
-  if (!status) return null;
-  const s = APP_STATUS_STYLES[status] || { label: status };
-  const bad = status === "crashing";
-  return (
-    <span className="kd-t-label inline-flex items-center gap-2 text-fg-2 shrink-0">
-      {bad ? (
-        <CircleX size={18} strokeWidth={1.6} style={{ color: "var(--err-fg)" }} />
-      ) : (
-        <CircleCheck
-          size={18}
-          strokeWidth={1.6}
-          style={{ color: status === "running" ? "var(--ok-fg)" : "var(--fg-4)" }}
-        />
-      )}
-      {s.label}
-    </span>
   );
 }
 
@@ -393,7 +334,7 @@ function MiniSelect({ value, options, onChange, dark, width }) {
           width: dark ? "auto" : width,
           height: 30,
           paddingInline: dark ? 0 : 10,
-          borderRadius: 8,
+          borderRadius: 4,
           border: dark ? "none" : "1px solid var(--kd-border)",
           background: dark ? "transparent" : "var(--kd-surface)",
           color: dark ? "var(--term-fg)" : "var(--fg-1)",
@@ -812,7 +753,7 @@ function LogSide({ build, zoomed, onZoom }) {
               style={{
                 height: 22,
                 paddingInline: 10,
-                borderRadius: 8,
+                borderRadius: 4,
                 color: source === s.id ? "var(--fg-1)" : "var(--fg-3)",
                 background: source === s.id ? "var(--sel)" : "transparent",
               }}
@@ -894,7 +835,7 @@ function DatabaseView({ dbType }) {
         <span className="kd-t-body text-fg-1 truncate">{DB_LABEL[dbType] || "데이터베이스"}</span>
         <div
           className="ml-auto flex items-center shrink-0"
-          style={{ padding: 2, borderRadius: 8, background: "var(--sel-soft)" }}
+          style={{ padding: 2, borderRadius: 4, background: "var(--sel-soft)" }}
         >
           {[
             { id: "table", label: "표", icon: Table2 },
@@ -1132,7 +1073,7 @@ function SqlConsole() {
             style={{
               margin: 20,
               padding: 14,
-              borderRadius: 8,
+              borderRadius: 4,
               border: "1px solid var(--kd-border)",
               color: "var(--err-fg)",
             }}
@@ -1379,19 +1320,18 @@ function StorageView() {
                     <button
                       key={o.key}
                       onClick={() => setSelectedKey(o.key)}
-                      className="w-full grid items-center text-left"
+                      aria-current={on ? "true" : undefined}
+                      className="kd-pick w-full grid items-center text-left"
                       style={{
                         gridTemplateColumns: STORAGE_COLS,
                         height: "var(--row-lg)",
                         paddingInline: 20,
                         borderBottom: "1px solid var(--kd-border)",
-                        background: on ? "var(--sel-soft)" : "transparent",
-                        boxShadow: on ? "inset 3px 0 0 0 var(--accent)" : "none",
                       }}
                     >
                       <span className="kd-t-body-s text-fg-1 flex items-center gap-3 min-w-0">
                         <Icon size={18} strokeWidth={1.5} className="shrink-0 text-fg-2" />
-                        <span className="truncate">{o.key}</span>
+                        <span className="kd-pick-name truncate">{o.key}</span>
                       </span>
                       <span className="kd-t-body-s text-fg-2 tabular-nums">{fmtBytes(o.size)}</span>
                       <span className="kd-t-body-s text-fg-2 tabular-nums">
@@ -1500,7 +1440,7 @@ function StoragePreview({ obj, onDeleted }) {
           marginTop: 14,
           // 크게 보기: 오른쪽 칸 높이를 채우되 화면을 넘지 않게 상한을 둔다
           height: big ? "min(58vh, 520px)" : 152,
-          borderRadius: 8,
+          borderRadius: 4,
           background: "var(--sel-soft)",
           border: framed ? "1px solid var(--kd-border)" : undefined,
           transition: "height 180ms ease",

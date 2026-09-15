@@ -90,7 +90,7 @@ export function CodeBlock({ children }) {
           style={{
             background: "var(--term-bg)",
             color: "var(--term-fg)",
-            borderRadius: 8,
+            borderRadius: 4,
             // 시안 코드 블록: 안쪽 여백 20/18(원본 px) → ÷1.217
             padding: doc ? "16px 18px" : "12px 14px",
             whiteSpace: "pre",

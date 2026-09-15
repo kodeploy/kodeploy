@@ -282,7 +282,7 @@ export function WizardFooter({ maxWidth, back, next, error, note }) {
           style={{
             marginBottom: 20,
             padding: "10px 14px",
-            borderRadius: 8,
+            borderRadius: 4,
             border: "1px solid var(--err-fg)",
             background: "var(--sel-soft)",
             color: "var(--err-fg)",

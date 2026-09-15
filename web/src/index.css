@@ -205,17 +205,17 @@ select {
 }
 
 /* ── 버튼 — 잉크 채움(primary) / 괘선(secondary). 인라인 hover 핸들러 대체.
-   기본 치수는 시안 기준 높이 48px · 모서리 8px (.kd-btn-lg). 조밀한 자리는
-   각자 패딩을 주되 모서리는 8px로 통일. ── */
+   기본 치수는 시안 기준 높이 48px (.kd-btn-lg). 조밀한 자리는 각자 패딩을 주되
+   모서리는 --kd-radius로 통일. ── */
 .kd-btn-lg {
   height: 48px;
   padding-inline: 26px;
-  border-radius: 8px;
+  border-radius: var(--kd-radius);
   font-size: 15px;
   font-weight: 550;
 }
 .kd-btn-primary {
-  border-radius: 8px;
+  border-radius: var(--kd-radius);
   background: var(--btn-primary-bg);
   color: var(--btn-primary-fg);
   border: 1px solid var(--btn-primary-bg);
@@ -231,7 +231,7 @@ select {
 }
 
 .kd-btn-secondary {
-  border-radius: 8px;
+  border-radius: var(--kd-radius);
   background: var(--kd-surface);
   color: var(--fg-1);
   border: 1px solid var(--kd-border);
@@ -253,26 +253,27 @@ select {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr);
   align-items: center;
-  gap: clamp(24px, 3.2vw, 48px);
+  /* 글과 그림 사이 — 이 사이를 좁혀 바깥(좌우) 여백 쪽에 자리를 넘긴다 */
+  gap: clamp(20px, 2.6vw, 36px);
   /* 한 화면을 채우되 상한을 둔다 — 세로로 아주 긴 창(휴대폰의 데스크탑 모드, 세로 태블릿)에서는
      100vh를 그대로 쓰면 위아래로 600px씩 빈다. svh는 주소창 높이 변동을 타지 않는다. */
   min-height: min(calc(100vh - 60px), 860px);
   min-height: min(calc(100svh - 60px), 860px);
   padding-block: 48px;
 }
-/* 일러스트 크기 — 시안에서 흐름 그림은 히어로 높이의 68%를 쓴다(652 / 952).
-   히어로 상한이 860px이므로 그림 높이 ~589 → 폭 470(가로세로비 521:652). */
+/* 일러스트 크기 — 상자 폭이 곧 앱 창의 폭이다(세로 시안에서 창이 가장 넓은 조각).
+   380px면 창 아래 주소까지 높이 ~434px로, 히어로 상한(860px) 안에 여유 있게 들어간다. */
 /* 그림은 열의 오른쪽 끝에 붙인다 — 아래 섹션 카드의 오른쪽 모서리와 한 줄로 맞추려고. */
 .kd-hero-art {
   width: 100%;
-  max-width: 430px;
+  max-width: 380px;
   margin-left: auto;
   margin-right: 0;
   container-type: inline-size;   /* 라벨 글자가 그림 폭을 따라간다 */
 }
-/* 흐름 라벨 — 시안 글자 크기를 일러스트 폭 대비로 환산한 값(시안 "내 GitHub 저장소" 잉크 151px) */
-/* 흐름 라벨 — 시안에서 글자는 일러스트 폭의 4.47%(21/470)다. 그림이 줄면 글자도 같이 준다. */
-.kd-flow-label { font-size: clamp(12px, 4.47cqi, 21px); line-height: 1.15; }
+/* 흐름 라벨 — 세로 시안에서 한글 잉크 높이가 상자 폭의 4.47%(45/1012)다.
+   Pretendard의 한글 잉크는 em의 0.865이므로 글자 크기는 상자 폭의 5.17%. 그림이 줄면 같이 준다. */
+.kd-flow-label { font-size: clamp(13px, 5.17cqi, 22px); line-height: 1.15; }
 /* 앱 창 아래 옅은 타원 그림자 — 시안에서 잰 폭(창보다 10% 넓게)과 농도. 잉크가 아니라
    면이라 .kd-flow-art(다크 반전)에 태우지 않고 테마별 색을 따로 준다. */
 .kd-art-shadow {
@@ -292,6 +293,11 @@ select {
     grid-template-columns: minmax(0, 1fr);
     min-height: 0;
     padding-block: 40px 24px;
+  }
+  /* 한 단으로 쌓이면 그림을 오른쪽 끝에 붙일 이유가 없다 — 글과 같은 왼쪽 선에 맞춘다 */
+  .kd-hero-art {
+    margin-left: 0;
+    margin-right: auto;
   }
 }
 
@@ -350,7 +356,8 @@ select {
 .kd-t-hero {
   font-family: "Nanum Myeongjo", "Noto Serif KR", Georgia, serif;
   font-weight: 700;
-  font-size: clamp(34px, 6.05vw, 72px);
+  /* 2026-09: 시안 대비 10% 줄였다(72 → 65). 승인 기준 64~76px의 아래쪽 끝. */
+  font-size: clamp(31px, 5.45vw, 65px);
   line-height: 1.05;
   letter-spacing: -0.01em;
   word-break: keep-all;
@@ -411,25 +418,26 @@ select {
      1.32배로 렌더된 것이다. 앱 시안 콘텐츠 1429 ÷ 1.32 = 1082 이 우리 타입 스케일에서의
      의도 폭이고, 사이드 열 비율(본문:사이드 = 69:31)도 이 폭에서만 맞는다. */
   --kd-w-app: 1120px;        /* 앱 화면: 콘텐츠 1040 + 좌우 40 */
-  --kd-w-marketing: 1160px;  /* 랜딩·이용방법·피드백·블로그 목록 (콘텐츠 1048 + 좌우 56) */
+  --kd-w-marketing: 1160px;  /* 랜딩·이용방법·피드백·블로그 목록 (콘텐츠 936 + 좌우 112) */
   --kd-w-read: 720px;        /* 문서 본문 · 블로그 본문 · 폼 1단 */
   --kd-w-docs: 1280px;       /* 문서 3단 셸(사이드 240 + 본문 720 + 목차 240) */
 
+  --kd-radius: 4px;   /* 카드·버튼·입력 공통 모서리 — 아주 살짝만 둥글게 */
   --row-lg: 42px;
   --row-md: 37px;
   --row-sm: 32px;
   --tabbar-h: 48px;
 }
 
-/* 컨트롤 — 버튼 3종, 입력, 칩. 모서리는 전부 8px. */
-.kd-btn-lg { height: 48px; padding-inline: 36px; border-radius: 8px; font-size: 15px; font-weight: 550; }
-.kd-btn-md { height: 40px; padding-inline: 20px; border-radius: 8px; font-size: 14px; font-weight: 550; }
-.kd-btn-sm { height: 32px; padding-inline: 12px; border-radius: 8px; font-size: 13.5px; font-weight: 550; }
+/* 컨트롤 — 버튼 3종, 입력, 칩. 모서리는 전부 --kd-radius. */
+.kd-btn-lg { height: 48px; padding-inline: 36px; border-radius: var(--kd-radius); font-size: 15px; font-weight: 550; }
+.kd-btn-md { height: 40px; padding-inline: 20px; border-radius: var(--kd-radius); font-size: 14px; font-weight: 550; }
+.kd-btn-sm { height: 32px; padding-inline: 12px; border-radius: var(--kd-radius); font-size: 13.5px; font-weight: 550; }
 
 .kd-input {
   height: 38px;
   padding-inline: 12px;
-  border-radius: 8px;
+  border-radius: var(--kd-radius);
   font-size: 14px;
   color: var(--fg-1);
   background: var(--input-bg);
@@ -448,7 +456,7 @@ textarea.kd-input { height: auto; padding-block: 10px; line-height: 1.6; resize:
   align-items: center;
   height: 27px;
   padding-inline: 12px;
-  border-radius: 8px;
+  border-radius: var(--kd-radius);
   font-size: 13px;
   font-weight: 510;
   color: var(--fg-1);
@@ -463,7 +471,10 @@ textarea.kd-input { height: auto; padding-block: 10px; line-height: 1.6; resize:
   width: 100%;
   max-width: var(--kd-w-marketing);
   margin-inline: auto;
-  padding-inline: clamp(16px, 4.2vw, 56px);
+  /* 좌우 여백 — 랜딩의 모든 행(히어로·운영·FAQ·푸터)이 이 한 값을 같이 쓴다.
+     56 → 112로 넓혔다. 열이 좁아지면 히어로의 글과 그림 사이도 같이 좁아진다
+     (그림은 열 오른쪽 끝에 붙으므로 가운데 빈자리가 바깥 여백으로 옮겨간다). */
+  padding-inline: clamp(20px, 8vw, 112px);
 }
 
 /* 읽기용 1단 — 문서 본문, 블로그 본문, 폼 */
@@ -504,7 +515,7 @@ textarea.kd-input { height: auto; padding-block: 10px; line-height: 1.6; resize:
 /* 표 한 장 — 네 변이 닫힌 상자(환경변수 표와 같은 규칙) */
 .kd-table-wrap {
   border: 1px solid var(--kd-border);
-  border-radius: 8px;
+  border-radius: var(--kd-radius);
   background: var(--kd-surface);
   overflow: hidden;
 }
@@ -567,7 +578,7 @@ textarea.kd-input { height: auto; padding-block: 10px; line-height: 1.6; resize:
 
 /* 카드 — 흰 면 + 헤어라인. 그림자·블러 없음(종이 위에 놓인 종이) */
 .kd-card {
-  border-radius: 8px;
+  border-radius: var(--kd-radius);
   background: var(--kd-surface);
   border: 1px solid var(--kd-border);
 }
@@ -585,6 +596,103 @@ textarea.kd-input { height: auto; padding-block: 10px; line-height: 1.6; resize:
 }
 
 /* JS onMouseEnter 없이 테마 대응 hover 표면 (잉크/종이 반투명 자동 전환) */
+/* ──────────────────────────────────────────────────────────────────────────
+   선택 표시 — 대시보드의 메뉴·행·탭이 한 규칙을 쓴다.
+   면(회색 배경)을 깔지 않고 왼쪽 잉크 선 하나와 글자 굵기로만 "지금 여기"를 말한다.
+   선은 선택 여부와 상관없이 늘 자리를 차지하고 색만 바뀌므로 글자가 움직이지 않고,
+   누르는 영역도 행 전체 그대로다. 다크에서는 --accent가 밝은 전경색이라 그대로 뒤집힌다.
+   ────────────────────────────────────────────────────────────────────────── */
+.kd-pick {
+  position: relative;
+  background: transparent;
+}
+.kd-pick::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 22%;
+  bottom: 22%;           /* 위아래를 조금 띄워 행보다 짧은 선으로 보이게 */
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background-color 150ms ease;
+}
+.kd-pick[aria-current="page"]::before,
+.kd-pick[aria-current="true"]::before,
+.kd-pick[aria-pressed="true"]::before {
+  background: var(--accent);
+}
+/* 가로 탭 — 같은 두께의 잉크 밑줄. 글자 아래 6px에 놓는 자리는 화면이 정한다. */
+.kd-pick-x { position: relative; background: transparent; }
+.kd-pick-bar {
+  display: block;
+  width: 100%;
+  height: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background-color 150ms ease;
+}
+.kd-pick-x[aria-current="page"] .kd-pick-bar,
+.kd-pick-x[aria-pressed="true"] .kd-pick-bar {
+  background: var(--accent);
+}
+/* 탭바 아래 괘선 위에 겹쳐 그리는 밑줄 — 글자 밑이 아니라 줄 맨 아래에 붙는다 */
+.kd-pick-x-edge::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background-color 150ms ease;
+}
+.kd-pick-x-edge[aria-current="page"]::after,
+.kd-pick-x-edge[aria-pressed="true"]::after {
+  background: var(--accent);
+}
+
+/* 이름표 — 선택되면 잉크색 + 중간 굵기. 날짜·커밋 같은 보조 정보는 제 클래스를 그대로 쓴다.
+   호버·누름은 면을 깔지 않고 글자 명도만 올린다. */
+.kd-pick-name {
+  transition: color 150ms ease;
+}
+.kd-pick:hover .kd-pick-name,
+.kd-pick-x:hover .kd-pick-name {
+  color: var(--fg-1);
+}
+.kd-pick[aria-current="page"] .kd-pick-name,
+.kd-pick[aria-current="true"] .kd-pick-name,
+.kd-pick[aria-pressed="true"] .kd-pick-name,
+.kd-pick-x[aria-current="page"] .kd-pick-name,
+.kd-pick-x[aria-pressed="true"] .kd-pick-name {
+  color: var(--fg-1);
+  font-weight: 600;
+}
+/* 선택 행의 나머지 글자 — 이름표만 굵어지면 한 줄만 뜨는 느낌이라, 옆 글자도 한 단계씩
+   진해진다. 굵기는 건드리지 않아서 글자 폭이 변하지 않는다(줄이 흔들리지 않는다). */
+.kd-pick-mid,
+.kd-pick-sub {
+  transition: color 150ms ease;
+}
+.kd-pick[aria-current="page"] .kd-pick-mid,
+.kd-pick[aria-current="true"] .kd-pick-mid {
+  color: var(--fg-1);
+}
+.kd-pick[aria-current="page"] .kd-pick-sub,
+.kd-pick[aria-current="true"] .kd-pick-sub {
+  color: var(--fg-2);
+}
+
+/* 키보드 초점은 선택 표시와 별개다 — 눈에 보이는 테두리를 따로 둔다. */
+.kd-pick:focus-visible,
+.kd-pick-x:focus-visible {
+  outline: 2px solid var(--sel-border);
+  outline-offset: -2px;
+  border-radius: var(--kd-radius);
+}
+
 .kd-hoverable {
   transition: background-color 150ms ease;
 }
