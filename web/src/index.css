@@ -20,7 +20,8 @@
   --band-bg: #ffffff; /* 섹션 밴드 */
 
   /* 괘선 — 이 디자인의 주된 구조선. 면(배경색)보다 선으로 나눈다 */
-  --kd-border: #ddddd8; /* 구분선 */
+  --kd-border: #ddddd8; /* 카드·입력 테두리 */
+  --kd-rule: #e7e7e3;   /* 섹션 구분선 — 테두리보다 한 톤 옅게(랜딩 가로 괘선·FAQ·3열) */
   --line-1: rgba(23, 23, 23, 0.04); /* 헤어라인 */
   --line-2: #ddddd8; /* 보통 보더 — 구분선과 같은 값 */
   --line-3: #c9c9c2; /* 강조 보더 */
@@ -100,6 +101,7 @@
   /* 다크 괘선 — #2d2d2d는 바탕 #181818 대비 ΔL 21, 카드 #202020 위에선 +13뿐이라
      구조선이 사라졌다. 시안 실측값(#383837 / #4a4a48)으로 한 단 올린다. */
   --kd-border: #383837;
+  --kd-rule: #2e2e2d;
   --line-1: rgba(255, 255, 255, 0.05);
   --line-2: #383837;
   --line-3: #4a4a48;
@@ -246,39 +248,44 @@ select {
   filter: invert(1);
 }
 
-/* 랜딩 히어로 — 좌 문장 / 우 배포 흐름. 시안(1536폭)의 좌우 여백 88px 기준.
-   한 화면 안에 들어가도록 상단바(60) 아래를 세로로 채우고 가운데 정렬한다. */
-.kd-hero-page {
-  width: 100%;
-  max-width: 1360px;
-  margin-inline: auto;
-  padding-inline: clamp(20px, 5.7vw, 88px);
-}
+/* 랜딩 히어로 — 좌 문장 / 우 배포 흐름. 폭은 아래 섹션과 같은 열(.kd-page-narrow)을 쓴다. */
 .kd-hero-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr);
   align-items: center;
-  gap: clamp(32px, 5vw, 72px);
+  gap: clamp(24px, 3.2vw, 48px);
   /* 한 화면을 채우되 상한을 둔다 — 세로로 아주 긴 창(휴대폰의 데스크탑 모드, 세로 태블릿)에서는
      100vh를 그대로 쓰면 위아래로 600px씩 빈다. svh는 주소창 높이 변동을 타지 않는다. */
   min-height: min(calc(100vh - 60px), 860px);
   min-height: min(calc(100svh - 60px), 860px);
   padding-block: 48px;
 }
-.kd-hero-art { width: 100%; max-width: 560px; margin-inline: auto; }
+/* 일러스트 크기 — 시안에서 흐름 그림은 히어로 높이의 68%를 쓴다(652 / 952).
+   히어로 상한이 860px이므로 그림 높이 ~589 → 폭 470(가로세로비 521:652). */
+/* 그림은 열의 오른쪽 끝에 붙인다 — 아래 섹션 카드의 오른쪽 모서리와 한 줄로 맞추려고. */
+.kd-hero-art {
+  width: 100%;
+  max-width: 430px;
+  margin-left: auto;
+  margin-right: 0;
+  container-type: inline-size;   /* 라벨 글자가 그림 폭을 따라간다 */
+}
+/* 흐름 라벨 — 시안 글자 크기를 일러스트 폭 대비로 환산한 값(시안 "내 GitHub 저장소" 잉크 151px) */
+/* 흐름 라벨 — 시안에서 글자는 일러스트 폭의 4.47%(21/470)다. 그림이 줄면 글자도 같이 준다. */
+.kd-flow-label { font-size: clamp(12px, 4.47cqi, 21px); line-height: 1.15; }
 /* 앱 창 아래 옅은 타원 그림자 — 시안에서 잰 폭(창보다 10% 넓게)과 농도. 잉크가 아니라
    면이라 .kd-flow-art(다크 반전)에 태우지 않고 테마별 색을 따로 준다. */
 .kd-art-shadow {
   width: 110%;
   margin-left: -5%;
-  height: 58px;
-  margin-top: 6px;
+  height: 46px;
+  margin-top: 0;
   border-radius: 50%;
-  background: radial-gradient(closest-side, rgba(0, 0, 0, 0.1), rgba(0, 0, 0, 0));
-  filter: blur(6px);
+  background: radial-gradient(closest-side, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0));
+  filter: blur(5px);
 }
 [data-theme="dark"] .kd-art-shadow {
-  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0));
+  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0));
 }
 @media (max-width: 900px) {
   .kd-hero-grid {
@@ -295,7 +302,7 @@ select {
   gap: 40px;
 }
 .kd-ops-cell {
-  border-left: 1px solid var(--kd-border);
+  border-left: 1px solid var(--kd-rule);
   padding-left: 40px;
 }
 @media (max-width: 760px) {
@@ -306,7 +313,7 @@ select {
   .kd-ops-cell {
     border-left: none;
     padding-left: 0;
-    border-top: 1px solid var(--kd-border);
+    border-top: 1px solid var(--kd-rule);
     padding-top: 32px;
   }
 }
@@ -404,7 +411,7 @@ select {
      1.32배로 렌더된 것이다. 앱 시안 콘텐츠 1429 ÷ 1.32 = 1082 이 우리 타입 스케일에서의
      의도 폭이고, 사이드 열 비율(본문:사이드 = 69:31)도 이 폭에서만 맞는다. */
   --kd-w-app: 1120px;        /* 앱 화면: 콘텐츠 1040 + 좌우 40 */
-  --kd-w-marketing: 1040px;  /* 랜딩·이용방법·피드백·블로그 목록 */
+  --kd-w-marketing: 1160px;  /* 랜딩·이용방법·피드백·블로그 목록 (콘텐츠 1048 + 좌우 56) */
   --kd-w-read: 720px;        /* 문서 본문 · 블로그 본문 · 폼 1단 */
   --kd-w-docs: 1280px;       /* 문서 3단 셸(사이드 240 + 본문 720 + 목차 240) */
 
@@ -450,11 +457,13 @@ textarea.kd-input { height: auto; padding-block: 10px; line-height: 1.6; resize:
 
 /* 마케팅 화면 폭 — 시안(1024폭 렌더 = CSS 959)에서 콘텐츠 855px, 좌우 여백 52px.
    좁은 화면에서는 여백이 줄고, 넓은 화면에서는 콘텐츠가 과하게 벌어지지 않게 캡을 둔다. */
+/* 마케팅 화면 열 — 랜딩 첫 장·운영 섹션·자주 묻는 질문·푸터가 모두 이 열을 쓴다.
+   1536폭에서 콘텐츠 1120px(화면의 73%)로, 시안의 단 비율과 같다. */
 .kd-page-narrow {
   width: 100%;
   max-width: var(--kd-w-marketing);
   margin-inline: auto;
-  padding-inline: clamp(16px, 5.4vw, 56px);
+  padding-inline: clamp(16px, 4.2vw, 56px);
 }
 
 /* 읽기용 1단 — 문서 본문, 블로그 본문, 폼 */

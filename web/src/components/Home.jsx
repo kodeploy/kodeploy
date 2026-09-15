@@ -23,7 +23,7 @@ import { listBuilds } from "../api/deploy.js";
 import SiteFooter from "./marketing/SiteFooter.jsx";
 import artRepo from "../assets/flow-repo.png";
 import artArrow from "../assets/flow-arrow.png";
-import artArrowShort from "../assets/flow-arrow-short.png";
+import artArrow2 from "../assets/flow-arrow2.png";
 import artCube from "../assets/flow-cube.png";
 import artApp from "../assets/flow-app.png";
 
@@ -65,14 +65,20 @@ const FAQ = [
   },
 ];
 
-// 뷰포트에 들어오면 한 번 표시 토글. prefers-reduced-motion이면 즉시 표시(모션 생략).
+// 모션 최소화 설정을 읽는다. 첫 렌더에서 알아야 "한 프레임 깜빡"이 없다(useEffect는 페인트 뒤에 돈다).
+const prefersReduced = () =>
+  typeof window !== "undefined" &&
+  !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+
+// 뷰포트에 들어오면 한 번 표시 토글. prefers-reduced-motion이면 처음부터 보이고 전환도 걸지 않는다.
 function useReveal() {
   const ref = useRef(null);
-  const [shown, setShown] = useState(false);
+  const reduced = prefersReduced();
+  const [shown, setShown] = useState(reduced);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
+    if (reduced) {
       setShown(true);
       return;
     }
@@ -87,13 +93,13 @@ function useReveal() {
     );
     io.observe(el);
     return () => io.disconnect();
-  }, []);
-  return [ref, shown];
+  }, [reduced]);
+  return [ref, shown, reduced];
 }
 
 // 스크롤 등장 래퍼 — 자식을 fade + slide-up. 종이 톤이라 이동량은 작게.
 function Reveal({ children, className, style }) {
-  const [ref, shown] = useReveal();
+  const [ref, shown, reduced] = useReveal();
   // 등장이 끝나면 will-change를 내려 컴포지터 레이어에서 해제되게 한다.
   const [settled, setSettled] = useState(false);
   return (
@@ -105,7 +111,10 @@ function Reveal({ children, className, style }) {
         ...style,
         opacity: shown ? 1 : 0,
         transform: shown ? "none" : "translateY(14px)",
-        transition: "opacity 0.7s ease, transform 0.7s cubic-bezier(0.22, 1, 0.36, 1)",
+        // 모션을 끈 사용자에게는 전환을 아예 걸지 않는다(0→1 값 변화가 그대로 재생되던 문제)
+        transition: reduced
+          ? "none"
+          : "opacity 0.7s ease, transform 0.7s cubic-bezier(0.22, 1, 0.36, 1)",
         willChange: settled ? "auto" : "opacity, transform",
       }}
     >
@@ -125,7 +134,7 @@ function Container({ children, style }) {
 
 // 섹션 구분선 — 시안에서 화면 전체를 가로지른다(콘텐츠 폭이 아님).
 function Rule() {
-  return <div style={{ borderTop: "1px solid var(--kd-border)" }} />;
+  return <div style={{ borderTop: "1px solid var(--kd-rule)" }} />;
 }
 
 export default function Home() {
@@ -157,7 +166,7 @@ export default function Home() {
   return (
     <div className="flex-1 overflow-auto scroll-thin">
       {/* ── Hero — 좌 문장 / 우 배포 흐름 (한 화면) ── */}
-      <div className="kd-hero-page">
+      <div className="kd-page-narrow">
         <section className="kd-fade-in kd-hero-grid">
           <div className="min-w-0">
             {/* 시안 잉크 62px → 57 ÷ 0.76 ≈ 75px */}
@@ -260,7 +269,7 @@ export default function Home() {
             >
               자주 묻는 질문
             </h2>
-            <div style={{ borderTop: "1px solid var(--kd-border)" }}>
+            <div style={{ borderTop: "1px solid var(--kd-rule)" }}>
               {FAQ.map((item) => (
                 <FaqRow key={item.q} {...item} />
               ))}
@@ -278,7 +287,7 @@ export default function Home() {
 function FaqRow({ q, a }) {
   const [open, setOpen] = useState(false);
   return (
-    <div style={{ borderBottom: "1px solid var(--kd-border)" }}>
+    <div style={{ borderBottom: "1px solid var(--kd-rule)" }}>
       <button
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
@@ -308,116 +317,114 @@ function FaqRow({ q, a }) {
 }
 
 // ── Hero 일러스트 ─────────────────────────────────────────────────────────
-// design/의 조각 그림(저장소 · 화살표 · 큐브 · 앱 창)을 얹어 흐름을 다시 만든다.
+// design/의 조각 그림(저장소 · 화살표 · 큐브 · 앱 창)을 얹어 흐름을 만든다.
 // 조각을 따로 두는 이유는 순서대로 등장시키기 위해서다: 저장소 → 자동 빌드 → 앱 실행.
 //
-// 좌표는 시안(1536폭 렌더)에서 각 덩어리의 잉크 경계를 재서 얻은 값이다.
-// 시안의 일러스트 영역 x871-1392 / y208-860 을 상자 560×700 으로 옮기면 배율이
-// 가로 0.19195 %/px, 세로 0.15337 %/px 다 — 아래 %는 전부 그 환산값.
+// 좌표는 시안 이미지에서 조각마다 잉크 경계를 재서 얻은 값이다(1761폭 렌더 기준):
+//   저장소 x1011 y62 308×278 · 화살표1 x1321 y173 141×97 · 큐브 x1378 y278 133×150
+//   화살표2 x1542 y373 54×83 · 창 x1061 y458 659×278 · 주소 x1228 y767
+//   라벨 내GitHub저장소 x1218 y48 · 자동빌드 x1408 y167 · 앱실행 x1587 y381
+// 콘텐츠 상자는 x1011-1720 / y48-796 = 709×748 (가로세로비 0.948) — 아래 %는 그 환산값이다.
+// ⚠️ 상자 비율을 바꾸면 조각이 전부 어긋난다. 조각 이미지의 가로세로비도 시안과 같아야 한다
+//    (저장소 1.107 · 화살표1 1.453 · 큐브 0.888 · 창 2.387 — 시안 실측과 1% 이내).
 // 시안은 my-api.kodeploy.app 이지만 실제 기본 도메인은 .kodeploy.com 이다(AppLayout과 동일).
 const EXAMPLE_HOST = "my-api.kodeploy.com";
 
 // 등장 순서 — 한 단계 안의 그림과 글자는 같이 뜬다.
 const FLOW_STEP = { repo: 0, build: 1, cube: 2, run: 3, app: 4 };
-const STEP_MS = 420;
+const STEP_MS = 300;
 
 function DeployFlow() {
   // 접힘선 위라 스크롤 관측 없이 마운트와 함께 시작한다.
-  const [step, setStep] = useState(0);
-  const reduced =
-    typeof window !== "undefined" &&
-    window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+  const reduced = prefersReduced();
+  // 첫 렌더부터 최종 상태로 — useEffect에서 올리면 "저장소만 보이는" 프레임이 한 번 그려진다
+  const [step, setStep] = useState(reduced ? 99 : 0);
 
   useEffect(() => {
-    if (reduced) {
-      setStep(99); // 모션을 끄면 처음부터 전부 보인다
-      return;
-    }
+    if (reduced) return;
     const timers = [1, 2, 3, 4].map((i) =>
-      setTimeout(() => setStep(i), STEP_MS * i + 260),
+      setTimeout(() => setStep(i), STEP_MS * i + 160),
     );
     return () => timers.forEach(clearTimeout);
   }, [reduced]);
 
-  // 단계가 오면 떠오른다(아래에서 살짝 올라오며 페이드). rotate가 있는 조각은 따로 넘긴다.
-  const on = (at, rotate) => ({
+  // 단계가 오면 떠오른다(아래에서 살짝 올라오며 페이드).
+  const on = (at) => ({
     opacity: step >= at ? 1 : 0,
-    transform: `${step >= at ? "" : "translateY(10px) "}${rotate || ""}`.trim() || "none",
+    transform: step >= at ? "none" : "translateY(10px)",
     transition: reduced
       ? "none"
-      : "opacity 520ms ease, transform 520ms cubic-bezier(0.22, 1, 0.36, 1)",
+      : "opacity 420ms ease, transform 420ms cubic-bezier(0.22, 1, 0.36, 1)",
   });
 
   return (
-    <figure className="kd-hero-art m-0">
-      <div className="relative w-full" style={{ aspectRatio: "560 / 700" }}>
-        {/* 1. 내 GitHub 저장소 — 시안 x871 y226 w225 */}
+    <figure
+      className="kd-hero-art m-0"
+      aria-label="배포 흐름: 내 GitHub 저장소 → 자동 빌드 → 앱 실행"
+    >
+      <div className="relative w-full" style={{ aspectRatio: "709 / 748" }}>
+        {/* 1. 내 GitHub 저장소 */}
         <img
           src={artRepo}
           alt=""
           className="kd-flow-art absolute"
-          style={{ left: "0%", top: "2.8%", width: "43.2%", ...on(FLOW_STEP.repo) }}
+          style={{ left: "0%", top: "1.87%", width: "40.50%", ...on(FLOW_STEP.repo) }}
         />
-        <figcaption
-          className="kd-t-body absolute text-fg-1 whitespace-nowrap"
-          style={{ left: "28.8%", top: "0%", ...on(FLOW_STEP.repo) }}
+        <div
+          className="kd-flow-label absolute text-fg-1 whitespace-nowrap"
+          style={{ left: "27.60%", top: "0%", ...on(FLOW_STEP.repo) }}
         >
           내 GitHub 저장소
-        </figcaption>
+        </div>
 
-        {/* 2. 자동 빌드 — 화살표 x1100 y308 w102 / 글자 x1169 y296 */}
+        {/* 2. 자동 빌드 */}
         <img
           src={artArrow}
           alt=""
           className="kd-flow-art absolute"
-          style={{ left: "44%", top: "15.3%", width: "19.6%", ...on(FLOW_STEP.build) }}
+          style={{ left: "43.72%", top: "16.71%", width: "19.89%", ...on(FLOW_STEP.build) }}
         />
-        <figcaption
-          className="kd-t-body absolute text-fg-1 whitespace-nowrap"
-          style={{ left: "57.2%", top: "13.5%", ...on(FLOW_STEP.build) }}
+        <div
+          className="kd-flow-label absolute text-fg-1 whitespace-nowrap"
+          style={{ left: "59.30%", top: "15.10%", ...on(FLOW_STEP.build) }}
         >
           자동 빌드
-        </figcaption>
+        </div>
 
-        {/* 3. 빌드 결과 — 시안 x1142 y386 w96 */}
+        {/* 3. 빌드 결과 — 시안 좌표(51.76%)면 왼쪽 화살표에 붙고 오른쪽 화살표와는 4.4% 떠서
+            두 화살표 사이에서 왼쪽으로 치우쳐 보인다. 가운데로 2.8% 옮겼다. */}
         <img
           src={artCube}
           alt=""
           className="kd-flow-art absolute"
-          style={{ left: "52%", top: "27.3%", width: "18.4%", ...on(FLOW_STEP.cube) }}
+          style={{ left: "57.00%", top: "30.75%", width: "18.76%", ...on(FLOW_STEP.cube) }}
         />
 
-        {/* 4. 앱 실행 — 시안의 둘째 화살표는 더 가파르다. 첫 화살표를 줄여 쓰면 획까지 얇아지므로
-            (획 3.4px → 1.8px) 짧은 화살표 조각을 돌려서 쓴다. 원본 획은 둘 다 ~35px이고
-            가로폭이 934 : 905라, 이 크기에서 획 두께가 맞는다. */}
+        {/* 4. 앱 실행 — 시안의 둘째 화살표는 짧고 가파른 갈고리라 다른 조각으로 돌려 쓸 수 없다.
+            시안 렌더에서 그 화살표만 떼어 왔다(회전 없음, 시안과 같은 모양).
+            시안은 화살촉이 창 윗변에 0.6px까지 붙는데, 확대해 보면 겹쳐 보여 9px 띄웠다. */}
         <img
-          src={artArrowShort}
+          src={artArrow2}
           alt=""
           className="kd-flow-art absolute"
-          style={{
-            left: "68.8%",
-            top: "37.5%",
-            width: "16%",
-            ...on(FLOW_STEP.run, "rotate(38deg)"),
-          }}
+          style={{ left: "76.40%", top: "40.60%", width: "7.62%", ...on(FLOW_STEP.run) }}
         />
-        <figcaption
-          className="kd-t-body absolute text-fg-1 whitespace-nowrap"
-          style={{ left: "86%", top: "40%", ...on(FLOW_STEP.run) }}
+        <div
+          className="kd-flow-label absolute text-fg-1 whitespace-nowrap"
+          style={{ left: "84.90%", top: "43.20%", ...on(FLOW_STEP.run) }}
         >
           앱 실행
-        </figcaption>
+        </div>
 
-        {/* 5. 실행 중인 앱 — 창 x886 y529 w507, 그 아래 주소와 옅은 그림자(시안 y806-860) */}
+        {/* 5. 실행 중인 앱 — 창 아래 주소와 옅은 타원 그림자 */}
         <div
           className="absolute"
-          style={{ left: "2.9%", top: "49.2%", width: "97.3%", ...on(FLOW_STEP.app) }}
+          style={{ left: "6.80%", top: "54.81%", width: "93.20%", ...on(FLOW_STEP.app) }}
         >
           <img src={artApp} alt="배포된 앱이 실행 중인 화면" className="kd-flow-art block w-full" />
-          <figcaption className="kd-t-body text-center text-fg-2" style={{ marginTop: 8 }}>
+          <div className="kd-flow-label text-center text-fg-2" style={{ marginTop: 17 }}>
             {EXAMPLE_HOST}
-          </figcaption>
-          {/* 시안은 창+주소 덩어리 아래에 넓고 옅은 타원 그림자를 깔았다(가장 짙은 곳이 배경보다 7% 어둡다) */}
+          </div>
           <div aria-hidden className="kd-art-shadow" />
         </div>
       </div>

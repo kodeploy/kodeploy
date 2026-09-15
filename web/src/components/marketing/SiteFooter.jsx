@@ -8,7 +8,7 @@ const LINK = "kd-t-label text-fg-2 hover:text-fg-1 transition-colors no-underlin
 export default function SiteFooter() {
   return (
     <>
-      <div style={{ borderTop: "1px solid var(--kd-border)", marginTop: 8 }} />
+      <div style={{ borderTop: "1px solid var(--kd-rule)", marginTop: 8 }} />
       <div className="kd-page-narrow">
         <footer className="py-8 flex items-center gap-6 flex-wrap">
           <Brand size={16} />
