@@ -3,17 +3,17 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import { useTheme } from "../../contexts/ThemeContext.jsx";
 import { xtermTheme } from "../../lib/xtermTheme.js";
+import { useTheme } from "../../contexts/ThemeContext.jsx";
 
 const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
 const WS_URL = API_BASE.replace(/^http/, "ws") + "/deploy/app/db-terminal";
 
 // bare=true면 자체 헤더를 숨김 — DbConsolePanel의 [표|터미널] 토글 안에 끼울 때 헤더 중복 방지.
 export default function DbTerminalPanel({ bare = false }) {
+  const { theme } = useTheme();
   const containerRef = useRef(null);
   const termRef = useRef(null);
-  const { theme } = useTheme();
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -66,6 +66,7 @@ export default function DbTerminalPanel({ bare = false }) {
   useEffect(() => {
     if (termRef.current) termRef.current.options.theme = xtermTheme(theme);
   }, [theme]);
+
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">

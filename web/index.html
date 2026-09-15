@@ -4,21 +4,21 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>KoDeploy</title>
-    <!-- 테마 선반영 — React 마운트 전에 data-theme를 박아 라이트/다크 깜빡임(FOUC) 방지.
-         저장값 우선, 없으면 OS 선호(prefers-color-scheme), 그것도 없으면 dark. -->
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- 테마 선반영 — React 마운트 전에 data-theme를 박아 깜빡임(FOUC) 방지.
+         저장값 우선, 없으면 OS 선호, 그것도 없으면 light(종이). -->
     <script>
       (function () {
         try {
           var saved = localStorage.getItem("kd-theme");
-          var theme =
-            saved ||
-            (window.matchMedia &&
-            window.matchMedia("(prefers-color-scheme: light)").matches
-              ? "light"
-              : "dark");
-          document.documentElement.dataset.theme = theme;
+          var dark =
+            saved === "dark" ||
+            (!saved &&
+              window.matchMedia &&
+              window.matchMedia("(prefers-color-scheme: dark)").matches);
+          document.documentElement.dataset.theme = dark ? "dark" : "light";
         } catch (e) {
-          document.documentElement.dataset.theme = "dark";
+          document.documentElement.dataset.theme = "light";
         }
       })();
     </script>
@@ -28,8 +28,9 @@
       href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable.min.css"
       rel="stylesheet"
     />
+    <!-- 제목 전용 국문 명조(700 단일) + 코드/터미널용 모노(400). 본문은 Pretendard. -->
     <link
-      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700;800;900&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Nanum+Myeongjo:wght@700&family=JetBrains+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
   </head>

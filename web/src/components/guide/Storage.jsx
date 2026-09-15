@@ -6,7 +6,7 @@ export default function Storage() {
   return (
     <>
       <Section title="어떤 걸 골라야 하나요">
-        <p className="text-[14px] text-fg-3 mb-3">
+        <p className="text-fg-2 mb-3">
           앱 컨테이너의 디스크는 <Code>재배포·재시작 때 초기화</Code>돼요. 데이터를 남기려면
           배포 폼 <Code>고급 옵션 → 영속 저장소</Code>에서 둘 중 하나를 켜세요.
         </p>
@@ -33,7 +33,7 @@ export default function Storage() {
       </Section>
 
       <Section title="오브젝트 (R2) - 자격증명이 자동으로 들어와요">
-        <p className="text-[14px] text-fg-3 mb-3">
+        <p className="text-fg-2 mb-3">
           켜면 앱 전용 버킷이 생기고, <Code>그 버킷에만 접근 가능한</Code> 자격증명이
           환경변수로 주입돼요:
         </p>
@@ -49,7 +49,7 @@ export default function Storage() {
             "AWS_REGION=auto / AWS_ENDPOINT_URL",
           ].join("\n")}
         </CodeBlock>
-        <p className="text-[14px] text-fg-3 mt-4 mb-3">
+        <p className="text-fg-2 mt-4 mb-3">
           <Code>AWS_*</Code> 변수 덕분에 boto3·AWS SDK는 <Code>설정 코드 없이</Code> 바로
           동작해요. Python 예시:
         </p>

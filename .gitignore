@@ -64,6 +64,10 @@ deploy/k8s/build/ghcr-auth.yaml
 deploy/k8s/gateway/cf-origin-ca.configmap.yaml
 .claude/
 
+# ---- 디자인 시안 ----
+# ChatGPT로 만든 UI 시안 PNG 모음(20장, 약 24MB). 구현 참고용이라 레포에는 안 올린다.
+design/
+
 # ---- Editors / OS ----
 .vscode/
 .idea/

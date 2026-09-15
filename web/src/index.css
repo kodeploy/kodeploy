@@ -3,87 +3,154 @@
 @tailwind utilities;
 
 /* ──────────────────────────────────────────────────────────────────────────
-   테마 토큰 — 다크가 기본(:root), 라이트는 [data-theme="light"]로 값만 교체.
+   디자인 토큰 — 페이퍼/잉크 모노크롬(라이트 단일 테마).
+   브랜드색은 따로 없다 — 강조는 잉크(가장 진한 전경)와 여백·괘선으로만 준다.
    Tailwind 토큰(kd-*, fg-*)과 인라인 style 양쪽에서 var(--…)로 참조한다.
-   요소별 다크 값은 기존 하드코딩과 1:1 동일 — 라이트만 새로 추가(사용자 팔레트).
    ────────────────────────────────────────────────────────────────────────── */
 :root {
-  color-scheme: dark;
-
-  /* 표면 — 바깥일수록 어둡고, 떠 있을수록 밝다 */
-  --kd-bg: #08090a; /* 최외곽 화면 */
-  --kd-panel: #0f1011; /* 메인 콘텐츠 영역 */
-  --kd-surface: #191a1b; /* 카드·입력 */
-  --kd-surface2: #28282c; /* 더 떠 있는 표면·배지 */
-  --nav-bg: #08090a; /* 상단 네비 */
-  --dropdown-bg: #131415; /* 팝오버/드롭다운 */
-  --band-bg: transparent; /* Home 지그재그 섹션 밴드 — 다크는 투명(fluid 비침) */
-
-  /* 보더·오버레이 — 흰색 반투명이 다크모드 관용구 */
-  --kd-border: rgba(255, 255, 255, 0.09); /* 카드/구분선 */
-  --line-1: rgba(255, 255, 255, 0.03); /* 헤어라인 */
-  --line-2: rgba(255, 255, 255, 0.06); /* 보통 보더 */
-  --line-3: rgba(255, 255, 255, 0.12); /* 강조 보더 */
-  --overlay-hover: rgba(255, 255, 255, 0.04); /* hover 표면 */
-  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.5);
-
-  /* 텍스트 — 진할수록 강조 */
-  --fg-strong: #f4f6f8; /* 로고·최대 강조 */
-  --fg-1: #dde0e4; /* 제목 */
-  --fg-2: #d0d6e0; /* 본문 */
-  --fg-3: #8a8f98; /* 보조 */
-  --fg-4: #62666d; /* 아이콘·비활성 */
-  --fg-placeholder: #4a4e55;
-
-  /* 상태·액센트 텍스트/아이콘 — 다크 전용 밝은 틴트가 흰 배경에선 안 보여 테마별 분기.
-     다크값은 기존 대표색 보존, 라이트값은 흰 배경 가독성 확보(근사 셰이드는 한 변수로 묶음). */
-  --glass: rgba(20, 21, 24, 0.55); /* 반투명 카드(Home 인프라 카드 — fluid 위 합성) */
-  --glass-hover: rgba(28, 29, 33, 0.7);
-  --err-fg: #fca5a5; /* 에러 텍스트(밝은 적) */
-  --err-fg-2: #e0a0a0; /* 약한 에러/경고 텍스트(뮤트 적) */
-  --ok-fg: #6dd5a0; /* 성공 텍스트/아이콘(녹) */
-  --warn-fg: #d8a657; /* 경고/역할 표시(앰버) */
-  --info-fg: #7fb6db; /* 정보(블루) */
-  --brand-fg: #a4abee; /* 브랜드 틴트 텍스트/링크(보라) */
-  --accent: #818be0; /* 주 브랜드 액센트 텍스트(다크 그대로) */
-}
-
-[data-theme="light"] {
   color-scheme: light;
 
-  /* 헤더바는 흰색(#fff), 그 아래 메인 배경은 연회색(#f5f5f5).
-     카드·드롭다운도 흰색으로 통일해 회색 바탕 위로 떠 보이게 한다. */
-  --kd-bg: #f5f5f5; /* 헤더 아래 메인 배경 */
-  --kd-panel: #f5f5f5; /* 메인 콘텐츠 영역(헤더 밑) */
-  --kd-surface: #ffffff; /* 카드·입력 — 흰 카드 */
-  --kd-surface2: #ececee; /* 배지·칩 */
-  --nav-bg: #ffffff; /* 헤더바 */
-  --dropdown-bg: #ffffff;
-  --band-bg: #ffffff; /* 라이트: 지그재그 섹션을 흰 밴드로 */
+  /* 표면 — 시안 지정값. 바탕은 따뜻한 오프화이트, 패널·입력창만 순백 */
+  --kd-bg: #fafaf8; /* 전체 배경 */
+  --kd-panel: #fafaf8; /* 메인 콘텐츠 영역 */
+  --kd-surface: #ffffff; /* 입력창·패널·카드 */
+  --kd-surface2: #f0f0ec; /* 배지·칩 (바탕과 순백 사이) */
+  --nav-bg: #fafaf8; /* 상단 네비 */
+  --dropdown-bg: #ffffff; /* 팝오버/드롭다운 */
+  --band-bg: #ffffff; /* 섹션 밴드 */
 
-  --kd-border: #e3e4e6; /* 구분선·카드 테두리 */
-  --line-1: rgba(0, 0, 0, 0.04);
-  --line-2: rgba(0, 0, 0, 0.07);
-  --line-3: rgba(0, 0, 0, 0.12);
-  --overlay-hover: rgba(0, 0, 0, 0.045);
-  --shadow-pop: 0 8px 24px rgba(0, 0, 0, 0.12);
+  /* 괘선 — 이 디자인의 주된 구조선. 면(배경색)보다 선으로 나눈다 */
+  --kd-border: #ddddd8; /* 구분선 */
+  --line-1: rgba(23, 23, 23, 0.04); /* 헤어라인 */
+  --line-2: #ddddd8; /* 보통 보더 — 구분선과 같은 값 */
+  --line-3: #c9c9c2; /* 강조 보더 */
+  --overlay-hover: rgba(23, 23, 23, 0.04); /* hover 표면 */
+  --input-bg: #ffffff;
+  --kd-scrim: rgba(0, 0, 0, 0.2); /* 드로어 뒤 어둠 */
+  --kd-scrim-strong: rgba(0, 0, 0, 0.45); /* 모달 뒤 어둠 */
+  --shadow-pop: 0 10px 30px rgba(23, 23, 23, 0.1);
+  --shadow-drawer: -12px 0 36px rgba(23, 23, 23, 0.1);
 
-  --fg-strong: #040506; /* 거의 검정(로고) */
-  --fg-1: #383c46; /* 제목(진한 네이비그레이) */
-  --fg-2: #52555e; /* 본문 */
-  --fg-3: #70737a; /* 보조 */
-  --fg-4: #b6b7b9; /* 아이콘·비활성 */
-  --fg-placeholder: #909092;
+  /* 텍스트 — 제목/본문/보조 3단. 시안 지정값 */
+  --fg-strong: #171717; /* 제목·최대 강조 */
+  --fg-1: #171717; /* 제목·기본 글자 */
+  --fg-2: #5c5c58; /* 본문 설명 */
+  --fg-3: #72726c; /* 작은 보조 설명 */
+  --fg-4: #a3a39c; /* 아이콘·비활성 */
+  --fg-placeholder: #a3a39c;
 
-  --glass: rgba(255, 255, 255, 0.6); /* 라이트: 반투명 흰 카드 */
-  --glass-hover: rgba(255, 255, 255, 0.85);
-  --err-fg: #c0362f; /* 진한 적 — 흰 배경 가독 */
-  --err-fg-2: #a85a5a; /* 뮤트 적 */
-  --ok-fg: #157f4f; /* 진한 녹 */
-  --warn-fg: #b45309; /* 번트 앰버 */
-  --info-fg: #2b7da8; /* 진한 블루 */
-  --brand-fg: #5e6ad2; /* 브랜드 인디고 */
-  --accent: #5e6ad2; /* 흰 배경 가독 위해 진한 인디고 */
+  /* 잉크 강조 — 옛 보라 액센트 자리. 모노크롬이라 accent == 기본 글자색 */
+  --accent: #171717;
+  --brand-fg: #171717;
+
+  /* 프라이머리 버튼 — 터미널 배경과 같은 잉크(#242424) */
+  --btn-primary-bg: #242424;
+  --btn-primary-hover: #3a3a3a;
+  --btn-primary-fg: #f4f4ef;
+
+  /* 터미널·코드 블록 — 버튼과 같은 잉크 면 */
+  --term-bg: #242424;
+  --term-fg: #f4f4ef;
+
+  /* 선택·활성 표면 — 탭, 토글, 하이라이트가 "켜진" 상태를 나타내는 잉크 워시.
+     색이 아니라 농도로만 구분한다(모노크롬). */
+  --sel-soft: rgba(23, 23, 23, 0.05); /* 아주 옅은 활성 배경 */
+  --sel: rgba(23, 23, 23, 0.08); /* 기본 활성 배경 */
+  --sel-strong: rgba(23, 23, 23, 0.14); /* 활성 hover */
+  --sel-border: rgba(23, 23, 23, 0.22); /* 활성 테두리 */
+
+  /* 반투명 표면(유리) — 종이 디자인에선 거의 불투명한 흰 면 */
+  --glass: rgba(255, 255, 255, 0.72);
+  --glass-hover: #ffffff;
+
+  /* 상태색 — 모노크롬 위에서 최소한으로만 쓰는 신호색 */
+  --err-fg: #c4161d;
+  --err-fg-2: #9a5750;
+  --ok-fg: #0f6330;
+  --warn-fg: #9c5a08;
+  --info-fg: #2b6e8f;
+
+  /* 상태 dot — 배지가 참조 */
+  --dot-ok: #0f6330;
+  --dot-warn: #9c5a08;
+  --dot-err: #c4161d;
+
+  /* 차트 계열색 — 잉크 그라데이션 + 신호색 하나. 모노크롬 톤 유지 */
+  --chart-1: #171717;
+  --chart-2: #72726c;
+  --chart-3: #a3a39c;
+  --chart-4: #2b6e8f;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* 값은 design/다크모드-시안 25장에서 직접 뽑았다(tools/palette.py).
+     이전 팔레트는 바탕이 너무 어둡고(#0f0f0e) 본문 글자가 흐려(#b4b4ac) 읽기 어려웠다.
+     시안은 중성 회색 계열이라 라이트의 따뜻한 기운을 그대로 뒤집지 않는다. */
+  --kd-bg: #181818; /* 페이지·상단바 바탕 */
+  --kd-panel: #181818;
+  --kd-surface: #202020; /* 카드·입력 */
+  --kd-surface2: #2c2c2c; /* 한 단 더 떠 있는 면 */
+  --nav-bg: #181818;
+  --dropdown-bg: #202020;
+  --band-bg: #202020;
+  --input-bg: #262626; /* 카드 위에서 한 단 뜨게 — 시안 카드30 / 입력36 */
+
+  /* 다크 괘선 — #2d2d2d는 바탕 #181818 대비 ΔL 21, 카드 #202020 위에선 +13뿐이라
+     구조선이 사라졌다. 시안 실측값(#383837 / #4a4a48)으로 한 단 올린다. */
+  --kd-border: #383837;
+  --line-1: rgba(255, 255, 255, 0.05);
+  --line-2: #383837;
+  --line-3: #4a4a48;
+  --overlay-hover: rgba(255, 255, 255, 0.05);
+  --kd-scrim: rgba(0, 0, 0, 0.56);
+  --kd-scrim-strong: rgba(0, 0, 0, 0.62);
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.55);
+  --shadow-drawer: -12px 0 36px rgba(0, 0, 0, 0.55);
+
+  --fg-strong: #ffffff;
+  --fg-1: #f2f3f4;
+  --fg-2: #dcdddf; /* 시안 본문 — 이전 값보다 한참 밝다 */
+  --fg-3: #bcbebe; /* 시안 보조 */
+  --fg-4: #8a8c8c;
+  --fg-placeholder: #6e7070;
+
+  --accent: #f2f3f4;
+  --brand-fg: #f2f3f4;
+
+  /* 프라이머리 버튼 — 시안은 순백이 아니라 살짝 따뜻한 밝은 회색이다 */
+  --btn-primary-bg: #d7d5cf;
+  --btn-primary-hover: #e8e6e0;
+  --btn-primary-fg: #030201;
+
+  /* 터미널 — 바탕보다 내려앉은 면 */
+  --term-bg: #101010;
+  --term-fg: #e8e9ea;
+
+  --sel-soft: rgba(255, 255, 255, 0.07);
+  --sel: rgba(255, 255, 255, 0.08);
+  --sel-strong: rgba(255, 255, 255, 0.14);
+  --sel-border: rgba(255, 255, 255, 0.24);
+
+  --glass: rgba(32, 32, 32, 0.72);
+  --glass-hover: #202020;
+
+  /* 신호색 — 시안 다크에서 뽑은 값. 라이트보다 밝고 채도가 높다. */
+  --err-fg: #ee887f;
+  --err-fg-2: #c9897f;
+  --ok-fg: #9ee8b3;
+  --warn-fg: #ddb069;
+  --info-fg: #86b8d8;
+
+  --dot-ok: #81c393;
+  --dot-warn: #ddb069;
+  --dot-err: #ee887f;
+
+  --chart-1: #f2f3f4;
+  --chart-2: #bcbebe;
+  --chart-3: #8a8c8c;
+  --chart-4: #86b8d8;
 }
 
 html,
@@ -91,15 +158,31 @@ body,
 #root {
   background: var(--kd-bg);
   color: var(--fg-1);
-  font-family: "Inter Variable", Inter, "Pretendard Variable", Pretendard,
+  font-size: 16px;
+  font-family: "Pretendard Variable", Pretendard, "Inter Variable", Inter,
     system-ui, sans-serif;
-  font-feature-settings: "cv01", "ss03";
   -webkit-font-smoothing: antialiased;
   min-height: 100vh;
 }
 
-* {
-  font-feature-settings: "cv01", "ss03";
+/* 디스플레이 서체 — 국문 세리프(명조). 헤드라인 전용, 본문엔 쓰지 않는다.
+   본문 산세리프와 대비를 만드는 게 이 디자인의 중심 장치. */
+.kd-display {
+  font-family: "Nanum Myeongjo", "Noto Serif KR", Georgia, serif;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  word-break: keep-all;
+  text-wrap: balance;
+}
+
+/* 섹션 번호표 — "'01 / 운영". 모노 + 넓은 자간의 작은 캡션 */
+.kd-eyebrow {
+  font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo,
+    "Pretendard Variable", Pretendard, monospace;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  color: var(--fg-3);
+  text-transform: uppercase;
 }
 
 /* 테마 전환 시 부드럽게 — 색 관련 속성만(레이아웃/모션 영향 없음) */
@@ -119,6 +202,312 @@ select {
     color 180ms ease;
 }
 
+/* ── 버튼 — 잉크 채움(primary) / 괘선(secondary). 인라인 hover 핸들러 대체.
+   기본 치수는 시안 기준 높이 48px · 모서리 8px (.kd-btn-lg). 조밀한 자리는
+   각자 패딩을 주되 모서리는 8px로 통일. ── */
+.kd-btn-lg {
+  height: 48px;
+  padding-inline: 26px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 550;
+}
+.kd-btn-primary {
+  border-radius: 8px;
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+  border: 1px solid var(--btn-primary-bg);
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+.kd-btn-primary:hover:not(:disabled) {
+  background: var(--btn-primary-hover);
+  border-color: var(--btn-primary-hover);
+}
+.kd-btn-primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.kd-btn-secondary {
+  border-radius: 8px;
+  background: var(--kd-surface);
+  color: var(--fg-1);
+  border: 1px solid var(--kd-border);
+  transition: background-color 160ms ease, border-color 160ms ease;
+}
+.kd-btn-secondary:hover:not(:disabled) {
+  background: var(--overlay-hover);
+  border-color: var(--line-3);
+}
+
+/* 히어로 일러스트 — 검은 선화라 다크에서는 반전시킨다(흰 면이 어두운 면이 되어
+   다크 카드와 같은 위계가 된다). 회색조 이미지라 색 왜곡이 없다. */
+[data-theme="dark"] .kd-flow-art {
+  filter: invert(1);
+}
+
+/* 랜딩 운영 섹션 3열 — 셀 사이를 세로 괘선으로 나눈다(시안 열 시작 0 / 37.8 / 72.6%) */
+.kd-ops-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 40px;
+}
+.kd-ops-cell {
+  border-left: 1px solid var(--kd-border);
+  padding-left: 40px;
+}
+@media (max-width: 760px) {
+  .kd-ops-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 32px;
+  }
+  .kd-ops-cell {
+    border-left: none;
+    padding-left: 0;
+    border-top: 1px solid var(--kd-border);
+    padding-top: 32px;
+  }
+}
+
+/* FAQ — 좌 제목 / 우 목록. 시안에서 목록이 콘텐츠의 36% 지점부터 시작한다. */
+.kd-faq-grid {
+  display: grid;
+  /* gap 40px이 더해져 목록 시작점이 40%로 밀렸었다 — 시안은 33.7%. */
+  grid-template-columns: calc(36% - 40px) minmax(0, 1fr);
+  gap: 40px;
+  align-items: start;
+}
+@media (max-width: 760px) {
+  .kd-faq-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 24px;
+  }
+}
+
+
+/* ──────────────────────────────────────────────────────────────────────────
+   타입 램프 — 닫힌 집합. 화면에서 font-size를 직접 쓰지 말고 이 클래스만 쓴다.
+   페이지마다 제목이 조금씩 커지는 문제를 구조적으로 막기 위한 장치다.
+
+   승인된 기준: 본문 16px / 버튼 높이 48px / 모서리 8px / 메인 제목 64~76px,
+   제목·기본 글자 #171717, 본문 #5C5C58, 보조 #72726C.
+   규칙: 앱 화면의 페이지 제목(kd-t-title)은 마케팅 섹션 제목(kd-t-display)보다 크지 않다.
+   ────────────────────────────────────────────────────────────────────────── */
+
+/* 명조 — 마케팅 화면 전용.
+   크기는 시안에서 잰 잉크 높이를 캔버스 TextMetrics 비율로 환산한 값이다(tools/inkratio.mjs).
+   랜딩 시안(1024폭 렌더 = CSS 959)에서 히어로 58px / 섹션제목 38px / FAQ제목 34px 였다.
+   vw로 잡아 좁은 화면에서 줄고, 넓은 화면에서는 승인 기준(메인 제목 64~76px)을 넘지 않게 캡을 둔다. */
+.kd-t-hero {
+  font-family: "Nanum Myeongjo", "Noto Serif KR", Georgia, serif;
+  font-weight: 700;
+  font-size: clamp(34px, 6.05vw, 72px);
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  word-break: keep-all;
+  text-wrap: balance;
+}
+.kd-t-display {
+  font-family: "Nanum Myeongjo", "Noto Serif KR", Georgia, serif;
+  font-weight: 700;
+  font-size: clamp(26px, 3.96vw, 44px);
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  word-break: keep-all;
+}
+.kd-t-display-s {
+  font-family: "Nanum Myeongjo", "Noto Serif KR", Georgia, serif;
+  font-weight: 700;
+  font-size: clamp(22px, 2.8vw, 30px);
+  line-height: 1.3;
+  word-break: keep-all;
+}
+/* 명조 대신 굵은 산세리프로 쓰고 싶을 때 붙이는 변형 (문서·블로그 제목이 시안에서 산세리프다) */
+.kd-t-sans {
+  font-family: "Pretendard Variable", Pretendard, "Inter Variable", Inter, system-ui, sans-serif;
+}
+
+/* 산세리프 — 앱 화면과 모든 UI.
+   앱 시안(1536폭 렌더 = CSS 1124)에서 잰 값: 페이지제목 28.5 / 카드제목 19.3 / 섹션제목 16.4 /
+   페이지설명·행제목 14 / 탭·상단바메뉴 13.2 / 행보조 13.3 / 메타·표헤더 11.5~12 / 코드 11.1 */
+.kd-t-lead     { font-size: 20px;   line-height: 1.65; font-weight: 400; }
+.kd-t-title    { font-size: 28px;   line-height: 1.3;  font-weight: 600; letter-spacing: -0.01em; }
+.kd-t-subtitle { font-size: 19px;   line-height: 1.4;  font-weight: 600; }
+.kd-t-section  { font-size: 17px;   line-height: 1.4;  font-weight: 600; }
+.kd-t-body     { font-size: 16px;   line-height: 1.7;  font-weight: 400; }
+.kd-t-body-s   { font-size: 14px;   line-height: 1.6;  font-weight: 400; }
+.kd-t-label    { font-size: 13.5px; line-height: 1.5;  font-weight: 500; }
+.kd-strong     { font-weight: 600; }
+.kd-t-caption  { font-size: 13px;   line-height: 1.5;  font-weight: 400; }
+.kd-t-micro    { font-size: 12px;   line-height: 1.4;  font-weight: 500; }
+.kd-t-code {
+  font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo,
+    "Pretendard Variable", Pretendard, monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  font-weight: 400;
+}
+
+/* 아이콘 — 세 가지만. lucide의 size prop에 이 값을 쓴다.
+   lg=마케팅 3열/빈 상태, md=목록 행, sm=인라인·버튼 안·상태 표시 */
+:root {
+  --ico-xl: 40px;   /* 앱·슬롯을 식별하는 큰 글리프 — 내 앱 행, 빈 상태. 시안 55px ÷ 1.383 = 40 */
+  --ico-lg: 32px;   /* 마케팅 3열 특징 아이콘 — 시안 34px */
+  --ico-md: 18px;   /* 목록 행 아이콘 */
+  --ico-sm: 15px;   /* 인라인·버튼 안·상태 표시 */
+
+  /* 반복 행 높이 — 표/목록/정보행 */
+  /* 콘텐츠 폭 — 시안 실측 환산값 */
+  /* 앱 시안(1536폭)은 상단바 괘선 y82 / 랜딩 시안(1024폭)은 y62 — 같은 상단바가
+     1.32배로 렌더된 것이다. 앱 시안 콘텐츠 1429 ÷ 1.32 = 1082 이 우리 타입 스케일에서의
+     의도 폭이고, 사이드 열 비율(본문:사이드 = 69:31)도 이 폭에서만 맞는다. */
+  --kd-w-app: 1120px;        /* 앱 화면: 콘텐츠 1040 + 좌우 40 */
+  --kd-w-marketing: 1040px;  /* 랜딩·이용방법·피드백·블로그 목록 */
+  --kd-w-read: 720px;        /* 문서 본문 · 블로그 본문 · 폼 1단 */
+  --kd-w-docs: 1280px;       /* 문서 3단 셸(사이드 240 + 본문 720 + 목차 240) */
+
+  --row-lg: 42px;
+  --row-md: 37px;
+  --row-sm: 32px;
+  --tabbar-h: 48px;
+}
+
+/* 컨트롤 — 버튼 3종, 입력, 칩. 모서리는 전부 8px. */
+.kd-btn-lg { height: 48px; padding-inline: 36px; border-radius: 8px; font-size: 15px; font-weight: 550; }
+.kd-btn-md { height: 40px; padding-inline: 20px; border-radius: 8px; font-size: 14px; font-weight: 550; }
+.kd-btn-sm { height: 32px; padding-inline: 12px; border-radius: 8px; font-size: 13.5px; font-weight: 550; }
+
+.kd-input {
+  height: 38px;
+  padding-inline: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  color: var(--fg-1);
+  background: var(--input-bg);
+  border: 1px solid var(--kd-border);
+  width: 100%;
+  transition: border-color 150ms ease;
+}
+.kd-input::placeholder { color: var(--fg-placeholder); }
+.kd-input:focus { outline: none; border-color: var(--fg-3); }
+textarea.kd-input { height: auto; padding-block: 10px; line-height: 1.6; resize: vertical; }
+
+.kd-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 27px;
+  padding-inline: 12px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 510;
+  color: var(--fg-1);
+  border: 1px solid var(--kd-border);
+}
+
+/* 마케팅 화면 폭 — 시안(1024폭 렌더 = CSS 959)에서 콘텐츠 855px, 좌우 여백 52px.
+   좁은 화면에서는 여백이 줄고, 넓은 화면에서는 콘텐츠가 과하게 벌어지지 않게 캡을 둔다. */
+.kd-page-narrow {
+  width: 100%;
+  max-width: var(--kd-w-marketing);
+  margin-inline: auto;
+  padding-inline: clamp(16px, 5.4vw, 56px);
+}
+
+/* 읽기용 1단 — 문서 본문, 블로그 본문, 폼 */
+.kd-page-read {
+  width: 100%;
+  max-width: var(--kd-w-read);
+  margin-inline: auto;
+  padding-inline: clamp(16px, 4vw, 32px);
+}
+
+/* 앱 화면 공통 폭 — 시안(design/라이트모드-시안/09_앱_개요.png)의 콘텐츠 폭 1424px을 ÷1.45 한 982px에
+   좌우 여백 40px을 더한 값. 상단바·탭바·본문이 모두 이 폭을 기준으로 정렬된다. */
+.kd-page {
+  /* width:100%가 없으면 flex column 부모 안에서 margin-inline:auto 때문에
+     stretch가 꺼지고 내용 너비로 줄어든다(탭바가 찌그러지던 원인). */
+  width: 100%;
+  max-width: var(--kd-w-app);
+  margin-inline: auto;
+  padding-inline: 40px;
+}
+/* 통계 4칸 — 카드 한 장을 세로 괘선으로 나눈다(관리자 개요) */
+.kd-stat-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  overflow: hidden;
+}
+.kd-stat-cell {
+  padding: 16px 20px;
+  border-left: 1px solid var(--kd-border);
+}
+.kd-stat-cell:first-child { border-left: none; }
+@media (max-width: 860px) {
+  .kd-stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .kd-stat-cell:nth-child(3) { border-left: none; }
+  .kd-stat-cell:nth-child(n + 3) { border-top: 1px solid var(--kd-border); }
+}
+
+/* 표 한 장 — 네 변이 닫힌 상자(환경변수 표와 같은 규칙) */
+.kd-table-wrap {
+  border: 1px solid var(--kd-border);
+  border-radius: 8px;
+  background: var(--kd-surface);
+  overflow: hidden;
+}
+
+/* 확대 — 작업 공간을 화면 폭 끝까지 쓴다(좌우 거터만 남긴다) */
+.kd-page-wide {
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+  padding-inline: clamp(12px, 1.4vw, 22px);
+}
+
+@media (max-width: 1023px) { .kd-page { padding-inline: 24px; } }
+@media (max-width: 767px)  { .kd-page { padding-inline: 16px; } }
+
+/* 개요 2단 — 좌 본문 / 우 사이드 310px(시안 448 ÷ 1.45). 좁아지면 한 단으로 쌓는다. */
+.kd-overview-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 310px;
+}
+@media (max-width: 900px) {
+  .kd-overview-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 40px;
+  }
+  .kd-overview-grid > div {
+    padding-right: 0 !important;
+  }
+  .kd-overview-grid > aside {
+    border-left: none !important;
+    border-top: 1px solid var(--kd-border);
+    padding-left: 0 !important;
+    padding-top: 32px;
+  }
+}
+
+/* 이전 배포 표 — 열 비율은 시안의 열 x위치(2.4 / 11.6 / 34 / 50.6 / 80%)에서 뽑았다 */
+.kd-history-row {
+  display: grid;
+  grid-template-columns: 11% 23% 17% 28% 21%;
+  gap: 8px;
+  align-items: center;
+}
+
+/* 개요 섹션 사이 간격 */
+.kd-section + .kd-section {
+  margin-top: 40px;
+}
+
+/* 카드 — 흰 면 + 헤어라인. 그림자·블러 없음(종이 위에 놓인 종이) */
+.kd-card {
+  border-radius: 8px;
+  background: var(--kd-surface);
+  border: 1px solid var(--kd-border);
+}
+
 /* 모니터링 차트 그리드 — 패널이 넓으면 2열, 좁으면(분할) 1열 (컨테이너 쿼리, 뷰포트 아님) */
 .kd-chart-grid {
   display: grid;
@@ -131,7 +520,7 @@ select {
   }
 }
 
-/* JS onMouseEnter 없이 테마 대응 hover 표면 (흰/검 반투명 자동 전환) */
+/* JS onMouseEnter 없이 테마 대응 hover 표면 (잉크/종이 반투명 자동 전환) */
 .kd-hoverable {
   transition: background-color 150ms ease;
 }
@@ -217,79 +606,13 @@ select {
   animation: kd-slide-in-right 400ms cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
-/* ── Hover 인터랙션 — JS onMouseEnter 대체 (터치 stuck 방지 + reduced-motion 일괄 적용) ── */
-
-/* Home hero·하단 CTA 프라이머리 버튼 (그라데이션 + 그림자) */
-.kd-cta {
-  background: linear-gradient(135deg, #6672d5 0%, #7d6dd5 100%);
-  box-shadow: 0 8px 24px rgba(102, 114, 213, 0.35),
-    0 0 0 1px rgba(255, 255, 255, 0.06) inset;
-  transition: background 250ms ease, box-shadow 250ms ease;
-}
-.kd-cta:hover {
-  background: linear-gradient(135deg, #828fff 0%, #9e8aff 100%);
-  box-shadow: 0 12px 32px rgba(130, 143, 255, 0.5),
-    0 0 0 1px rgba(255, 255, 255, 0.1) inset;
-}
-
-/* Included 인프라 카드 — 배경·보더 hover (이동 없음) */
-.kd-included-card {
-  background: var(--glass);
-  border: 1px solid var(--line-2);
-  transition: background 200ms ease, border-color 200ms ease;
-}
-.kd-included-card:hover {
-  background: var(--glass-hover);
-  border-color: rgba(129, 139, 224, 0.3);
-}
-
-/* 패널 UI 지그재그 이미지 — hover lift */
-.kd-feature-img {
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
-  transition: transform 400ms ease, box-shadow 400ms ease;
-}
-.kd-feature-img:hover {
-  transform: translateY(-6px);
-  box-shadow: 0 30px 70px rgba(0, 0, 0, 0.5), 0 0 60px rgba(102, 114, 213, 0.18);
-}
-
-/* Hero 헤드라인 — 보라 그라데이션이 텍스트 안에서 천천히 일렁인다 (배경 fluid/aurora와 같은 결).
-   색은 그대로 두고 background-size 200%를 좌우로 oscillate(alternate)해 seam 없이 흐른다. */
-@keyframes kd-gradient-shift {
-  to {
-    background-position: 100% center;
-  }
-}
-.kd-gradient-text {
-  background: linear-gradient(
-    120deg,
-    #6672d5 0%,
-    #a78bfa 45%,
-    #d8b4fe 75%,
-    #818be0 100%
-  );
-  background-size: 200% auto; /* background 단축 뒤에 와야 auto로 리셋되지 않음 */
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: kd-gradient-shift 5s ease-in-out infinite alternate;
-}
-
-/* 모션 민감 사용자 — 장식 애니메이션과 이동(lift)만 끈다.
-   색/보더 전환과 기능성 스피너(kd-spin)는 모션이 아니라 유지. */
+/* 모션 민감 사용자 — 장식 애니메이션만 끈다.
+   색 전환과 기능성 스피너(kd-spin)는 모션이 아니라 유지. */
 @media (prefers-reduced-motion: reduce) {
   .kd-fade-in,
   .kd-pulse,
   .kd-pulse-soft,
   .kd-slide-in-right {
     animation: none;
-  }
-  .kd-feature-img:hover {
-    transform: none;
-  }
-  /* 그라데이션 흐름 정지 + 원래 정적 프레이밍(background-size auto)으로 복원 */
-  .kd-gradient-text {
-    animation: none;
-    background-size: auto;
   }
 }

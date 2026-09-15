@@ -7,7 +7,7 @@ export default function JavaScript() {
   return (
     <>
       <Section title="빌드 방식">
-        <p className="text-[14px] text-fg-3 mb-3">
+        <p className="text-fg-2 mb-3">
           <Code>package.json</Code>이 있으면 별도 Dockerfile 없이 <Code>자동 빌드</Code>가
           가능해요. 배포 폼 빌드 방식을 <Code>자동</Code>으로 두면 의존성 설치와{" "}
           <Code>start</Code> 스크립트를 알아서 잡습니다. 직접 제어하고 싶으면 Dockerfile을
@@ -23,7 +23,7 @@ export default function JavaScript() {
       </Section>
 
       <Section title="포트 바인딩 (중요)">
-        <p className="text-[14px] text-fg-3 mb-3">
+        <p className="text-fg-2 mb-3">
           KoDeploy가 <Code>PORT</Code> 환경변수(기본 <Code>3000</Code>)를 주입해요. 앱은
           반드시 <Code>process.env.PORT</Code>로 들어야 트래픽을 받습니다 - 하드코딩하지
           마세요.
@@ -37,13 +37,13 @@ app.get("/", (req, res) => res.send("hello from KoDeploy"));
 // 반드시 process.env.PORT 사용 (KoDeploy가 3000으로 주입)
 app.listen(process.env.PORT || 3000);`}
         </CodeBlock>
-        <p className="text-[13px] text-fg-4 mt-2" style={{ fontWeight: 450 }}>
+        <p className="kd-t-caption mt-2" style={{ color: "var(--fg-3)" }}>
           배포 폼의 포트는 <Code>3000</Code> 그대로 두면 됩니다.
         </p>
       </Section>
 
       <Section title="MySQL 쓸 때">
-        <p className="text-[14px] text-fg-3 mb-3">
+        <p className="text-fg-2 mb-3">
           MySQL을 켜면 접속 정보가 <Code>DB_*</Code> 환경변수로 자동 주입돼요.{" "}
           <Code>process.env</Code>로 바로 읽으면 됩니다 (PostgreSQL도 같은 변수, 호스트만{" "}
           <Code>postgres</Code>·포트 <Code>5432</Code>).

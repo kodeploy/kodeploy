@@ -60,7 +60,7 @@ export default function DeleteAppModal({ appName, onClose }) {
         </button>
 
         <h2
-          className="text-[17px] text-fg-1 mb-2"
+          className="kd-t-section text-fg-1 mb-2"
           style={{ fontWeight: 590, letterSpacing: -0.3 }}
         >
           앱을 정말 삭제할까요?

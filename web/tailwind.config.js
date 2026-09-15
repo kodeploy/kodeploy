@@ -17,29 +17,36 @@ export default {
         "fg-2": "var(--fg-2)",
         "fg-3": "var(--fg-3)",
         "fg-4": "var(--fg-4)",
-        // 브랜드·상태색은 두 테마 공통(라이트 대비 미세조정은 추후 스윕에서).
-        "indigo-brand": "#5e6ad2",
-        "violet-brand": "#7170ff",
-        "violet-hov": "#828fff",
-        "green-ok": "#10b981",
-        "amber-warn": "#f59e0b",
-        "red-err": "#ef4444",
+        // 모노크롬 — 브랜드색이 따로 없다. ink는 "가장 진한 전경"으로 테마에 따라 뒤집힌다.
+        ink: "var(--accent)",
+        "ink-fill": "var(--btn-primary-bg)",
+        "ink-fill-fg": "var(--btn-primary-fg)",
+        // 신호색은 최소한으로만 — 상태 배지·에러 텍스트 용도
+        "green-ok": "var(--ok-fg)",
+        "amber-warn": "var(--warn-fg)",
+        "red-err": "var(--err-fg)",
       },
       fontFamily: {
+        // 본문·UI — 국문 산세리프 우선(Pretendard). 헤드라인과 대비를 만든다.
         sans: [
-          '"Inter Variable"',
-          "Inter",
           '"Pretendard Variable"',
           "Pretendard",
+          '"Inter Variable"',
+          "Inter",
           "system-ui",
           "sans-serif",
         ],
+        // 헤드라인 — 국문 명조. .kd-display와 같은 스택.
+        display: ['"Nanum Myeongjo"', '"Noto Serif KR"', "Georgia", "serif"],
+        // JetBrains Mono엔 한글 글리프가 없어 로그·코드의 한글이 두부(□)가 된다.
+        // 스택 끝에 Pretendard를 둬 한글만 폴백시킨다 (라틴은 그대로 모노).
         mono: [
-          '"Berkeley Mono"',
           '"JetBrains Mono"',
           "ui-monospace",
           "SF Mono",
           "Menlo",
+          '"Pretendard Variable"',
+          "Pretendard",
           "monospace",
         ],
       },

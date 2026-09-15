@@ -7,7 +7,7 @@ export default function Php() {
   return (
     <>
       <Section title="Dockerfile 양식">
-        <p className="text-[14px] text-fg-3 mb-3">
+        <p className="text-fg-2 mb-3">
           KoDeploy는 보안상 앱을 <Code>비-root</Code>로 실행해요. 그래서 Apache가 80 대신{" "}
           <Code>8080</Code>에서 듣게 하고 런타임 디렉토리 권한을 열어주는 줄이 필요합니다 -
           아래 양식을 그대로 쓰면 됩니다.
@@ -24,14 +24,14 @@ RUN sed -i 's/Listen 80/Listen 8080/' /etc/apache2/ports.conf && \\
 COPY --chown=1000:1000 . /var/www/html/
 EXPOSE 8080`}
         </CodeBlock>
-        <p className="text-[13px] text-fg-4 mt-2" style={{ fontWeight: 450 }}>
+        <p className="kd-t-caption mt-2" style={{ color: "var(--fg-3)" }}>
           배포 폼의 포트는 <Code>8080</Code> 그대로 두세요. GD가 필요하면 확장 설치 줄에{" "}
           <Code>gd</Code>를 추가하면 됩니다.
         </p>
       </Section>
 
       <Section title="MySQL 쓸 때">
-        <p className="text-[14px] text-fg-3 mb-3">
+        <p className="text-fg-2 mb-3">
           MySQL을 켜면 접속 정보가 환경변수로 자동 주입돼요. PHP 코드에서{" "}
           <Code>getenv()</Code>로 바로 읽으면 됩니다.
         </p>
@@ -45,14 +45,14 @@ $db = new mysqli(
     (int) getenv('DB_PORT'), // 3306
 );`}
         </CodeBlock>
-        <p className="text-[13px] text-fg-4 mt-2" style={{ fontWeight: 450 }}>
+        <p className="kd-t-caption mt-2" style={{ color: "var(--fg-3)" }}>
           그누보드라면 설치 화면의 DB 정보 칸에 위 값들을 그대로 넣으면 됩니다 (호스트{" "}
           <Code>mysql</Code>, DB/사용자 <Code>app</Code>).
         </p>
       </Section>
 
       <Section title="PostgreSQL 쓸 때">
-        <p className="text-[14px] text-fg-3 mb-3">
+        <p className="text-fg-2 mb-3">
           같은 <Code>DB_*</Code> 변수가 주입돼요 (호스트만 <Code>postgres</Code>, 포트{" "}
           <Code>5432</Code>). Dockerfile의 확장 설치 줄을 PostgreSQL용으로 바꾸세요:
         </p>

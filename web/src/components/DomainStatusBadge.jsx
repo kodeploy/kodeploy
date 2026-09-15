@@ -1,8 +1,9 @@
 // 커스텀 도메인 연결 상태 — StatusBadge/AppStatusBadge와 같은 dot+라벨 톤 (단일 진실원).
 // pending=인증서 검증 대기(주황·pulse), active=연결 완료(초록).
+// 색은 테마 토큰으로 — 하드코딩하면 다크에서 대비가 무너진다.
 const STYLES = {
-  pending: { color: "#b45309", label: "대기 중", pulse: true },
-  active: { color: "#047857", label: "연결됨" },
+  pending: { color: "var(--warn-fg)", label: "대기 중", pulse: true },
+  active: { color: "var(--ok-fg)", label: "연결됨" },
 };
 
 export default function DomainStatusBadge({ status }) {

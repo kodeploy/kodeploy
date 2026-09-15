@@ -8,7 +8,7 @@
 //   등급 select는 root에게만, 대상이 root/본인이면 잠김.
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ChevronDown, Hammer, Server, ShieldCheck, Users } from "lucide-react";
+import { ChevronDown } from "lucide-react";
 import {
   getNodePods,
   getNodes,
@@ -54,7 +54,7 @@ const BUILD_STATUS_COLORS = {
 
 const ROLE_COLORS = {
   root: "var(--warn-fg)",
-  admin: "#818be0",
+  admin: "var(--accent)",
   user: "var(--fg-3)",
 };
 
@@ -160,26 +160,20 @@ export default function Admin() {
   };
 
   return (
-    <div className="kd-fade-in mx-auto px-6 py-10" style={{ maxWidth: 1040 }}>
-      <div className="flex items-center gap-2.5 mb-1">
-        <ShieldCheck size={18} strokeWidth={1.8} className="text-[var(--accent)]" />
-        <h1
-          className="text-[20px] text-fg-1"
-          style={{ fontWeight: 590, letterSpacing: -0.4 }}
-        >
-          관리자
-        </h1>
-      </div>
-      <p className="text-[12.5px] text-fg-3 mb-8" style={{ fontWeight: 450 }}>
+    <div className="kd-page kd-fade-in" style={{ paddingTop: 28, paddingBottom: 72 }}>
+      <h1 className="kd-t-title text-fg-1">관리자</h1>
+      <p className="kd-t-body-s text-fg-2" style={{ marginTop: 6 }}>
         가입 · 빌드 · 노드 현황
       </p>
 
       {error && (
         <div
-          className="mb-6 px-3 py-2 rounded-md text-[12px]"
+          className="kd-t-caption"
           style={{
-            background: "rgba(239,68,68,0.08)",
-            border: "1px solid rgba(239,68,68,0.25)",
+            marginTop: 16,
+            padding: "10px 14px",
+            borderRadius: 8,
+            border: "1px solid var(--kd-border)",
             color: "var(--err-fg)",
           }}
         >
@@ -187,8 +181,8 @@ export default function Admin() {
         </div>
       )}
 
-      {/* 통계 카드 */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-10">
+      {/* 통계 — 카드 한 장을 세로 괘선으로 4칸 나눈다(랜딩 피처 3열과 같은 규칙) */}
+      <div className="kd-card kd-stat-row" style={{ marginTop: 26 }}>
         <StatCard
           label="가입자"
           value={overview?.users.total}
@@ -216,7 +210,7 @@ export default function Admin() {
       {/* 빌드 기록 — "총 빌드" 카드 토글 */}
       {showBuilds && (
         <>
-          <SectionTitle icon={Hammer} title="빌드 기록 (최근 100건)" />
+          <SectionTitle title="빌드 기록 (최근 100건)" />
           <div className="mb-10">
             <BuildRecordsTable records={buildRecords} />
           </div>
@@ -224,7 +218,7 @@ export default function Admin() {
       )}
 
       {/* 노드 현황 */}
-      <SectionTitle icon={Server} title="노드" />
+      <SectionTitle title="노드" />
       <div className="flex flex-col gap-3 mb-10">
         {nodes === null && <Hint>노드 정보를 불러오는 중…</Hint>}
         {nodes?.length === 0 && <Hint>노드 정보를 불러오지 못했어요.</Hint>}
@@ -234,23 +228,17 @@ export default function Admin() {
       </div>
 
       {/* 가입자 테이블 */}
-      <SectionTitle icon={Users} title="가입자" />
-      <div
-        className="rounded-xl overflow-hidden"
-        style={{
-          border: "1px solid var(--line-2)",
-          background: "var(--kd-surface)",
-        }}
-      >
-        <table className="w-full text-[12.5px]" style={{ borderCollapse: "collapse" }}>
+      <SectionTitle title="가입자" />
+      <div className="kd-table-wrap" style={{ marginTop: 14 }}>
+        <table className="w-full kd-t-body-s" style={{ borderCollapse: "collapse" }}>
           <thead>
-            <tr className="text-left text-[11px] text-fg-4" style={{ fontWeight: 590 }}>
+            <tr className="kd-t-micro text-fg-3 text-left">
               {["유저", "등급", "앱 / 테넌트", "도메인", "빌드", "마지막 빌드", "가입"].map(
                 (h) => (
                   <th
                     key={h}
-                    className="px-4 py-2.5 uppercase tracking-[0.06em]"
-                    style={{ borderBottom: "1px solid var(--line-2)" }}
+                    className="px-4"
+                    style={{ height: "var(--row-md)", borderBottom: "1px solid var(--kd-border)", fontWeight: 500 }}
                   >
                     {h}
                   </th>
@@ -272,7 +260,7 @@ export default function Admin() {
             ))}
             {users.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-[12px] text-fg-4">
+                <td colSpan={7} className="px-4 py-8 text-center kd-t-caption text-fg-3">
                   가입자가 없어요.
                 </td>
               </tr>
@@ -284,20 +272,22 @@ export default function Admin() {
   );
 }
 
-function SectionTitle({ icon: Icon, title }) {
+// 섹션 제목 + 아래 괘선 — 앱 개요(AppOverview.Section)와 같은 모양.
+function SectionTitle({ title, action }) {
   return (
-    <div className="flex items-center gap-2 mb-3">
-      <Icon size={14} strokeWidth={1.8} className="text-fg-3" />
-      <h2 className="text-[14px] text-fg-1" style={{ fontWeight: 590 }}>
-        {title}
-      </h2>
+    <div
+      className="flex items-baseline gap-4"
+      style={{ marginTop: 34, paddingBottom: 12, borderBottom: "1px solid var(--kd-border)" }}
+    >
+      <h2 className="kd-t-section text-fg-1">{title}</h2>
+      {action}
     </div>
   );
 }
 
 function Hint({ children }) {
   return (
-    <div className="text-[12px] text-fg-4 py-4" style={{ fontWeight: 450 }}>
+    <div className="kd-t-caption text-fg-3" style={{ paddingBlock: 16 }}>
       {children}
     </div>
   );
@@ -309,31 +299,26 @@ function StatCard({ label, value, sub, onClick, active }) {
   return (
     <Tag
       onClick={onClick}
-      className={`rounded-xl px-4 py-3.5 text-left ${onClick ? "transition-colors" : ""}`}
-      style={{
-        border: `1px solid ${active ? "rgba(129,139,224,0.4)" : "var(--line-2)"}`,
-        background: active ? "rgba(129,139,224,0.06)" : "var(--line-1)",
-        cursor: onClick ? "pointer" : "default",
-      }}
+      className={`kd-stat-cell text-left ${onClick ? "kd-hoverable" : ""}`}
+      style={{ background: active ? "var(--sel-soft)" : "transparent" }}
     >
-      <div className="text-[11px] text-fg-4 mb-1.5 flex items-center gap-1" style={{ fontWeight: 590 }}>
+      <div className="kd-t-micro text-fg-3 flex items-center gap-1">
         {label}
         {onClick && (
           <ChevronDown
-            size={11}
-            strokeWidth={2}
+            size={14}
+            strokeWidth={1.8}
             className="transition-transform"
             style={{ transform: active ? "rotate(180deg)" : "none" }}
           />
         )}
       </div>
-      <div
-        className="text-[22px] text-fg-1 tabular-nums"
-        style={{ fontWeight: 590, letterSpacing: -0.5 }}
-      >
+      <div className="kd-t-title text-fg-1 tabular-nums" style={{ marginTop: 6 }}>
         {value ?? "—"}
       </div>
-      <div className="text-[11px] text-fg-4 mt-1 truncate">{sub}</div>
+      <div className="kd-t-caption text-fg-3 truncate" style={{ marginTop: 4 }}>
+        {sub}
+      </div>
     </Tag>
   );
 }
@@ -344,21 +329,15 @@ function BuildRecordsTable({ records }) {
   if (records === null) return <Hint>빌드 기록을 불러오는 중…</Hint>;
   if (records.length === 0) return <Hint>빌드 기록이 없어요.</Hint>;
   return (
-    <div
-      className="rounded-xl overflow-x-auto scroll-thin"
-      style={{
-        border: "1px solid var(--line-2)",
-        background: "var(--kd-surface)",
-      }}
-    >
-      <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
+    <div className="kd-table-wrap overflow-x-auto scroll-thin" style={{ marginTop: 14 }}>
+      <table className="w-full kd-t-caption" style={{ borderCollapse: "collapse" }}>
         <thead>
-          <tr className="text-left text-[10.5px] text-fg-4" style={{ fontWeight: 590 }}>
+          <tr className="kd-t-micro text-fg-3 text-left">
             {["시작", "유저", "앱", "#", "모드", "nixpacks", "buildkit", "총", "상태"].map((h) => (
               <th
                 key={h}
-                className="px-3 py-2 uppercase tracking-[0.06em] whitespace-nowrap"
-                style={{ borderBottom: "1px solid var(--line-2)" }}
+                className="px-3 whitespace-nowrap"
+                style={{ height: "var(--row-md)", borderBottom: "1px solid var(--kd-border)", fontWeight: 500 }}
               >
                 {h}
               </th>
@@ -370,31 +349,29 @@ function BuildRecordsTable({ records }) {
             <tr
               key={r.id}
               className="text-fg-2"
-              style={{ borderBottom: "1px solid var(--line-1)" }}
+              style={{ borderBottom: "1px solid var(--kd-border)" }}
               title={r.error || undefined}
             >
-              <td className="px-3 py-2 text-fg-3 tabular-nums whitespace-nowrap">
+              <td className="px-3 text-fg-3 tabular-nums whitespace-nowrap">
                 {relativeTime(r.started_at)}
               </td>
-              <td className="px-3 py-2" style={{ fontWeight: 510, color: "var(--fg-1)" }}>
+              <td className="px-3" className="kd-strong" style={{ color: "var(--fg-1)" }}>
                 {r.login}
               </td>
-              <td className="px-3 py-2">{r.app_name}</td>
-              <td className="px-3 py-2 tabular-nums text-fg-3">#{r.seq}</td>
-              <td className="px-3 py-2 text-fg-3">
+              <td className="px-3">{r.app_name}</td>
+              <td className="px-3 tabular-nums text-fg-3">#{r.seq}</td>
+              <td className="px-3 text-fg-3">
                 {r.build_mode === "auto" ? "auto" : "dockerfile"}
               </td>
-              <td className="px-3 py-2 tabular-nums">{fmtDuration(r.nixpacks_seconds)}</td>
-              <td className="px-3 py-2 tabular-nums">{fmtDuration(r.buildkit_seconds)}</td>
-              <td className="px-3 py-2 tabular-nums" style={{ fontWeight: 510, color: "var(--fg-1)" }}>
+              <td className="px-3 tabular-nums">{fmtDuration(r.nixpacks_seconds)}</td>
+              <td className="px-3 tabular-nums">{fmtDuration(r.buildkit_seconds)}</td>
+              <td className="px-3 tabular-nums" className="kd-strong" style={{ color: "var(--fg-1)" }}>
                 {fmtDuration(r.total_seconds)}
               </td>
-              <td className="px-3 py-2">
+              <td className="px-3">
                 <span
-                  style={{
-                    color: BUILD_STATUS_COLORS[r.status] || "var(--fg-3)",
-                    fontWeight: 590,
-                  }}
+                  className="kd-strong"
+                  style={{ color: BUILD_STATUS_COLORS[r.status] || "var(--fg-3)" }}
                 >
                   {r.status === "running" ? "성공" : r.status === "failed" ? "실패" : r.status}
                 </span>
@@ -417,35 +394,35 @@ function UserRow({ u, me, expanded, detail, onToggle, onRoleChange }) {
         style={{
           borderBottom: "1px solid var(--line-1)",
           cursor: "pointer",
-          background: expanded ? "rgba(129,139,224,0.05)" : "transparent",
+          background: expanded ? "var(--sel-soft)" : "transparent",
         }}
         title={expanded ? "테넌트 상세 접기" : "테넌트 상세 보기"}
       >
-        <td className="px-4 py-2.5">
+        <td className="px-4" style={{ height: "var(--row-lg)" }}>
           <div className="flex items-center gap-2 min-w-0">
             {u.avatar_url && (
               <img
                 src={u.avatar_url}
                 alt=""
-                className="w-5 h-5 rounded-full shrink-0"
-                style={{ border: "1px solid var(--line-2)" }}
+                className="w-[22px] h-[22px] rounded-full shrink-0"
+                style={{ border: "1px solid var(--kd-border)" }}
               />
             )}
-            <span className="truncate" style={{ fontWeight: 510, color: "var(--fg-1)" }}>
+            <span className="truncate" className="kd-strong" style={{ color: "var(--fg-1)" }}>
               {u.login}
             </span>
             <ChevronDown
-              size={11}
-              strokeWidth={2}
-              className="text-fg-4 transition-transform shrink-0"
+              size={14}
+              strokeWidth={1.8}
+              className="text-fg-3 transition-transform shrink-0"
               style={{ transform: expanded ? "rotate(180deg)" : "none" }}
             />
           </div>
         </td>
-        <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>
+        <td className="px-4" style={{ height: "var(--row-lg)" }} onClick={(e) => e.stopPropagation()}>
           <RoleCell user={u} me={me} onChange={onRoleChange} />
         </td>
-        <td className="px-4 py-2.5">
+        <td className="px-4" style={{ height: "var(--row-lg)" }}>
           {u.app_name ? (
             <div className="min-w-0">
               <a
@@ -458,26 +435,26 @@ function UserRow({ u, me, expanded, detail, onToggle, onRoleChange }) {
               >
                 {u.app_name}
               </a>
-              <div className="text-[11px] text-fg-4 font-mono">{u.tenant_id}</div>
+              <div className="kd-t-code text-fg-3">{u.tenant_id}</div>
             </div>
           ) : (
             <span className="text-fg-4">—</span>
           )}
         </td>
-        <td className="px-4 py-2.5">
+        <td className="px-4" style={{ height: "var(--row-lg)" }}>
           {u.custom_domain || <span className="text-fg-4">—</span>}
         </td>
-        <td className="px-4 py-2.5 tabular-nums">{u.build_count}</td>
-        <td className="px-4 py-2.5 text-fg-3 tabular-nums">
+        <td className="px-4 tabular-nums">{u.build_count}</td>
+        <td className="px-4 text-fg-3 tabular-nums">
           {u.last_build_at ? relativeTime(u.last_build_at) : "—"}
         </td>
-        <td className="px-4 py-2.5 text-fg-3 tabular-nums">
+        <td className="px-4 text-fg-3 tabular-nums">
           {relativeTime(u.created_at)}
         </td>
       </tr>
       {expanded && (
-        <tr style={{ borderBottom: "1px solid var(--line-1)" }}>
-          <td colSpan={7} className="px-4 py-4" style={{ background: "rgba(0,0,0,0.25)" }}>
+        <tr style={{ borderBottom: "1px solid var(--kd-border)" }}>
+          <td colSpan={7} className="px-4 py-4" style={{ background: "var(--sel-soft)" }}>
             <TenantDetail detail={detail} />
           </td>
         </tr>
@@ -491,7 +468,7 @@ function TenantDetail({ detail }) {
   if (!detail) return <Hint>테넌트 정보를 불러오는 중…</Hint>;
   if (detail.error)
     return (
-      <div className="text-[11.5px]" style={{ color: "var(--err-fg)" }}>
+      <div className="kd-t-caption" style={{ color: "var(--err-fg)" }}>
         {detail.error}
       </div>
     );
@@ -522,22 +499,13 @@ function TenantDetail({ detail }) {
         <>
           <div className="flex items-center gap-1.5 flex-wrap">
             {chips.map((c) => (
-              <span
-                key={c.label}
-                className="text-[11px] px-2 py-0.5 rounded"
-                style={{
-                  background: "var(--line-1)",
-                  border: "1px solid var(--line-2)",
-                  color: c.color,
-                  fontWeight: 590,
-                }}
-              >
+              <span key={c.label} className="kd-chip" style={{ color: c.color }}>
                 {c.label}
               </span>
             ))}
-            <span className="text-[11px] text-fg-4 ml-1">port {cfg.port}</span>
+            <span className="kd-t-caption text-fg-3 ml-1">포트 {cfg.port}</span>
           </div>
-          <div className="text-[11.5px] text-fg-3">
+          <div className="kd-t-caption text-fg-3">
             <a
               href={cfg.repo_url.replace(/\.git$/, "")}
               target="_blank"
@@ -552,18 +520,15 @@ function TenantDetail({ detail }) {
         </>
       )}
       {detail.pods.length > 0 ? (
-        <div
-          className="rounded-lg overflow-x-auto scroll-thin"
-          style={{ border: "1px solid var(--line-2)" }}
-        >
-          <table className="w-full text-[11.5px]" style={{ borderCollapse: "collapse" }}>
+        <div className="kd-table-wrap overflow-x-auto scroll-thin">
+          <table className="w-full kd-t-caption" style={{ borderCollapse: "collapse" }}>
             <thead>
-              <tr className="text-left text-[10px] text-fg-4" style={{ fontWeight: 590 }}>
-                {["POD", "컴포넌트", "상태", "재시작", "시작"].map((h) => (
+              <tr className="kd-t-micro text-fg-3 text-left">
+                {["Pod", "컴포넌트", "상태", "재시작", "시작"].map((h) => (
                   <th
                     key={h}
-                    className="px-3 py-1.5 tracking-[0.06em] whitespace-nowrap"
-                    style={{ borderBottom: "1px solid var(--line-2)" }}
+                    className="px-3 whitespace-nowrap"
+                    style={{ height: "var(--row-sm)", borderBottom: "1px solid var(--kd-border)", fontWeight: 500 }}
                   >
                     {h}
                   </th>
@@ -575,13 +540,13 @@ function TenantDetail({ detail }) {
                 <tr
                   key={p.name}
                   className="text-fg-2"
-                  style={{ borderBottom: "1px solid var(--line-1)" }}
+                  style={{ borderBottom: "1px solid var(--kd-border)" }}
                 >
-                  <td className="px-3 py-1.5 font-mono" style={{ color: "var(--fg-1)" }}>
+                  <td className="px-3 font-mono" style={{ color: "var(--fg-1)" }}>
                     {p.name}
                   </td>
-                  <td className="px-3 py-1.5 text-fg-3">{p.component || "—"}</td>
-                  <td className="px-3 py-1.5">
+                  <td className="px-3 text-fg-3">{p.component || "—"}</td>
+                  <td className="px-3">
                     <span
                       style={{
                         color:
@@ -597,8 +562,8 @@ function TenantDetail({ detail }) {
                       {p.phase === "Running" && !p.ready && " (NotReady)"}
                     </span>
                   </td>
-                  <td className="px-3 py-1.5 tabular-nums">{p.restarts}</td>
-                  <td className="px-3 py-1.5 text-fg-3 tabular-nums whitespace-nowrap">
+                  <td className="px-3 tabular-nums">{p.restarts}</td>
+                  <td className="px-3 text-fg-3 tabular-nums whitespace-nowrap">
                     {p.started_at ? relativeTime(p.started_at) : "—"}
                   </td>
                 </tr>
@@ -618,15 +583,7 @@ function RoleCell({ user: target, me, onChange }) {
   const locked = me.role !== "root" || target.role === "root" || target.id === me.id;
   if (locked) {
     return (
-      <span
-        className="text-[11px] px-2 py-0.5 rounded"
-        style={{
-          background: "var(--line-1)",
-          border: "1px solid var(--line-2)",
-          color: ROLE_COLORS[target.role] || "var(--fg-3)",
-          fontWeight: 590,
-        }}
-      >
+      <span className="kd-chip" style={{ color: ROLE_COLORS[target.role] || "var(--fg-3)" }}>
         {target.role}
       </span>
     );
@@ -635,13 +592,8 @@ function RoleCell({ user: target, me, onChange }) {
     <select
       value={target.role}
       onChange={(e) => onChange(target, e.target.value)}
-      className="text-[11.5px] px-1.5 py-1 rounded-md"
-      style={{
-        background: "var(--kd-surface)",
-        border: "1px solid var(--line-3)",
-        color: ROLE_COLORS[target.role] || "var(--fg-1)",
-        fontWeight: 510,
-      }}
+      className="kd-input"
+      style={{ width: 96, height: 30, color: ROLE_COLORS[target.role] || "var(--fg-1)" }}
     >
       <option value="user">user</option>
       <option value="admin">admin</option>
@@ -679,13 +631,7 @@ function NodeCard({ node }) {
       : null;
 
   return (
-    <div
-      className="rounded-xl px-4 py-3.5"
-      style={{
-        border: `1px solid ${expanded ? "rgba(129,139,224,0.3)" : "var(--line-2)"}`,
-        background: "var(--kd-surface)",
-      }}
-    >
+    <div className="kd-card" style={{ padding: "16px 20px" }}>
       <button
         onClick={toggle}
         className="w-full flex items-center gap-2.5 mb-3 text-left"
@@ -697,34 +643,22 @@ function NodeCard({ node }) {
           style={{ background: node.ready ? "var(--ok-fg)" : "var(--err-fg)" }}
           title={node.ready ? "Ready" : "NotReady"}
         />
-        <span className="text-[13px] text-fg-1" style={{ fontWeight: 590 }}>
-          {node.name}
-        </span>
-        <span
-          className="text-[10.5px] px-1.5 py-0.5 rounded"
-          style={{
-            background: "var(--line-1)",
-            border: "1px solid var(--line-2)",
-            color: node.role === "master" ? "var(--warn-fg)" : "var(--fg-3)",
-            fontWeight: 590,
-          }}
-        >
+        <span className="kd-t-body-s kd-strong text-fg-1">{node.name}</span>
+        <span className="kd-chip" style={{ color: node.role === "master" ? "var(--warn-fg)" : "var(--fg-3)" }}>
           {node.role}
         </span>
         {node.pod_count != null && (
-          <span className="text-[11px] text-fg-4 tabular-nums">
-            Pod {node.pod_count}
-          </span>
+          <span className="kd-t-caption text-fg-3 tabular-nums">Pod {node.pod_count}</span>
         )}
         {node.error && (
-          <span className="text-[11px]" style={{ color: "var(--err-fg)" }}>
+          <span className="kd-t-caption" style={{ color: "var(--err-fg)" }}>
             {node.error}
           </span>
         )}
         <ChevronDown
-          size={13}
-          strokeWidth={2}
-          className="ml-auto text-fg-4 transition-transform shrink-0"
+          size={15}
+          strokeWidth={1.8}
+          className="ml-auto text-fg-3 transition-transform shrink-0"
           style={{ transform: expanded ? "rotate(180deg)" : "none" }}
         />
       </button>
@@ -750,7 +684,7 @@ function NodeCard({ node }) {
       {expanded && (
         <div className="mt-4 kd-fade-in">
           {podsError && (
-            <div className="text-[11.5px] py-2" style={{ color: "var(--err-fg)" }}>
+            <div className="kd-t-caption py-2" style={{ color: "var(--err-fg)" }}>
               {podsError}
             </div>
           )}
@@ -766,18 +700,15 @@ function NodeCard({ node }) {
 // 노드 드릴다운 Pod 테이블 — "사용 / limit" 형식. limit 없으면(무제한) "—".
 function NodePodsTable({ pods }) {
   return (
-    <div
-      className="rounded-lg overflow-x-auto scroll-thin"
-      style={{ border: "1px solid var(--line-2)" }}
-    >
-      <table className="w-full text-[11.5px]" style={{ borderCollapse: "collapse" }}>
+    <div className="kd-table-wrap overflow-x-auto scroll-thin">
+      <table className="w-full kd-t-caption" style={{ borderCollapse: "collapse" }}>
         <thead>
-          <tr className="text-left text-[10px] text-fg-4" style={{ fontWeight: 590 }}>
-            {["NAMESPACE", "POD", "CPU", "메모리", "디스크"].map((h) => (
+          <tr className="kd-t-micro text-fg-3 text-left">
+            {["네임스페이스", "Pod", "CPU", "메모리", "디스크"].map((h) => (
               <th
                 key={h}
-                className="px-3 py-1.5 tracking-[0.06em] whitespace-nowrap"
-                style={{ borderBottom: "1px solid var(--line-2)" }}
+                className="px-3 whitespace-nowrap"
+                style={{ height: "var(--row-sm)", borderBottom: "1px solid var(--kd-border)", fontWeight: 500 }}
               >
                 {h}
               </th>
@@ -789,23 +720,23 @@ function NodePodsTable({ pods }) {
             <tr
               key={`${p.namespace}/${p.name}`}
               className="text-fg-2"
-              style={{ borderBottom: "1px solid var(--line-1)" }}
+              style={{ borderBottom: "1px solid var(--kd-border)" }}
             >
-              <td className="px-3 py-1.5 text-fg-4 font-mono whitespace-nowrap">
+              <td className="px-3 text-fg-4 font-mono whitespace-nowrap">
                 {p.namespace}
               </td>
-              <td className="px-3 py-1.5 font-mono" style={{ color: "var(--fg-1)" }}>
+              <td className="px-3 font-mono" style={{ color: "var(--fg-1)" }}>
                 {p.name}
               </td>
-              <td className="px-3 py-1.5 tabular-nums whitespace-nowrap">
+              <td className="px-3 tabular-nums whitespace-nowrap">
                 {fmtMilli(p.cpu_used_cores)}
                 <span className="text-fg-4"> / {fmtMilli(p.cpu_limit_cores)}</span>
               </td>
-              <td className="px-3 py-1.5 tabular-nums whitespace-nowrap">
+              <td className="px-3 tabular-nums whitespace-nowrap">
                 {fmtMem(p.memory_used_bytes)}
                 <span className="text-fg-4"> / {fmtMem(p.memory_limit_bytes)}</span>
               </td>
-              <td className="px-3 py-1.5 tabular-nums whitespace-nowrap">
+              <td className="px-3 tabular-nums whitespace-nowrap">
                 {fmtMem(p.disk_used_bytes)}
                 <span className="text-fg-4"> / {fmtMem(p.disk_limit_bytes)}</span>
               </td>
@@ -830,18 +761,13 @@ function UsageBar({ label, percent, detail }) {
   return (
     <div>
       <div className="flex items-baseline justify-between mb-1">
-        <span className="text-[11px] text-fg-4" style={{ fontWeight: 590 }}>
-          {label}
-        </span>
-        <span className="text-[11px] text-fg-3 tabular-nums">
+        <span className="kd-t-micro text-fg-3">{label}</span>
+        <span className="kd-t-caption text-fg-2 tabular-nums">
           {percent == null ? "—" : `${percent.toFixed(0)}%`}
           <span className="text-fg-4 ml-1.5">{detail}</span>
         </span>
       </div>
-      <div
-        className="h-1.5 rounded-full overflow-hidden"
-        style={{ background: "var(--line-1)" }}
-      >
+      <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--sel-soft)" }}>
         <div
           className="h-full rounded-full transition-all duration-500"
           style={{

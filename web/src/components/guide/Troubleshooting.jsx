@@ -22,7 +22,7 @@ export default function Troubleshooting() {
       </Section>
 
       <Section title={'"Pod 시작 실패 (타임아웃)"이 떴어요'}>
-        <p className="text-[14px] text-fg-3 mb-3">
+        <p className="text-fg-2 mb-3">
           빌드는 성공했는데 앱이 포트를 안 열어서 못 띄운 상태예요. 원인은 거의 셋 중 하나입니다.
         </p>
         <Bullet>
@@ -44,7 +44,7 @@ java -jar app.jar                              # Spring은 기본 0.0.0.0`}</Cod
       </Section>
 
       <Section title="앱이 자꾸 재시작돼요 (crashing)">
-        <p className="text-[14px] text-fg-3 mb-3">
+        <p className="text-fg-2 mb-3">
           가장 흔한 원인은 <Code>메모리 한도 초과(OOM)</Code>예요. 런타임별 메모리 한도:
         </p>
         <div className="my-3">

@@ -1,9 +1,18 @@
 import { useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Admin from "./components/Admin.jsx";
-import CommitListWidget from "./components/CommitListWidget.jsx";
-import Dashboard from "./components/Dashboard.jsx";
-import DeployForm from "./components/DeployForm.jsx";
+import AppLayout from "./components/app/AppLayout.jsx";
+import AppOverview from "./components/app/AppOverview.jsx";
+import AppWorkspace from "./components/app/AppWorkspace.jsx";
+import AppHistory from "./components/app/AppHistory.jsx";
+import AppEnv from "./components/app/AppEnv.jsx";
+import AppSettings from "./components/app/AppSettings.jsx";
+import AppsList from "./components/app/AppsList.jsx";
+import DeployProgress from "./components/deploy/DeployProgress.jsx";
+import FrontendDeploy from "./components/deploy/FrontendDeploy.jsx";
+import HowTo from "./components/marketing/HowTo.jsx";
+import Blog from "./components/marketing/Blog.jsx";
+import DeployWizard from "./components/deploy/DeployWizard.jsx";
 import Community from "./components/Community.jsx";
 import Guide from "./components/Guide.jsx";
 import GuidePanel from "./components/GuidePanel.jsx";
@@ -23,14 +32,10 @@ function FormView() {
   return (
     <div className="flex-1 overflow-auto scroll-thin">
       <div
-        className="pt-[6vh] pb-4 px-6 mx-auto transition-transform duration-[350ms] ease-out"
-        style={{
-          width: 520,
-          maxWidth: "90vw",
-          transform: isOpen ? "translateX(-260px)" : "translateX(0)",
-        }}
+        className="transition-transform duration-[350ms] ease-out"
+        style={{ transform: isOpen ? "translateX(-260px)" : "translateX(0)" }}
       >
-        <DeployForm onRequestGuide={setGuideRuntime} />
+        <DeployWizard onRequestGuide={setGuideRuntime} />
       </div>
       {isOpen && (
         <GuidePanel
@@ -58,27 +63,38 @@ export default function App() {
   return (
     <BrowserRouter>
       <ThemeProvider>
-        <AuthProvider onOpenLogin={() => setShowLogin(true)}>
+      <AuthProvider onOpenLogin={() => setShowLogin(true)}>
         <div className="h-screen w-screen flex flex-col" style={{ background: "var(--kd-bg)" }}>
           <TopBar onLogin={() => setShowLogin(true)} />
           <div className="flex-1 min-h-0 flex flex-col" style={{ background: "var(--kd-panel)" }}>
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/deploy" element={<FormView />} />
-              <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/deploy/frontend" element={<div className="flex-1 overflow-auto scroll-thin"><FrontendDeploy /></div>} />
+              <Route path="/deploy/progress" element={<div className="flex-1 overflow-auto scroll-thin"><DeployProgress /></div>} />
+              <Route path="/apps" element={<div className="flex-1 overflow-auto scroll-thin"><AppsList /></div>} />
+              <Route path="/how" element={<div className="flex-1 overflow-auto scroll-thin"><HowTo /></div>} />
+              <Route path="/blog" element={<div className="flex-1 overflow-auto scroll-thin"><Blog /></div>} />
+              {/* 앱 상세 — 셸(탭바)이 데이터를 폴링하고 탭 화면은 Outlet context로 받는다 */}
+              <Route path="/dashboard" element={<AppLayout />}>
+                <Route index element={<AppOverview />} />
+                <Route path="workspace" element={<AppWorkspace />} />
+                <Route path="history" element={<AppHistory />} />
+                <Route path="env" element={<AppEnv />} />
+                <Route path="settings" element={<AppSettings />} />
+              </Route>
               <Route path="/admin" element={<div className="flex-1 overflow-auto scroll-thin"><Admin /></div>} />
               <Route path="/community" element={<div className="flex-1 overflow-auto scroll-thin"><Community /></div>} />
               <Route path="/guide" element={<GuideView />} />
               <Route path="/guide/:section" element={<GuideView />} />
               {/* 옛 빌드 단위 URL → dashboard로 흡수 (북마크/공유 호환) */}
-              <Route path="/builds/:id" element={<Navigate to="/dashboard" replace />} />
+              <Route path="/builds/:id" element={<Navigate to="/dashboard/workspace" replace />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </div>
-          <CommitListWidget />
           {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
         </div>
-        </AuthProvider>
+      </AuthProvider>
       </ThemeProvider>
     </BrowserRouter>
   );
