@@ -31,7 +31,7 @@ function FormView() {
   const isOpen = guideRuntime !== null;
 
   return (
-    <div className="flex-1 overflow-auto scroll-thin">
+    <div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page">
       <div
         className="transition-transform duration-[350ms] ease-out"
         style={{ transform: isOpen ? "translateX(-260px)" : "translateX(0)" }}
@@ -55,7 +55,7 @@ function DocPane({ children }) {
 
 function GuideView() {
   return (
-    <div className="flex-1 overflow-auto scroll-thin">
+    <div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page">
       <Guide />
     </div>
   );
@@ -77,11 +77,11 @@ export default function App() {
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/deploy" element={<FormView />} />
-              <Route path="/deploy/frontend" element={<div className="flex-1 overflow-auto scroll-thin"><FrontendDeploy /></div>} />
-              <Route path="/deploy/progress" element={<div className="flex-1 overflow-auto scroll-thin"><DeployProgress /></div>} />
-              <Route path="/apps" element={<div className="flex-1 overflow-auto scroll-thin"><AppsList /></div>} />
-              <Route path="/how" element={<div className="flex-1 overflow-auto scroll-thin"><HowTo /></div>} />
-              <Route path="/blog" element={<div className="flex-1 overflow-auto scroll-thin"><Blog /></div>} />
+              <Route path="/deploy/frontend" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><FrontendDeploy /></div>} />
+              <Route path="/deploy/progress" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><DeployProgress /></div>} />
+              <Route path="/apps" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><AppsList /></div>} />
+              <Route path="/how" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><HowTo /></div>} />
+              <Route path="/blog" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><Blog /></div>} />
               {/* 앱 상세 — 셸(탭바)이 데이터를 폴링하고 탭 화면은 Outlet context로 받는다 */}
               <Route path="/dashboard" element={<AppLayout />}>
                 <Route index element={<AppOverview />} />
@@ -97,8 +97,8 @@ export default function App() {
                 <Route path="blog" element={<DocPane><Blog /></DocPane>} />
                 <Route path="community" element={<DocPane><Community /></DocPane>} />
               </Route>
-              <Route path="/admin" element={<div className="flex-1 overflow-auto scroll-thin"><Admin /></div>} />
-              <Route path="/community" element={<div className="flex-1 overflow-auto scroll-thin"><Community /></div>} />
+              <Route path="/admin" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><Admin /></div>} />
+              <Route path="/community" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><Community /></div>} />
               <Route path="/guide" element={<GuideView />} />
               <Route path="/guide/:section" element={<GuideView />} />
               {/* 옛 빌드 단위 URL → dashboard로 흡수 (북마크/공유 호환) */}

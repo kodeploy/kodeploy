@@ -14,7 +14,7 @@ export default function SiteFooter() {
           <Brand size={16} />
           <div className="ml-auto flex items-center gap-7">
             <Link to="/guide" className={LINK}>
-              문서
+              가이드
             </Link>
             <a
               href="https://github.com/yuntyu01/kodeploy"

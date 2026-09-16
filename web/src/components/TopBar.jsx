@@ -7,11 +7,11 @@ import { useAppShell } from "../contexts/AppShellContext.jsx";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { useTheme } from "../contexts/ThemeContext.jsx";
 
-// 시안 내비는 이용 방법 / 문서 / 블로그 / 피드백.
+// 시안 내비는 이용 방법 / 문서 / 블로그 / 피드백 — "문서"는 앱 셸 사이드바와 같게 "가이드"로 부른다.
 // "이용 방법"(design/라이트모드-시안/19_이용방법.png)과 "블로그"는 아직 화면이 없어 붙이지 않았다.
 const NAV_ITEMS = [
   { label: "이용 방법", to: "/how" },
-  { label: "문서", to: "/guide" },
+  { label: "가이드", to: "/guide" },
   { label: "블로그", to: "/blog" },
   { label: "피드백", to: "/community" },
 ];
@@ -39,22 +39,26 @@ export default function TopBar({ onLogin }) {
   // 라우트가 바뀌면 모바일 메뉴는 닫는다.
   useEffect(() => setMenu(false), [pathname]);
 
-  // 랜딩은 상단바와 본문 배경이 같은 색이고 히어로 위 여백도 넉넉해서, 맨 위에서는 괘선이
-  // 없는 편이 담백하다. 대신 내용이 바 밑으로 지나가기 시작하면 옅은 선으로 경계를 준다.
-  // (상단바는 고정이고 스크롤은 라우트 쪽 칸이 한다 — data-kd-scroll="page"로 찾는다.)
-  const onLanding = pathname === "/";
+  // 상단바와 본문 배경이 같은 색이라 맨 위에서는 괘선이 없는 편이 담백하다.
+  // 대신 내용이 바 밑으로 지나가기 시작하면 옅은 선으로 경계를 준다.
+  // 앱 셸(/dashboard/*)만 예외로 괘선을 늘 둔다 — 사이드바 세로 괘선과 만나 작업 화면의 틀을 이룬다.
+  // (상단바는 고정이고 스크롤은 라우트 쪽 칸이 한다 — data-kd-scroll="page"로 찾는다.
+  //  칸을 붙잡지 않고 문서 전체의 scroll을 캡처 단계에서 받아 표식 달린 칸의 것만 쓴다 —
+  //  로딩→본문처럼 경로 변화 없이 칸이 바뀌어도 따라가고, 안쪽 스크롤은 선을 건드리지 않는다.)
+  const softEdge = !isActive("/dashboard");
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
-    if (!onLanding) return;
-    const el = document.querySelector('[data-kd-scroll="page"]');
-    if (!el) return;
-    const onScroll = () => setScrolled(el.scrollTop > 2);
-    onScroll();
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [onLanding, pathname]);
+    if (!softEdge) return;
+    const page = document.querySelector('[data-kd-scroll="page"]');
+    setScrolled(!!page && page.scrollTop > 2);
+    const onScroll = (e) => {
+      if (e.target?.dataset?.kdScroll === "page") setScrolled(e.target.scrollTop > 2);
+    };
+    document.addEventListener("scroll", onScroll, { capture: true, passive: true });
+    return () => document.removeEventListener("scroll", onScroll, { capture: true });
+  }, [softEdge, pathname]);
   // 선이 사라져도 자리는 남긴다(transparent) — 색만 바뀌어야 본문이 1px 튀지 않는다.
-  const edge = !onLanding ? "var(--kd-border)" : scrolled ? "var(--kd-rule)" : "transparent";
+  const edge = !softEdge ? "var(--kd-border)" : scrolled ? "var(--kd-rule)" : "transparent";
 
   return (
     <header

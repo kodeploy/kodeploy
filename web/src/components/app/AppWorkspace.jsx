@@ -22,6 +22,7 @@
 // 데이터는 전부 실제 API다. 시안에 있지만 백엔드에 없는 값(DB 이름 "app_db",
 // DB/Redis의 CPU·메모리)은 지어내지 않고 생략하거나 "—"로 둔다.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import {
   AppWindow,
@@ -307,20 +308,34 @@ function IconBtn({ icon: Icon, label, onClick, dark }) {
 }
 
 // 작은 드롭다운 — 터미널 대상("앱 서버 ⌄")과 로그 필터("전체 ⌄")에 쓴다.
+// 메뉴는 body로 포털해 fixed로 띄운다 — PaneBar가 overflow-x-auto라 안에서 absolute로 띄우면
+// 42px 툴바 높이에서 잘려 아래 터미널·로그 뒤로 숨는다.
 function MiniSelect({ value, options, onChange, dark, width }) {
   const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
   const wrapRef = useRef(null);
+  const menuRef = useRef(null);
   const current = options.find((o) => o.id === value);
 
   useEffect(() => {
     if (!open) return;
-    const onDown = (e) => !wrapRef.current?.contains(e.target) && setOpen(false);
+    const place = () => {
+      const r = wrapRef.current?.getBoundingClientRect();
+      if (r) setPos({ left: r.left, top: r.bottom + 4 });
+    };
+    place();
+    const onDown = (e) =>
+      !wrapRef.current?.contains(e.target) && !menuRef.current?.contains(e.target) && setOpen(false);
     const onKey = (e) => e.key === "Escape" && setOpen(false);
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
     return () => {
       document.removeEventListener("mousedown", onDown);
       document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
     };
   }, [open]);
 
@@ -343,10 +358,11 @@ function MiniSelect({ value, options, onChange, dark, width }) {
         <span className="truncate">{current?.label || "—"}</span>
         <ChevronDown size={15} strokeWidth={1.7} className="shrink-0" />
       </button>
-      {open && (
+      {open && pos && createPortal(
         <div
-          className="absolute left-0 z-30 kd-card"
-          style={{ top: 34, minWidth: Math.max(width || 0, 140), paddingBlock: 6 }}
+          ref={menuRef}
+          className="fixed z-50 kd-card"
+          style={{ left: pos.left, top: pos.top, minWidth: Math.max(width || 0, 140), paddingBlock: 6 }}
         >
           {options.map((o) => (
             <button
@@ -370,7 +386,8 @@ function MiniSelect({ value, options, onChange, dark, width }) {
               {o.label}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
