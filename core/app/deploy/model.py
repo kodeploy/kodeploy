@@ -49,6 +49,10 @@ class Build(Base):
     # 빌드/배포 실패 AI 진단 결과 (diagnose.Diagnosis의 JSON 문자열).
     # 실패하지 않았거나 AI_DIAGNOSE=false면 NULL — 프론트는 있을 때만 카드를 그린다.
     ai_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 진단 진행 상태 — NULL(진단 대상 아님·기능 OFF·예산 초과) | "pending"(실패 커밋과 함께 표시,
+    # 진단 중) | "done"(끝남 — ai_analysis가 비었으면 진단을 만들지 못한 것).
+    # 프론트는 pending인 동안만 폴링을 이어 가 "분석 중" 자리를 진단으로 바꿔 끼운다.
+    ai_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     logs: Mapped[str | None] = mapped_column(LONGTEXT, nullable=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     # timezone-aware UTC 저장 — Pydantic이 응답 시 timezone offset 포함 ISO 출력 (B 컨벤션)

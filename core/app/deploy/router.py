@@ -66,6 +66,7 @@ def _to_status(build: Build, timing: dict | None = None) -> StatusResponse:
         error=build.error,
         env_change_summary=build.env_change_summary,
         ai_analysis=build.ai_analysis,
+        ai_status=build.ai_status,
         logs=build.logs,
         total_seconds=timing.get("total_seconds"),
         created_at=build.created_at,

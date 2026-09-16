@@ -1,11 +1,12 @@
 // 배포 이력 · 우측 상세 — 선택한 빌드 하나를 보여준다. design/라이트모드-시안/14_배포_이력.png 기준.
 //
 // 제목(#N 결과) → 메타 줄(브랜치 · 빌드ID · 소요) → 탭(요약 / 빌드 로그 / Dockerfile).
-// 빌드 로그는 잉크 면에 줄번호와 함께 깔고, 실패한 빌드면 그 아래 AI 진단을 붙인다.
+// 빌드 로그는 잉크 면에 줄번호와 함께 깔고, 실패한 빌드면 그 아래 AI 분석 카드(AiDiagnosis)를 붙인다.
 //
 // 진행 중인 빌드는 로그가 계속 늘어나므로 getBuild(id)로 1초 폴링한다 —
 // CommitListPanel.BuildLogsPanel이 쓰던 규칙(활성 상태 집합 · 종료되면 자연 정지 ·
 // build_id 바뀔 때만 부모 스냅샷으로 리셋 · live일 때만 맨 아래로 붙이기)을 그대로 가져왔다.
+// 실패한 뒤에도 AI 분석이 진행 중(ai_status="pending")이면 끝날 때까지 폴링을 이어 간다.
 //
 // 치수 주석의 숫자는 시안 원본 px이고, 실제 값은 ÷1.3665(시안 스케일)한 CSS px이다.
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
@@ -21,6 +22,7 @@ import {
   Minimize2,
 } from "lucide-react";
 import { getBuild } from "../../api/deploy.js";
+import AiDiagnosis, { isDiagnosing } from "./AiDiagnosis.jsx";
 import { STYLES_BUILD, STYLES_ENV } from "../StatusBadge.jsx";
 import { formatDuration, formatFull, repoSlug } from "../../lib/format.js";
 
@@ -67,18 +69,6 @@ const BUILD_MODE_LABEL = {
 // 바로 아래 "Build failed"는 보통 글자색이다(실패 단어를 전부 칠하면 면이 붉어진다).
 const ERROR_LINE = /\b(ERROR|FATAL|Traceback)\b|\berror:/i;
 
-// 진단 JSON(core/app/deploy/build/diagnose.py Diagnosis) 파싱.
-// 실패는 조용히 null — 진단은 부가정보라 화면을 깨뜨리면 안 되고, 호출부가 원문으로 떨어진다.
-// (CommitListPanel.parseDiagnosis와 같은 규칙)
-function parseDiagnosis(raw) {
-  try {
-    const d = JSON.parse(raw);
-    return d?.cause ? d : null;
-  } catch {
-    return null;
-  }
-}
-
 export default function BuildDetail({ build: initialBuild, number }) {
   const [build, setBuild] = useState(initialBuild);
   const [tab, setTab] = useState(() => defaultTab(initialBuild));
@@ -97,8 +87,9 @@ export default function BuildDetail({ build: initialBuild, number }) {
   }, [initialBuild.build_id]);
 
   // 진행 중 빌드면 1초마다 getBuild로 갱신. 종료 상태가 되면 자연 정지.
+  // 실패 뒤 AI 분석을 기다리는 동안은 2초 — 로그는 더 안 늘고 진단 한 번만 받으면 된다.
   useEffect(() => {
-    if (!ACTIVE_BUILD.has(initialBuild.status)) return;
+    if (!ACTIVE_BUILD.has(initialBuild.status) && !isDiagnosing(initialBuild)) return;
     let cancelled = false;
     let timer;
     const tick = async () => {
@@ -107,6 +98,7 @@ export default function BuildDetail({ build: initialBuild, number }) {
         if (cancelled) return;
         setBuild(fresh);
         if (ACTIVE_BUILD.has(fresh.status)) timer = setTimeout(tick, 1000);
+        else if (isDiagnosing(fresh)) timer = setTimeout(tick, 2000);
       } catch {
         if (!cancelled) timer = setTimeout(tick, 1000);
       }
@@ -116,7 +108,7 @@ export default function BuildDetail({ build: initialBuild, number }) {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [initialBuild.build_id, initialBuild.status]);
+  }, [initialBuild.build_id, initialBuild.status, initialBuild.ai_status]);
 
   // 탭 구성 — 로그/Dockerfile은 내용이 있을 때만 연다.
   // env_change는 빌드가 아니라 로그·Dockerfile 자체가 없다.
@@ -225,9 +217,16 @@ export default function BuildDetail({ build: initialBuild, number }) {
         />
       )}
 
-      {/* 진단은 실패한 빌드에만 붙는다(성공·env_change면 NULL) → 있을 때만 노출.
-          Dockerfile 탭에서는 숨긴다 — 거긴 원인이 아니라 입력을 보는 자리다. */}
-      {build.ai_analysis && active !== "dockerfile" && <Diagnosis build={build} />}
+      {/* 진단은 실패한 빌드에만 붙는다(성공·env_change면 없음) — 카드가 스스로 그릴지 정한다.
+          Dockerfile 탭에서는 숨긴다 — 거긴 원인이 아니라 입력을 보는 자리다.
+          오른쪽 칸이 좁아 카드 안 배치는 위아래로 쌓인다(.kd-diag-grid). */}
+      {!isEnv && active !== "dockerfile" && (
+        <AiDiagnosis
+          build={build}
+          onShowLogs={active === "logs" ? null : () => setTab("logs")}
+          style={{ marginTop: 28 }}
+        />
+      )}
     </div>
   );
 }
@@ -407,94 +406,6 @@ function SummaryBody({ build, isEnv }) {
           </span>
         </div>
       ))}
-    </div>
-  );
-}
-
-// AI 진단 — 원인(제목) / 로그(근거 인용) / 방법(조치). 시안은 아이콘 + 원인 + 안내 + 저장소 링크.
-// 자유 텍스트 한 덩어리가 아니라 섹션이 나뉜 JSON이라 각각 다른 모양으로 보여줄 수 있다.
-function Diagnosis({ build }) {
-  const d = parseDiagnosis(build.ai_analysis);
-  const steps = Array.isArray(d?.fix_steps) ? d.fix_steps : [];
-  return (
-    <div className="flex" style={{ gap: 18, marginTop: 38 }}>
-      {/* 아이콘 26 — 시안 실측 27(잉크 23.4)에 가장 가까운 승인 치수(--ico-lg) */}
-      <span className="shrink-0 flex">{resultIcon("failed", 26)}</span>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline flex-wrap" style={{ gap: 10 }}>
-          {/* 파싱 실패(옛 포맷·잘린 JSON)면 원문을 그대로라도 보여준다 */}
-          <span className="kd-t-section text-fg-1">
-            {d ? d.cause : build.error || "빌드가 실패했어요."}
-          </span>
-          {d?.kodeploy_specific && <span className="kd-chip">플랫폼 제약</span>}
-        </div>
-
-        {!d && build.ai_analysis && (
-          <p className="kd-t-body-s text-fg-2" style={{ marginTop: 8 }}>
-            {build.ai_analysis}
-          </p>
-        )}
-
-        {d?.evidence && (
-          <>
-            <div className="kd-t-micro text-fg-3" style={{ marginTop: 16 }}>
-              로그
-            </div>
-            <pre
-              className="kd-t-code"
-              style={{
-                marginTop: 6,
-                padding: "10px 12px",
-                borderRadius: 4,
-                background: "var(--kd-surface)",
-                border: "1px solid var(--kd-border)",
-                color: "var(--fg-2)",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-              }}
-            >
-              {d.evidence}
-            </pre>
-          </>
-        )}
-
-        {steps.length > 0 && (
-          <>
-            <div className="kd-t-micro text-fg-3" style={{ marginTop: 16 }}>
-              방법
-            </div>
-            <ol style={{ marginTop: 6 }}>
-              {steps.map((step, i) => (
-                <li
-                  key={i}
-                  className="kd-t-body-s text-fg-2 flex"
-                  style={{ gap: 8, marginTop: i === 0 ? 0 : 6 }}
-                >
-                  <span className="text-fg-4 tabular-nums shrink-0">{i + 1}.</span>
-                  <span>{step}</span>
-                </li>
-              ))}
-            </ol>
-          </>
-        )}
-
-        {build.repo_url && (
-          <a
-            href={build.repo_url.replace(/\.git$/, "")}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="kd-t-label text-fg-1 underline inline-flex items-center gap-1"
-            style={{ marginTop: 20 }}
-          >
-            저장소 열기
-            <ArrowUpRight size={15} strokeWidth={1.7} />
-          </a>
-        )}
-
-        <p className="kd-t-caption text-fg-3" style={{ marginTop: 16 }}>
-          AI가 로그를 읽고 생성한 추정입니다. 실제 원인과 다를 수 있어요.
-        </p>
-      </div>
     </div>
   );
 }

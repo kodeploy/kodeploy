@@ -42,7 +42,8 @@ from app.shared import k8s
 
 logger = logging.getLogger(__name__)
 
-# 응답 상한. 게이트웨이 뒤에 reasoning 모델이 붙으면 추론 토큰도 이 예산을 함께 먹으므로,
+# 응답 상한 (max_completion_tokens로 보낸다 — GPT-5.x 추론 모델은 OpenAI API에서 옛 max_tokens를
+# 거부한다). 게이트웨이 뒤에 reasoning 모델이 붙으면 추론 토큰도 이 예산을 함께 먹으므로,
 # 진단 JSON 자체가 필요로 하는 양(수백 토큰)보다 넉넉히 둔다. 모자라면 JSON이 중간에
 # 끊기고 parsed가 None이 된다(_call의 finish_reason 검사가 그 경우를 잡는다).
 MAX_TOKENS = 16_000
@@ -79,6 +80,25 @@ _PLATFORM_CATEGORIES = frozenset({
 })
 
 
+# 조치 한 단계 — 문장과 명령어를 나눠 받는다. 화면이 명령어만 복사 박스로 떼어 보여주기 때문이다.
+# 문장 속 명령어를 프론트가 정규식으로 추측해 떼면 틀리기 쉽다(따옴표·백틱·한국어 조사가 섞인다).
+# command를 Optional(null)이 아니라 빈 문자열로 둔 이유: strict json_schema에서 anyOf-null
+# 지원이 제공자마다 달라, 게이트웨이 뒤 모델을 바꿨을 때 스키마 미지원으로 진단이 통째로 빈다.
+class FixStep(BaseModel):
+    text: str = Field(
+        description=(
+            "유저가 수행할 변경 하나를 한국어 한 문장으로. 명령어·코드 조각은 여기에 넣지 말고 "
+            "command에 둘 것."
+        )
+    )
+    command: str = Field(
+        description=(
+            "그 변경을 위해 그대로 복사해 실행하거나 파일에 붙여넣을 명령어·코드. "
+            "여러 줄이면 줄바꿈으로 구분. 배포 폼 값 변경처럼 복사할 것이 없으면 빈 문자열."
+        )
+    )
+
+
 # ⚠️ 이 클래스의 docstring과 각 Field(description=...)는 문서가 아니라 **프롬프트다**.
 #    Pydantic 스키마가 그대로 API로 나가 모델이 읽는다 — 내부 설계 근거를 docstring에 쓰면
 #    매 호출 토큰을 먹고 과업과 무관한 메타 서술이 섞인다. 설계 의도는 이 주석에만 둘 것.
@@ -87,6 +107,8 @@ _PLATFORM_CATEGORIES = frozenset({
 #   서술(cause/evidence)을 먼저 만들게 해서 범주 라벨에 서술이 끌려가는 걸 막고
 #   (폐쇄집합 분류의 대표적 실패 모드 — 라벨 먼저 찍고 근거를 거기 맞추는 retrofit),
 #   범주가 확정된 뒤 조치를 쓰게 해서 fix_steps가 범주에 조건화되게 한다.
+#   대안(alternative_*)은 주 조치 뒤, 화면 제목(title)은 맨 마지막 — 제목은 "무엇을 하면
+#   되나"의 요약이라 조치가 다 나온 뒤에 써야 조치와 어긋나지 않는다.
 #   순서를 바꿀 땐 이 의도를 먼저 확인할 것.
 class Diagnosis(BaseModel):
     """빌드/배포 실패 진단 결과."""
@@ -112,12 +134,32 @@ class Diagnosis(BaseModel):
             "위 cause_category와 모순되지 않게 할 것."
         )
     )
-    fix_steps: list[str] = Field(
+    fix_steps: list[FixStep] = Field(
         description=(
             "위 범주에 맞는, 유저가 자기 repo나 배포 폼에서 실제로 할 수 있는 조치. "
-            "한국어. 1~3개. 각 항목은 유저가 수행하는 '변경' 하나여야 한다. "
+            "가장 권하는 방법 하나의 단계들. 1~3개. 각 항목은 유저가 수행하는 '변경' 하나여야 한다. "
             "'다시 배포하세요' '커밋하세요' '로그를 확인하세요' 같은 당연한 후속이나 "
             "공허한 항목은 넣지 말 것 — 구체적 파일/설정/값을 말할 것."
+        )
+    )
+    alternative_label: str = Field(
+        description=(
+            "fix_steps와 다른 경로로 같은 문제를 푸는 방법이 실제로 있으면 그 방법의 이름 "
+            "(예: 'Dockerfile에서 수정하는 방법', '배포 폼에서 바꾸는 방법'). "
+            "억지로 만들지 말 것 — 없으면 빈 문자열."
+        )
+    )
+    alternative_steps: list[FixStep] = Field(
+        description=(
+            "위 대안의 단계. 0~2개. alternative_label이 빈 문자열이면 반드시 빈 배열. "
+            "fix_steps와 같은 규칙을 따른다."
+        )
+    )
+    title: str = Field(
+        description=(
+            "화면 맨 위에 크게 보일 제목. 유저가 무엇을 하면 되는지를 한국어 한 문장, "
+            "30자 안팎으로 (예: 'gradlew 실행 권한을 확인해 주세요.'). "
+            "원인을 특정하지 못했으면 무엇을 확인해야 하는지를 쓸 것."
         )
     )
 
@@ -415,7 +457,7 @@ def _call(case: str) -> CallResult:
     try:
         resp = _get_client().chat.completions.parse(
             model=config.LLM_MODEL,
-            max_tokens=MAX_TOKENS,
+            max_completion_tokens=MAX_TOKENS,
             messages=[
                 # 고정 프리픽스 = 매 호출 동일. Anthropic 네이티브의 cache_control 같은 명시
                 # 마커는 OpenAI 포맷에 없고, 프리픽스 캐시가 걸리는지는 게이트웨이/제공자 몫이다.
@@ -436,7 +478,7 @@ def _call(case: str) -> CallResult:
     # 예산 초과로 JSON이 중간에 끊긴 경우. parsed는 None이고 finish_reason만이 이유를 안다.
     # 유저 화면엔 카드가 안 뜰 뿐이라 이 축이 없으면 아무도 모른 채 지나간다.
     if choice.finish_reason == "length":
-        logger.warning("AI 진단 응답이 max_tokens(%d)에서 잘림", MAX_TOKENS)
+        logger.warning("AI 진단 응답이 max_completion_tokens(%d)에서 잘림", MAX_TOKENS)
         return done("length", **usage)
     # 안전 필터가 거절한 경우 — 로그가 유저 통제 입력이라 드물게 발생할 수 있다.
     refusal = getattr(choice.message, "refusal", None)

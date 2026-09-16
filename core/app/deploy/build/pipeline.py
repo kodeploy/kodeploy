@@ -179,12 +179,27 @@ def _llm_budget_exceeded(db: Session, record: BuildRecord) -> bool:
     return True
 
 
+# 실패를 커밋하면서 진단이 뒤따를지를 같은 커밋에 싣는다 (ai_status="pending").
+# ★ 같은 커밋이어야 하는 이유: 프론트는 status가 failed가 되는 순간 빌드 폴링을 멈춘다.
+#   failed만 먼저 보이고 pending이 한 틱 늦으면 그 사이 폴링이 끝나 진단이 영영 안 뜬다
+#   (rollout 실패는 failed 커밋과 진단 사이에 cache export 회수 대기까지 끼어 틈이 길다).
+# 진단을 안 부를 경우(기능 OFF·예산 초과)엔 ai_status를 NULL로 둬 프론트가 기다리지 않게 한다.
+# 예산 판정은 status를 만지기 전에 한다 — _llm_budget_exceeded가 record를 커밋하는데,
+# 그때 failed가 pending 없이 먼저 실려 나가면 위 틈이 다시 생긴다.
+def _mark_failed(db: Session, build: Build, record: BuildRecord, error: str) -> None:
+    wanted = diagnose.is_configured() and not _llm_budget_exceeded(db, record)
+    build.status = "failed"
+    build.error = error
+    if wanted:
+        build.ai_status = "pending"
+    db.commit()
+
+
 def _attach_diagnosis(
     db: Session, build: Build, record: BuildRecord, diagnose_fn
 ) -> None:
-    if not diagnose.is_configured():
-        return
-    if _llm_budget_exceeded(db, record):
+    # 부를지는 _mark_failed가 이미 정했다 — 여기서 예산을 다시 보면 판정이 둘로 갈린다.
+    if build.ai_status != "pending":
         return
     try:
         result = diagnose_fn(build)
@@ -192,10 +207,12 @@ def _attach_diagnosis(
         # diagnose가 흡수 못 한 것(K8s 조회 등 재료 수집 단계 예외)만 여기로 온다.
         db.rollback()
         logger.warning("build %s: AI 진단 실패 — %s", build.build_id, e)
+        _finish_diagnosis(db, build)
         return
     try:
         if result.payload:                       # 실패 결말이면 진단문 없음 — 카드도 안 그린다
             build.ai_analysis = result.payload
+        build.ai_status = "done"
         record.llm_model = result.model
         record.llm_outcome = result.outcome
         record.llm_latency_ms = result.latency_ms
@@ -207,6 +224,18 @@ def _attach_diagnosis(
     except Exception as e:
         db.rollback()
         logger.warning("build %s: AI 진단 기록 실패 — %s", build.build_id, e)
+        _finish_diagnosis(db, build)
+
+
+# 어떤 경로로 끝나든 pending은 반드시 닫는다 — 남아 있으면 화면이 "분석 중"에서 못 벗어난다.
+# (프로세스가 진단 도중 죽는 경우는 여기로도 못 온다 — 프론트가 시간 상한으로 따로 끊는다.)
+def _finish_diagnosis(db: Session, build: Build) -> None:
+    try:
+        build.ai_status = "done"
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        logger.warning("build %s: AI 진단 상태 마감 실패 — %s", build.build_id, e)
 
 
 _ACTIVE_STATUSES = {"queued", "building", "built", "deploying"}
@@ -742,9 +771,7 @@ async def _run_build(
                 db.commit()
 
                 if not success:
-                    build.status = "failed"
-                    build.error = "빌드 실패"
-                    db.commit()
+                    _mark_failed(db, build, record, "빌드 실패")
                     # 로그가 최종본으로 확정된 뒤(위 _finalize_build_artifacts) 진단.
                     _stamp_finished()  # 진단 시간이 빌드 소요시간에 섞이지 않게 먼저 마감
                     _attach_diagnosis(db, build, record, diagnose.build_failure)
@@ -819,10 +846,9 @@ async def _run_build(
             if ready:
                 record.deploy_ready_at = datetime.now(timezone.utc)  # rollout 완료 = 사용자 대기 종료
                 build.status = "running"
+                db.commit()
             else:
-                build.status = "failed"
-                build.error = "Pod 시작 실패 (타임아웃)"
-            db.commit()
+                _mark_failed(db, build, record, "Pod 시작 실패 (타임아웃)")
 
             # early-trigger reap: 배포 판정이 끝났다. 뒤에서 돌던 Job(cache export)을 회수한다.
             # ★ 델타2 — Job이 실패해도 build.status를 덮지 않는다. push 마커를 봤으니 이미지는
@@ -864,7 +890,10 @@ async def _run_build(
             if build.status != "cancelled":
                 build.status = "failed"
                 build.error = f"오케스트레이션 에러: {e}"
-                db.commit()
+            # 실패를 표시한 뒤 진단까지 못 가고 예외로 빠진 경우 — "분석 중"을 닫는다.
+            if build.ai_status == "pending":
+                build.ai_status = "done"
+            db.commit()
         finally:
             # early-trigger: 조기 return·예외로 tail/job task가 아직 살아있으면 정리.
             # stop_tail로 tailer를 깨우고 남은 task는 cancel — 이 스레드의 asyncio.run이

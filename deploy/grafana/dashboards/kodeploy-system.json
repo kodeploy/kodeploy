@@ -19,22 +19,22 @@
         "name": "price_in",
         "type": "constant",
         "hide": 2,
-        "label": "입력 100만토큰당 USD (모델별)",
-        "query": "CASE WHEN llm_model LIKE 'claude-opus%' THEN 15 WHEN llm_model LIKE 'claude-sonnet%' THEN 3 WHEN llm_model LIKE 'claude-fable%' THEN 1 ELSE 3 END",
+        "label": "입력 1K토큰당 크레딧 (게이트웨이 단가표, 모델 ID 정확 일치)",
+        "query": "CASE llm_model WHEN 'gpt-5.6-sol' THEN 4 WHEN 'gpt-5.6-terra' THEN 2 WHEN 'gpt-5.6-luna' THEN 0.2 WHEN 'gpt-5.5' THEN 5 WHEN 'claude-fable-5-1' THEN 10 WHEN 'claude-fable-5' THEN 10 WHEN 'claude-opus-5' THEN 5 WHEN 'claude-opus-4-8' THEN 5 WHEN 'claude-sonnet-5' THEN 2 WHEN 'claude-haiku-4-5-20251001' THEN 1 WHEN 'claude-sonnet-4-6' THEN 3 END",
         "current": {
-          "text": "CASE WHEN llm_model LIKE 'claude-opus%' THEN 15 WHEN llm_model LIKE 'claude-sonnet%' THEN 3 WHEN llm_model LIKE 'claude-fable%' THEN 1 ELSE 3 END",
-          "value": "CASE WHEN llm_model LIKE 'claude-opus%' THEN 15 WHEN llm_model LIKE 'claude-sonnet%' THEN 3 WHEN llm_model LIKE 'claude-fable%' THEN 1 ELSE 3 END"
+          "text": "CASE llm_model WHEN 'gpt-5.6-sol' THEN 4 WHEN 'gpt-5.6-terra' THEN 2 WHEN 'gpt-5.6-luna' THEN 0.2 WHEN 'gpt-5.5' THEN 5 WHEN 'claude-fable-5-1' THEN 10 WHEN 'claude-fable-5' THEN 10 WHEN 'claude-opus-5' THEN 5 WHEN 'claude-opus-4-8' THEN 5 WHEN 'claude-sonnet-5' THEN 2 WHEN 'claude-haiku-4-5-20251001' THEN 1 WHEN 'claude-sonnet-4-6' THEN 3 END",
+          "value": "CASE llm_model WHEN 'gpt-5.6-sol' THEN 4 WHEN 'gpt-5.6-terra' THEN 2 WHEN 'gpt-5.6-luna' THEN 0.2 WHEN 'gpt-5.5' THEN 5 WHEN 'claude-fable-5-1' THEN 10 WHEN 'claude-fable-5' THEN 10 WHEN 'claude-opus-5' THEN 5 WHEN 'claude-opus-4-8' THEN 5 WHEN 'claude-sonnet-5' THEN 2 WHEN 'claude-haiku-4-5-20251001' THEN 1 WHEN 'claude-sonnet-4-6' THEN 3 END"
         }
       },
       {
         "name": "price_out",
         "type": "constant",
         "hide": 2,
-        "label": "출력 100만토큰당 USD (모델별)",
-        "query": "CASE WHEN llm_model LIKE 'claude-opus%' THEN 75 WHEN llm_model LIKE 'claude-sonnet%' THEN 15 WHEN llm_model LIKE 'claude-fable%' THEN 5 ELSE 15 END",
+        "label": "출력 1K토큰당 크레딧 (게이트웨이 단가표, 모델 ID 정확 일치)",
+        "query": "CASE llm_model WHEN 'gpt-5.6-sol' THEN 20 WHEN 'gpt-5.6-terra' THEN 12 WHEN 'gpt-5.6-luna' THEN 1.2 WHEN 'gpt-5.5' THEN 30 WHEN 'claude-fable-5-1' THEN 50 WHEN 'claude-fable-5' THEN 50 WHEN 'claude-opus-5' THEN 25 WHEN 'claude-opus-4-8' THEN 25 WHEN 'claude-sonnet-5' THEN 10 WHEN 'claude-haiku-4-5-20251001' THEN 5 WHEN 'claude-sonnet-4-6' THEN 15 END",
         "current": {
-          "text": "CASE WHEN llm_model LIKE 'claude-opus%' THEN 75 WHEN llm_model LIKE 'claude-sonnet%' THEN 15 WHEN llm_model LIKE 'claude-fable%' THEN 5 ELSE 15 END",
-          "value": "CASE WHEN llm_model LIKE 'claude-opus%' THEN 75 WHEN llm_model LIKE 'claude-sonnet%' THEN 15 WHEN llm_model LIKE 'claude-fable%' THEN 5 ELSE 15 END"
+          "text": "CASE llm_model WHEN 'gpt-5.6-sol' THEN 20 WHEN 'gpt-5.6-terra' THEN 12 WHEN 'gpt-5.6-luna' THEN 1.2 WHEN 'gpt-5.5' THEN 30 WHEN 'claude-fable-5-1' THEN 50 WHEN 'claude-fable-5' THEN 50 WHEN 'claude-opus-5' THEN 25 WHEN 'claude-opus-4-8' THEN 25 WHEN 'claude-sonnet-5' THEN 10 WHEN 'claude-haiku-4-5-20251001' THEN 5 WHEN 'claude-sonnet-4-6' THEN 15 END",
+          "value": "CASE llm_model WHEN 'gpt-5.6-sol' THEN 20 WHEN 'gpt-5.6-terra' THEN 12 WHEN 'gpt-5.6-luna' THEN 1.2 WHEN 'gpt-5.5' THEN 30 WHEN 'claude-fable-5-1' THEN 50 WHEN 'claude-fable-5' THEN 50 WHEN 'claude-opus-5' THEN 25 WHEN 'claude-opus-4-8' THEN 25 WHEN 'claude-sonnet-5' THEN 10 WHEN 'claude-haiku-4-5-20251001' THEN 5 WHEN 'claude-sonnet-4-6' THEN 15 END"
         }
       },
       {
@@ -42,10 +42,10 @@
         "type": "constant",
         "hide": 2,
         "label": "단가가 등록된 모델 조건",
-        "query": "(llm_model LIKE 'claude-opus%' OR llm_model LIKE 'claude-sonnet%' OR llm_model LIKE 'claude-fable%')",
+        "query": "(llm_model IN ('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-6'))",
         "current": {
-          "text": "(llm_model LIKE 'claude-opus%' OR llm_model LIKE 'claude-sonnet%' OR llm_model LIKE 'claude-fable%')",
-          "value": "(llm_model LIKE 'claude-opus%' OR llm_model LIKE 'claude-sonnet%' OR llm_model LIKE 'claude-fable%')"
+          "text": "(llm_model IN ('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-6'))",
+          "value": "(llm_model IN ('gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'claude-fable-5-1', 'claude-fable-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-4-6'))"
         }
       },
       {
@@ -693,7 +693,7 @@
     {
       "id": 12,
       "type": "stat",
-      "title": "추정 비용 (USD)",
+      "title": "추정 비용 (크레딧)",
       "description": "행마다 그 호출에 쓰인 모델의 단가를 곱해 더한다. 합계 토큰에 단가 하나를 곱하면 모델을 갈아탄 구간의 과거 비용까지 새 단가로 계산돼 조용히 틀어진다. 단가는 대시보드 변수 price_in / price_out.",
       "gridPos": {
         "x": 8,
@@ -703,8 +703,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
-          "decimals": 3
+          "unit": "suffix: 크레딧",
+          "decimals": 1
         },
         "overrides": []
       },
@@ -717,7 +717,7 @@
           "refId": "A",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ROUND(SUM(COALESCE(llm_prompt_tokens,0)/1000000.0*${price_in:raw} + COALESCE(llm_completion_tokens,0)/1000000.0*${price_out:raw}), 4) AS value FROM build_records WHERE llm_outcome IS NOT NULL AND $__timeFilter(started_at)"
+          "rawSql": "SELECT ROUND(SUM(COALESCE(llm_prompt_tokens,0)/1000.0*${price_in:raw} + COALESCE(llm_completion_tokens,0)/1000.0*${price_out:raw}), 4) AS value FROM build_records WHERE llm_outcome IS NOT NULL AND $__timeFilter(started_at)"
         }
       ]
     },
@@ -957,8 +957,8 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyUSD",
-          "decimals": 5
+          "unit": "suffix: 크레딧",
+          "decimals": 2
         },
         "overrides": []
       },
@@ -971,7 +971,7 @@
           "refId": "A",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT ROUND(SUM(COALESCE(llm_prompt_tokens,0)/1000000.0*${price_in:raw} + COALESCE(llm_completion_tokens,0)/1000000.0*${price_out:raw}) / NULLIF(COUNT(*),0), 5) AS value FROM build_records WHERE llm_outcome IS NOT NULL AND $__timeFilter(started_at)"
+          "rawSql": "SELECT ROUND(SUM(COALESCE(llm_prompt_tokens,0)/1000.0*${price_in:raw} + COALESCE(llm_completion_tokens,0)/1000.0*${price_out:raw}) / NULLIF(COUNT(*),0), 5) AS value FROM build_records WHERE llm_outcome IS NOT NULL AND $__timeFilter(started_at)"
         }
       ]
     },
@@ -979,7 +979,7 @@
       "id": 43,
       "type": "stat",
       "title": "단가 미등록 모델",
-      "description": "price_in/price_out에 WHEN 절이 없는 모델의 수. 0이 아니면 그 호출들은 ELSE 단가(sonnet 기준)로 계산되고 있다 = 비용 숫자가 틀렸다. 모델을 갈아탄 뒤 여기가 먼저 켜진다.",
+      "description": "price_in/price_out에 없는 모델의 수. 0이 아니면 그 호출들은 단가가 NULL이라 비용 합계에서 빠져 있다 = 비용 숫자가 작게 나온다(값을 지어내 채우지 않는다). 모델을 갈아탄 뒤 여기가 먼저 켜진다 — 게이트웨이 단가표를 보고 대시보드 변수에 추가할 것. claude-sonnet-4-6은 게이트웨이에서 빠져 단가표에 없어 Anthropic 정가(3/15)로 넣었다.",
       "gridPos": {
         "x": 18,
         "y": 82,
@@ -1023,7 +1023,7 @@
           "refId": "A",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT COALESCE(u.login, '(삭제된 유저)') AS `유저`, COUNT(*) AS `호출`, SUM(COALESCE(r.llm_prompt_tokens,0) + COALESCE(r.llm_completion_tokens,0)) AS `토큰`, ROUND(SUM(COALESCE(r.llm_prompt_tokens,0)/1000000.0*${price_in:raw} + COALESCE(r.llm_completion_tokens,0)/1000000.0*${price_out:raw}), 4) AS `비용(USD)`, ROUND(100*SUM(r.llm_outcome='ok')/NULLIF(COUNT(*),0),1) AS `성공률(%)` FROM build_records r LEFT JOIN users u ON u.id = r.user_id WHERE r.llm_outcome IS NOT NULL AND $__timeFilter(r.started_at) GROUP BY u.login ORDER BY `토큰` DESC LIMIT 20"
+          "rawSql": "SELECT COALESCE(u.login, '(삭제된 유저)') AS `유저`, COUNT(*) AS `호출`, SUM(COALESCE(r.llm_prompt_tokens,0) + COALESCE(r.llm_completion_tokens,0)) AS `토큰`, ROUND(SUM(COALESCE(r.llm_prompt_tokens,0)/1000.0*${price_in:raw} + COALESCE(r.llm_completion_tokens,0)/1000.0*${price_out:raw}), 4) AS `비용(크레딧)`, ROUND(100*SUM(r.llm_outcome='ok')/NULLIF(COUNT(*),0),1) AS `성공률(%)` FROM build_records r LEFT JOIN users u ON u.id = r.user_id WHERE r.llm_outcome IS NOT NULL AND $__timeFilter(r.started_at) GROUP BY u.login ORDER BY `토큰` DESC LIMIT 20"
         }
       ]
     },
@@ -1047,7 +1047,7 @@
           "refId": "A",
           "format": "table",
           "rawQuery": true,
-          "rawSql": "SELECT llm_model AS `모델`, COUNT(*) AS `호출`, ROUND(100*SUM(llm_outcome='ok')/NULLIF(COUNT(*),0),1) AS `성공률(%)`, ROUND(100*SUM(llm_inconsistent=1)/NULLIF(SUM(llm_outcome='ok'),0),1) AS `자기모순(%)`, ROUND(AVG(llm_prompt_tokens)) AS `평균 입력`, ROUND(AVG(llm_completion_tokens)) AS `평균 출력`, ROUND(AVG(llm_latency_ms)) AS `평균 지연(ms)`, ROUND(SUM(COALESCE(llm_prompt_tokens,0)/1000000.0*${price_in:raw} + COALESCE(llm_completion_tokens,0)/1000000.0*${price_out:raw})/NULLIF(COUNT(*),0), 5) AS `건당 비용(USD)` FROM build_records WHERE llm_outcome IS NOT NULL AND $__timeFilter(started_at) GROUP BY llm_model ORDER BY `호출` DESC"
+          "rawSql": "SELECT llm_model AS `모델`, COUNT(*) AS `호출`, ROUND(100*SUM(llm_outcome='ok')/NULLIF(COUNT(*),0),1) AS `성공률(%)`, ROUND(100*SUM(llm_inconsistent=1)/NULLIF(SUM(llm_outcome='ok'),0),1) AS `자기모순(%)`, ROUND(AVG(llm_prompt_tokens)) AS `평균 입력`, ROUND(AVG(llm_completion_tokens)) AS `평균 출력`, ROUND(AVG(llm_latency_ms)) AS `평균 지연(ms)`, ROUND(SUM(COALESCE(llm_prompt_tokens,0)/1000.0*${price_in:raw} + COALESCE(llm_completion_tokens,0)/1000.0*${price_out:raw})/NULLIF(COUNT(*),0), 5) AS `건당 비용(크레딧)` FROM build_records WHERE llm_outcome IS NOT NULL AND $__timeFilter(started_at) GROUP BY llm_model ORDER BY `호출` DESC"
         }
       ]
     },

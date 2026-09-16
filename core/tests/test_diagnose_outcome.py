@@ -74,7 +74,15 @@ def _diagnosis(category="non_root", kodeploy_specific=True):
         evidence="EACCES: permission denied",
         cause_category=category,
         kodeploy_specific=kodeploy_specific,
-        fix_steps=["COPY --chown=1000:1000 로 바꾸세요"],
+        fix_steps=[
+            diagnose.FixStep(
+                text="쓰기 경로의 소유자를 UID 1000으로 바꾸세요.",
+                command="COPY --chown=1000:1000 . .",
+            )
+        ],
+        alternative_label="",
+        alternative_steps=[],
+        title="쓰기 경로의 소유권을 확인해 주세요.",
     )
 
 

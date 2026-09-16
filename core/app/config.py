@@ -91,7 +91,7 @@ LLM_BASE_URL = os.getenv(
 # 코드에 분기가 없다는 게 요점 — 바꾸고 rollout restart만 하면 된다.
 # ⚠️ 바꾼 뒤엔 실패 1건으로 구조화 출력(strict json_schema)이 그 모델에서도 통과하는지
 #    확인할 것. 제공자마다 지원 여부가 다르고, 안 되면 진단만 조용히 비게 된다.
-LLM_MODEL = os.getenv("LLM_MODEL", "claude-sonnet-4-6")
+LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5.6-terra")
 # 기본 OFF. EARLY_TRIGGER/BUILD_REGISTRY_CACHE와 같은 방침 — 실 로그로 몇 건 돌려
 # 진단 품질과 호출당 비용을 확인한 뒤 켠다. 켜도 실패한 빌드에서만 호출된다.
 AI_DIAGNOSE_ENABLED = os.getenv("AI_DIAGNOSE", "false").lower() == "true"

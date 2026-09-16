@@ -143,23 +143,33 @@ def test_at_budget_blocks_and_records(monkeypatch, used):
     assert db.commits == 1
 
 
-# --- _attach_diagnosis 통합: 예산 초과면 돈이 안 나간다 -------------------------
+# --- 파이프라인 통합: 예산 초과면 돈이 안 나간다 ---------------------------------
+# 부를지는 실패를 커밋하는 _mark_failed가 정하고(ai_status="pending"), _attach_diagnosis는
+# pending인 빌드만 부른다. 두 단계를 실제 순서대로 태워 "호출 자체가 없다"를 고정한다.
 
-def test_attach_diagnosis_skips_call_when_over_budget(monkeypatch):
+def _failed_build():
+    return SimpleNamespace(
+        build_id="deadbeef", status="deploying", error=None,
+        ai_analysis=None, ai_status=None,
+    )
+
+
+def test_over_budget_never_calls(monkeypatch):
     monkeypatch.setattr(diagnose, "is_configured", lambda: True)
     monkeypatch.setattr(config, "LLM_DAILY_TOKEN_BUDGET", 100)
     monkeypatch.setattr(pipeline, "_today_llm_tokens", lambda db: 500)
 
     called = []
-    build = SimpleNamespace(build_id="deadbeef", ai_analysis=None)
-    pipeline._attach_diagnosis(
-        _Db(), build, _Rec(), lambda b: called.append(b)
-    )
+    build, rec = _failed_build(), _Rec()
+    pipeline._mark_failed(_Db(), build, rec, "빌드 실패")
+    pipeline._attach_diagnosis(_Db(), build, rec, lambda b: called.append(b))
     assert called == []                           # ★ 호출 자체가 없어야 한다
     assert build.ai_analysis is None
+    assert build.ai_status is None                # 화면이 "분석 중"으로 기다리지 않는다
+    assert rec.llm_outcome == "budget_exceeded"
 
 
-def test_attach_diagnosis_calls_when_under_budget(monkeypatch):
+def test_under_budget_calls(monkeypatch):
     monkeypatch.setattr(diagnose, "is_configured", lambda: True)
     monkeypatch.setattr(config, "LLM_DAILY_TOKEN_BUDGET", 1000)
     monkeypatch.setattr(pipeline, "_today_llm_tokens", lambda db: 1)
@@ -174,12 +184,13 @@ def test_attach_diagnosis_calls_when_under_budget(monkeypatch):
             cause_category="oom", inconsistent=False,
         )
 
-    rec = _Rec()
-    build = SimpleNamespace(build_id="deadbeef", ai_analysis=None)
+    build, rec = _failed_build(), _Rec()
+    pipeline._mark_failed(_Db(), build, rec, "빌드 실패")
     pipeline._attach_diagnosis(_Db(), build, rec, _fn)
     assert len(called) == 1
     assert rec.llm_outcome == "ok"
     assert build.ai_analysis == '{"a":1}'         # 유저 대면 진단문도 붙는다
+    assert build.ai_status == "done"
 
 
 def test_unconfigured_never_queries_budget(monkeypatch):
@@ -190,5 +201,8 @@ def test_unconfigured_never_queries_budget(monkeypatch):
         raise AssertionError("예산 조회가 불렸다")
 
     monkeypatch.setattr(pipeline, "_today_llm_tokens", _boom)
-    build = SimpleNamespace(build_id="deadbeef", ai_analysis=None)
+    build = _failed_build()
+    pipeline._mark_failed(_Db(), build, _Rec(), "빌드 실패")
     pipeline._attach_diagnosis(_Db(), build, _Rec(), lambda b: None)
+    assert build.status == "failed"
+    assert build.ai_status is None

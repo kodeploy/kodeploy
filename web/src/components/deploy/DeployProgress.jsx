@@ -1,7 +1,7 @@
 // 배포 진행 화면 — /deploy/progress. design/라이트모드-시안/07_배포_진행.png 기준.
 //
 // 배포 폼에서 "배포"를 누른 직후 사용자가 머무는 자리다. 좌우 레일 없이 가운데 한 줄로
-// 세운다: 제목 → 4단계 트래커 → 빌드 로그(잉크 면) → 상태 한 줄 → 바닥 이동 링크.
+// 세운다: 제목 → 4단계 트래커 → 빌드 로그(잉크 면) → 상태 한 줄 → (실패면 AI 분석) → 바닥 이동 링크.
 // 앱 상세(AppLayout)처럼 탭·사이드가 없는 이유는 이 화면에 할 일이 "기다리기" 하나뿐이라서다.
 //
 // 진행률은 만들지 않는다. 백엔드가 주는 진행 정보는 build.status 하나뿐이고(schemas.StatusResponse),
@@ -13,12 +13,14 @@
 //
 // 폴링은 기존 규칙 그대로다 — 목록은 활성 빌드가 있으면 2.5s 아니면 8s(AppLayout과 동일),
 // 로그는 진행 중일 때만 1s(CommitListPanel.BuildLogsPanel / app/BuildDetail과 동일).
+// 실패한 뒤 AI 분석을 기다리는 동안(ai_status="pending")은 2s로 이어 가 분석 카드를 채운다.
 //
 // 치수 주석의 숫자는 시안 원본 px이고, 실제 값은 ÷1.3667(상단바 괘선 82÷60)한 CSS px이다.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Check, Maximize2, Minimize2, X } from "lucide-react";
 import { getBuild, listBuilds } from "../../api/deploy.js";
+import AiDiagnosis, { isDiagnosing } from "../app/AiDiagnosis.jsx";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import { parseDate } from "../../lib/format.js";
 
@@ -87,6 +89,7 @@ export default function DeployProgress() {
   // 이 화면이 지켜보는 동안 실제로 본 최고 단계. 실패 표시를 찍을 자리를 여기서만 가져온다.
   const [highWater, setHighWater] = useState(0);
   const logBoxRef = useRef(null);
+  const logPanelRef = useRef(null);
 
   const onAuthError = useCallback(
     (err) => {
@@ -98,6 +101,7 @@ export default function DeployProgress() {
   );
 
   const live = build ? ACTIVE_BUILD.has(build.status) : false;
+  const diagnosing = isDiagnosing(build);
 
   // ── 목록 폴링 — 대상 빌드를 고르고 상태를 따라간다 (활성 2.5s / 안정 8s) ──
   // ?build=<id>가 있으면 그것, 없으면 가장 최근 빌드. env_change 행은 빌드가 아니라
@@ -131,12 +135,12 @@ export default function DeployProgress() {
     };
   }, [authLoading, user?.id, wanted, onAuthError]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── 로그 폴링 — 진행 중일 때만 1초. 종료 상태가 되면 자연 정지한다. ──
+  // ── 로그 폴링 — 진행 중일 때만 1초. 종료 상태가 되면 자연 정지한다(AI 분석 대기 중이면 2초로 이어 간다). ──
   // 목록 폴링(2.5~8s)이 같은 build를 덮어쓰지만, 여기서 받은 스냅샷이 항상 더 최신이라
   // 로그가 되감기지 않는다(목록과 상세가 같은 StatusResponse다).
   const buildId = build?.build_id;
   useEffect(() => {
-    if (!buildId || !live) return;
+    if (!buildId || (!live && !diagnosing)) return;
     let cancelled = false;
     let timer;
     const tick = async () => {
@@ -145,17 +149,18 @@ export default function DeployProgress() {
         if (cancelled) return;
         setBuild(fresh);
         if (ACTIVE_BUILD.has(fresh.status)) timer = setTimeout(tick, 1000);
+        else if (isDiagnosing(fresh)) timer = setTimeout(tick, 2000);
       } catch (err) {
         if (cancelled || onAuthError(err)) return;
         timer = setTimeout(tick, 1000);
       }
     };
-    timer = setTimeout(tick, 1000);
+    timer = setTimeout(tick, live ? 1000 : 2000);
     return () => {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [buildId, live, onAuthError]);
+  }, [buildId, live, diagnosing, onAuthError]);
 
   // ── 경과 타이머 — 진행 중일 때만 1초마다 현재 시각을 갱신한다(끝나면 값이 굳는다) ──
   useEffect(() => {
@@ -204,7 +209,9 @@ export default function DeployProgress() {
   const lead = done
     ? "작업 공간에서 로그·터미널·데이터베이스를 바로 열 수 있어요."
     : failed
-      ? "빌드 로그에서 멈춘 지점을 확인할 수 있어요."
+      ? build?.ai_status || build?.ai_analysis
+        ? "빌드 로그와 아래 AI 분석에서 멈춘 원인을 확인할 수 있어요."
+        : "빌드 로그에서 멈춘 지점을 확인할 수 있어요."
       : "소스를 빌드하고 실행 환경을 준비합니다.";
 
   return (
@@ -253,8 +260,10 @@ export default function DeployProgress() {
 
       {/* ── 빌드 로그 — 잉크 면 (시안 x84-1452 y453-838: 헤더 50=36 + 본문 335=245) ── */}
       <div
+        ref={logPanelRef}
         style={{
           marginTop: 32,
+          scrollMarginTop: 24,
           borderRadius: 4,
           border: "1px solid var(--kd-border)",
           background: "var(--term-bg)",
@@ -308,6 +317,16 @@ export default function DeployProgress() {
         {error ? `상태를 불러오지 못했어요 - ${error}` : statusLine(build)}
       </p>
 
+      {/* ── AI 분석 — 실패하면 여기서 바로 원인을 본다(예전엔 배포 이력으로 한 번 더 이동해야 했다).
+          폭이 넓어 카드 안은 근거 로그 | 수정 방법 좌우 배치가 된다(.kd-diag-grid). ── */}
+      {failed && (
+        <AiDiagnosis
+          build={build}
+          onShowLogs={() => logPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
+          style={{ marginTop: 24 }}
+        />
+      )}
+
       {/* ── 바닥 — 좌 되돌아가기 / 우 다음 자리 (시안 버튼 x1240-1452 y913-967 = 156×40) ── */}
       <div className="flex items-center justify-between" style={{ marginTop: 24 }}>
         <Link
@@ -318,15 +337,19 @@ export default function DeployProgress() {
           대시보드로
         </Link>
 
-        {/* 실패는 작업 공간이 아니라 배포 이력으로 보낸다 — 거기서 로그·AI 진단을 본다. */}
+        {/* 실패 — 원인은 위 AI 분석에서 봤으니 고친 뒤 다시 배포하는 자리.
+            재배포 화면(/deploy)은 마지막 빌드 설정을 채워 열린다(사이드바 "재배포"와 같은 목적지). */}
         {failed ? (
-          <Link
-            to="/dashboard/history"
-            className="kd-btn-secondary kd-btn-md inline-flex items-center"
-            style={{ gap: 8 }}
-          >
-            배포 이력 보기
-          </Link>
+          <div className="flex items-center flex-wrap justify-end" style={{ gap: "8px 16px" }}>
+            <span className="kd-t-caption text-fg-3">수정 사항을 반영한 뒤 다시 배포해 주세요.</span>
+            <Link
+              to="/deploy"
+              className="kd-btn-primary kd-btn-md inline-flex items-center no-underline"
+              style={{ gap: 8 }}
+            >
+              재배포
+            </Link>
+          </div>
         ) : done ? (
           <Link
             to="/dashboard/workspace"

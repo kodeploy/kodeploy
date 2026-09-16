@@ -599,6 +599,34 @@ textarea.kd-input { height: auto; padding-block: 10px; line-height: 1.6; resize:
   }
 }
 
+/* AI 분석 카드 (app/AiDiagnosis.jsx) — 근거 로그 | 수정 방법.
+   카드 자기 폭으로 배치를 고른다: 배포 진행 화면처럼 넓으면 좌우(가운데 세로 괘선),
+   배포 이력 오른쪽 칸(~570px)처럼 좁으면 위아래. 좌우로 두면 한 단이 280px 남짓이라
+   명령어 박스가 줄바꿈으로 깨진다 — 그래서 문턱을 680으로 높게 둔다. */
+.kd-diag { container-type: inline-size; }
+.kd-diag-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 20px;
+}
+@container (min-width: 680px) {
+  .kd-diag-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0; }
+  .kd-diag-grid > .kd-diag-col:first-child:not(:last-child) { padding-right: 24px; }
+  .kd-diag-grid > .kd-diag-col + .kd-diag-col {
+    padding-left: 24px;
+    border-left: 1px solid var(--kd-border);
+  }
+}
+/* 근거 로그·명령어 상자 — 카드 면보다 한 단 내려앉은 바탕 */
+.kd-diag-code {
+  padding: 10px 12px;
+  border-radius: var(--kd-radius);
+  border: 1px solid var(--kd-border);
+  background: var(--kd-panel);
+  color: var(--fg-1);
+}
+pre.kd-diag-code { white-space: pre-wrap; word-break: break-all; margin-bottom: 0; }
+
 /* JS onMouseEnter 없이 테마 대응 hover 표면 (잉크/종이 반투명 자동 전환) */
 /* ──────────────────────────────────────────────────────────────────────────
    선택 표시 — 대시보드의 메뉴·행·탭이 한 규칙을 쓴다.

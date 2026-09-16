@@ -30,7 +30,8 @@ check_diagnose.py가 "계측기가 작동하는가"(2케이스)를 봤다면, �
    그래서 스위프 인자를 따로 두고, 라벨(--label)로 실행을 구분해 기록한다.
 
 비용은 토큰 × 단가로 계산한다(컬럼으로 저장하지 않는 운영 방침과 동일). 단가는
---usd-in/--usd-out으로 넘기며, 기본값은 현재 모델(claude-sonnet-4-6) 기준이다.
+--usd-in/--usd-out으로 넘기며, 기본값은 현재 모델(gpt-5.6-terra) 기준이다. 단위는 게이트웨이 크레딧 단가표의
+"1K 토큰당 크레딧"을 그대로 넘긴다(예: terra 2 / 12) — 출력의 "$" 표기는 크레딧으로 읽을 것.
 """
 
 import argparse
@@ -456,6 +457,32 @@ def _patch_k8s(case: dict) -> None:
     }
 
 
+def shape_issues(parsed: dict) -> list[str]:
+    """화면이 기대는 모양 규칙 위반 목록. 통과 판정(범주·sentinel)과 별개로 센다.
+
+    스키마는 타입만 강제하고 개수·짝 규칙(minItems 등)은 디코딩이 보장하지 않는다 —
+    프롬프트로만 요구한 규칙이라 실제로 지켜지는지 따로 재야 한다.
+    """
+    issues = []
+    steps = parsed["fix_steps"]
+    alt_label, alt_steps = parsed["alternative_label"], parsed["alternative_steps"]
+    if not 1 <= len(steps) <= 3:
+        issues.append(f"fix_steps {len(steps)}개")
+    if bool(alt_label.strip()) != bool(alt_steps):
+        issues.append("대안 이름/단계 짝 어긋남")
+    if len(alt_steps) > 2:
+        issues.append(f"alternative_steps {len(alt_steps)}개")
+    if not parsed["title"].strip():
+        issues.append("title 비어 있음")
+    for s in steps + alt_steps:
+        cmd = s["command"].strip()
+        # 명령어를 따로 뺐는데 문장에도 통째로 남아 있으면 화면에 두 번 보인다.
+        if cmd and "\n" not in cmd and cmd in s["text"]:
+            issues.append("command가 text에 중복")
+            break
+    return issues
+
+
 def run_case(case: dict) -> dict:
     _patch_k8s(case)
     build = _fake_build(case)
@@ -478,6 +505,7 @@ def run_case(case: dict) -> dict:
         "forbid_hit": None,
         "passed": False,
         "cause": None,
+        "shape_issues": None,
     }
     if result.outcome != "ok":
         return row
@@ -490,7 +518,11 @@ def run_case(case: dict) -> dict:
     row["sentinel_hit"] = hits
     row["forbid_hit"] = bad
     row["cause"] = parsed["cause"]
+    row["title"] = parsed["title"]
     row["fix_steps"] = parsed["fix_steps"]
+    row["alternative_label"] = parsed["alternative_label"]
+    row["alternative_steps"] = parsed["alternative_steps"]
+    row["shape_issues"] = shape_issues(parsed)
     # 통과 = 범주 일치 + (sentinel 요구가 있으면 하나 이상 적중) + 금지 문구 없음
     row["passed"] = (
         row["cat_ok"] and (not case["sentinels"] or bool(hits)) and not bad
@@ -512,6 +544,9 @@ def summarize(rows: list[dict], usd_in: float, usd_out: float) -> dict:
         "passed": sum(1 for r in rows if r["passed"]),
         "cat_ok": sum(1 for r in rows if r["cat_ok"]),
         "inconsistent": sum(1 for r in ok if r["inconsistent"]),
+        "shape_bad": sum(1 for r in ok if r["shape_issues"]),
+        "with_command": sum(1 for r in ok if any(s["command"].strip() for s in r["fix_steps"])),
+        "with_alternative": sum(1 for r in ok if r["alternative_steps"]),
         "prompt_tokens": p_in,
         "completion_tokens": p_out,
         "cost_usd": cost,
@@ -528,8 +563,8 @@ def main() -> int:
     ap.add_argument("--label", default=None, help="실행 라벨 (기본: 모델명+절단예산)")
     ap.add_argument("--tail-chars", type=int, default=None, help="로그 절단 꼬리 예산 override")
     ap.add_argument("--head-chars", type=int, default=None, help="로그 절단 머리 예산 override")
-    ap.add_argument("--usd-in", type=float, default=3.0, help="입력 100만토큰당 USD")
-    ap.add_argument("--usd-out", type=float, default=15.0, help="출력 100만토큰당 USD")
+    ap.add_argument("--usd-in", type=float, default=2.0, help="입력 단가 (게이트웨이 크레딧/1K 토큰 = USD/1M 자리에 그대로)")
+    ap.add_argument("--usd-out", type=float, default=12.0, help="출력 단가 (게이트웨이 크레딧/1K 토큰 = USD/1M 자리에 그대로)")
     ap.add_argument("--out", default=None, help="결과 JSON 저장 경로")
     ap.add_argument("--only", default=None, help="이름에 이 문자열이 든 케이스만")
     args = ap.parse_args()
@@ -575,14 +610,18 @@ def main() -> int:
             detail += f" ⚠금지문구 {row['forbid_hit']}"
         if case["sentinels"] and not row["sentinel_hit"]:
             detail += " ⚠sentinel 없음"
+        if row["shape_issues"]:
+            detail += f" ⚠모양 {row['shape_issues']}"
         print(f"{detail}  |  {tok} tok  |  {row['latency_ms'] / 1000:.1f}s")
-        print(f"       → {row['cause']}")
+        print(f"       → {row['title']}  /  {row['cause']}")
 
     s = summarize(rows, args.usd_in, args.usd_out)
     print("\n" + "=" * 72)
     print(f"통과          : {s['passed']}/{s['cases']}   (범주 일치 {s['cat_ok']}/{s['cases']})")
     print(f"호출 성공      : {s['call_ok']}/{s['cases']}")
     print(f"자기모순       : {s['inconsistent']}/{s['call_ok']}")
+    print(f"모양 위반      : {s['shape_bad']}/{s['call_ok']}")
+    print(f"명령어 포함    : {s['with_command']}/{s['call_ok']}   대안 포함 {s['with_alternative']}/{s['call_ok']}")
     print(f"토큰          : 입력 {s['prompt_tokens']:,} / 출력 {s['completion_tokens']:,}")
     print(f"비용          : ${s['cost_usd']:.4f}  (건당 ${s['cost_per_call_usd']:.5f})")
     print(f"지연          : 평균 {s['latency_avg_ms']}ms / p95 {s['latency_p95_ms']}ms")

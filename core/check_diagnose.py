@@ -142,10 +142,15 @@ def main() -> int:
         print(f"  sentinel    : {hit or '✗ 하나도 없음'}")
         if c.get("forbid"):
             print(f"  금지 문구    : {bad and '✗ ' + str(bad) or '✓ 없음'}")
-        print(f"\n  원인: {d['cause']}")
+        print(f"\n  제목: {d['title']}")
+        print(f"  원인: {d['cause']}")
         print(f"  근거: {d['evidence']}")
         for i, s in enumerate(d["fix_steps"], 1):
-            print(f"    {i}. {s}")
+            print(f"    {i}. {s['text']}" + (f"\n       $ {s['command']}" if s["command"] else ""))
+        if d["alternative_label"]:
+            print(f"  대안: {d['alternative_label']}")
+            for i, s in enumerate(d["alternative_steps"], 1):
+                print(f"    {i}. {s['text']}" + (f"\n       $ {s['command']}" if s["command"] else ""))
         print()
         if not ok_cat or not hit or bad:
             failed += 1
