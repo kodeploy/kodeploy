@@ -198,6 +198,25 @@ def delete_storage_object(user: User, key: str) -> None:
         raise ValueError(str(e))
 
 
+# 앱 버킷 객체 1개의 본문을 텍스트로 — 미리보기 전용. router가 호출.
+# 브라우저가 공개 URL로 직접 읽지 않고 core를 거치는 이유: R2 공개 버킷에는 CORS가 걸려
+# 있지 않아 다른 오리진(kodeploy.com)의 fetch가 막힌다. 미리보기를 위해 버킷에 CORS를
+# 여는 것보다, 이미 인가를 거치는 core가 자기 자격증명으로 읽어 넘기는 쪽이 노출면이 작다.
+def read_storage_object(user: User, key: str) -> dict:
+    if not user.app_name:
+        raise ValueError("배포된 앱이 없습니다")
+    if not key:
+        raise ValueError("파일 key가 필요합니다")
+    env = _read_storage_env(f"tenant-{user.id.hex[:8]}")
+    if not env:
+        raise ValueError("오브젝트 스토리지가 활성화돼 있지 않습니다")
+    try:
+        text, truncated = r2.get_object_text(env, key)
+    except r2.R2Error as e:
+        raise ValueError(str(e))
+    return {"key": key, "text": text, "truncated": truncated}
+
+
 # 현재 ns의 r2-secret 주석에서 R2 토큰 id 조회 (없으면 None). 정리/회전 시 사용.
 def _read_r2_token_id(ns: str) -> str | None:
     try:

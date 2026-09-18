@@ -6,6 +6,13 @@
 // 두 테마 모두 "잉크 면"이지만 기준이 반대다:
 //   라이트 — 흰 카드 위에 올라앉은 #242424 블록 (시안의 터미널 색)
 //   다크   — 카드(#1a1a18)보다 더 내려앉은 면으로 눌러 같은 위계를 유지
+// 터미널 글꼴 — 색과 같은 이유로 여기 둔다(xterm은 canvas 렌더라 CSS 클래스가 안 먹는다).
+// index.css의 .kd-t-code와 같은 스택이다: 화면에서 SQL을 다루는 자리(편집기·목록·오류·터미널)는
+// 한 글꼴로 보여야 한다. index.html이 이 웹폰트를 받아오는 이유도 "코드/터미널용"이다.
+// ⚠️ .kd-t-code의 font-family를 바꾸면 이 줄도 같이 바꿀 것 — 둘이 갈리면 터미널만 다른 글꼴이 된다.
+export const TERM_FONT_FAMILY =
+  '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+
 export function xtermTheme(theme) {
   if (theme === "dark") {
     return {

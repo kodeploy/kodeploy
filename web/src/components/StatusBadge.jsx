@@ -22,8 +22,18 @@ export const STYLES_ENV = {
   failed:  { color: "var(--dot-err)", label: "실패" },
 };
 
+// DB 콘솔 "최근 실행" row용 — 한 번의 SQL 실행이 어떻게 끝났나.
+// unknown(네트워크 끊김·5xx 등 응답 자체를 못 받음)은 실패와 다르다: 서버에서 돌았는지
+// 아닌지 모르는 상태라 색 신호를 주지 않고 중립 회색 dot으로 둔다.
+export const STYLES_QUERY = {
+  ok:      { color: "var(--dot-ok)", label: "성공" },
+  error:   { color: "var(--dot-err)", label: "실패" },
+  unknown: { color: "var(--fg-4)", label: "결과 확인 불가" },
+};
+
 export default function StatusBadge({ status, kind = "build" }) {
-  const styles = kind === "env" ? STYLES_ENV : STYLES_BUILD;
+  const styles =
+    kind === "env" ? STYLES_ENV : kind === "query" ? STYLES_QUERY : STYLES_BUILD;
   const s = styles[status] || { color: "var(--fg-3)", label: status };
   return (
     <span

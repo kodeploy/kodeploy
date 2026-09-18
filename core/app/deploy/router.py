@@ -10,12 +10,12 @@ from datetime import datetime, timezone
 from app.auth.deps import get_current_user
 from app.auth.model import User
 from app.auth import github_app, service as auth_service
-from app.deploy import status
+from app.deploy import crud, status
 from app.deploy.build import github, pipeline, validation
 from app.deploy.console import dbquery, logs, metrics, snapshots, terminal
 from app.deploy.routing import hostnames
 from app.deploy.stack import env, resources
-from app.deploy.model import Build
+from app.deploy.model import Build, SavedQuery
 from app import config
 from app.deploy.schemas import (
     DbQueryRequest,
@@ -25,6 +25,9 @@ from app.deploy.schemas import (
     DomainRequest,
     EnvVarsRequest,
     EnvVarsResponse,
+    SavedQueryCreate,
+    SavedQueryOut,
+    SavedQueryUpdate,
     StatusResponse,
 )
 from app.shared.db import get_db
@@ -335,6 +338,125 @@ async def db_query(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# ── 저장된 쿼리 (DB 콘솔) ────────────────────────────────────────────────────
+# 저장 위치는 **플랫폼(관리) DB**다 — 유저 앱 DB에 관리 테이블을 만들지 않는다.
+# /{build_id}보다 위에 등록해야 "app"이 build_id로 잡히지 않음 (아래 storage와 동일).
+
+# 한 스코프가 들 수 있는 쿼리 수 상한. 무한정 쌓이면 목록 응답과 관리 DB가 같이 커진다.
+MAX_SAVED_QUERIES = 100
+
+
+# DB 콘솔의 스코프 — (앱, DB 종류). 클라이언트 입력을 전혀 받지 않고 세션 user와 최신
+# 서버 빌드에서만 뽑는다. 저장된 쿼리의 모든 핸들러가 첫 줄에서 이걸 부르고, 그 값이
+# 그대로 WHERE에 들어가므로 "남의 앱/DB 칸"이 애초에 표현 불가능하다.
+def _db_scope(db: Session, user: User) -> tuple[str, str]:
+    if not user.app_name:
+        raise HTTPException(status_code=400, detail="배포된 앱이 없습니다")
+    build = crud.get_server_build(db, user.id)
+    db_type = (build.db_type if build else None) or "none"
+    if db_type == "none":
+        raise HTTPException(
+            status_code=400,
+            detail="DB가 활성화돼 있지 않습니다 — DB(MySQL/PostgreSQL)를 추가한 앱에서만 쓸 수 있습니다.",
+        )
+    return user.app_name, db_type
+
+
+def _to_saved_query(row: SavedQuery) -> SavedQueryOut:
+    return SavedQueryOut(
+        id=row.id,
+        name=row.name,
+        sql=row.sql_text,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+# 이름·SQL 정규화 + 검증. SQL 길이 상한은 실행 경로(dbquery)와 같은 값을 쓴다 —
+# 저장은 되는데 실행은 못 하는 쿼리가 생기지 않게.
+def _clean_name(name: str) -> str:
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="쿼리 이름을 입력해주세요")
+    if len(name) > 100:
+        raise HTTPException(status_code=400, detail="쿼리 이름이 너무 깁니다 (최대 100자)")
+    return name
+
+
+def _clean_sql(sql: str) -> str:
+    sql = (sql or "").strip()
+    if not sql:
+        raise HTTPException(status_code=400, detail="SQL을 입력해주세요")
+    if len(sql) > dbquery.MAX_SQL_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"SQL이 너무 깁니다 (최대 {dbquery.MAX_SQL_LENGTH}자)",
+        )
+    return sql
+
+
+@router.get("/app/db/queries")
+def saved_queries_list(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[SavedQueryOut]:
+    app_name, db_type = _db_scope(db, user)
+    rows = crud.list_saved_queries(db, user.id, app_name, db_type)
+    return [_to_saved_query(r) for r in rows]
+
+
+@router.post("/app/db/queries")
+def saved_queries_create(
+    req: SavedQueryCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SavedQueryOut:
+    app_name, db_type = _db_scope(db, user)
+    name, sql = _clean_name(req.name), _clean_sql(req.sql)
+    if crud.count_saved_queries(db, user.id, app_name, db_type) >= MAX_SAVED_QUERIES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"저장한 쿼리가 너무 많습니다 (최대 {MAX_SAVED_QUERIES}개) — 쓰지 않는 쿼리를 지워주세요",
+        )
+    row = crud.create_saved_query(
+        db, user_id=user.id, app_name=app_name, db_type=db_type, name=name, sql=sql,
+    )
+    return _to_saved_query(row)
+
+
+# 부분 수정 — 준 필드만 바뀐다. 스코프 밖 id는 404로 마스킹(존재 여부도 알려주지 않음).
+@router.patch("/app/db/queries/{query_id}")
+def saved_queries_update(
+    query_id: int,
+    req: SavedQueryUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SavedQueryOut:
+    app_name, db_type = _db_scope(db, user)
+    row = crud.get_saved_query(db, query_id, user.id, app_name, db_type)
+    if not row:
+        raise HTTPException(status_code=404, detail="저장된 쿼리를 찾을 수 없습니다")
+    name = _clean_name(req.name) if req.name is not None else None
+    sql = _clean_sql(req.sql) if req.sql is not None else None
+    if name is None and sql is None:
+        raise HTTPException(status_code=400, detail="바꿀 내용이 없습니다")
+    return _to_saved_query(crud.update_saved_query(db, row, name=name, sql=sql))
+
+
+@router.delete("/app/db/queries/{query_id}")
+def saved_queries_delete(
+    query_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    app_name, db_type = _db_scope(db, user)
+    row = crud.get_saved_query(db, query_id, user.id, app_name, db_type)
+    if not row:
+        raise HTTPException(status_code=404, detail="저장된 쿼리를 찾을 수 없습니다")
+    crud.delete_saved_query(db, row)
+    return {"status": "deleted"}
+
+
 # R2 오브젝트 목록 — 이미지 미리보기용 공개 URL 포함. ?token=으로 다음 페이지.
 # /{build_id} GET보다 위에 등록해야 "app"이 build_id로 잡히지 않음.
 @router.get("/app/storage/objects")
@@ -344,6 +466,18 @@ def storage_list(
 ) -> dict:
     try:
         return resources.list_storage_objects(user, token)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# R2 오브젝트 1개의 본문 (텍스트 미리보기 전용 — 앞부분만, 상한 초과분은 truncated).
+@router.get("/app/storage/object")
+def storage_read(
+    key: str,
+    user: User = Depends(get_current_user),
+) -> dict:
+    try:
+        return resources.read_storage_object(user, key)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

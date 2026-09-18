@@ -68,6 +68,28 @@ class DbQueryRequest(BaseModel):
     offset: int = 0
 
 
+# 저장된 쿼리 (DB 콘솔) — 스코프(user/app/db)는 **요청에 없다**. 세션 user와 최신 서버
+# 빌드에서만 서버가 뽑는다(router._db_scope). 클라이언트가 스코프를 말할 수 있으면
+# 남의 앱/DB 칸에 쓰거나 읽을 여지가 생기므로, 입력 스키마에 그 축을 두지 않는다.
+class SavedQueryCreate(BaseModel):
+    name: str
+    sql: str
+
+
+# 부분 수정 — 준 필드만 바뀐다 (이름만 고치는 경우가 대부분).
+class SavedQueryUpdate(BaseModel):
+    name: str | None = None
+    sql: str | None = None
+
+
+class SavedQueryOut(BaseModel):
+    id: int
+    name: str
+    sql: str                                             # 저장은 sql_text 컬럼 (예약어 회피)
+    created_at: datetime
+    updated_at: datetime
+
+
 # PUT /deploy/domain — 유저 커스텀 도메인 연결 (CF for SaaS custom hostname).
 class DomainRequest(BaseModel):
     domain: str

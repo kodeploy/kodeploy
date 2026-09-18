@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { LogOut, Menu, Moon, Sun, X } from "lucide-react";
+import { LogOut, Menu, X } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { APP_STATUS_STYLES } from "./AppStatusBadge.jsx";
 import Brand from "./Brand.jsx";
@@ -211,11 +211,35 @@ function ThemeToggle({ withLabel }) {
       aria-label={dark ? "라이트 모드로 전환" : "다크 모드로 전환"}
       title={dark ? "라이트 모드" : "다크 모드"}
       className="kd-t-body-s flex items-center gap-2.5 h-8 text-fg-2 hover:text-fg-1 transition-colors"
+      // 도형 자체가 잉크/종이 대비로 뜻을 만든다 — 회색으로 눌러 두면 "반쯤 찬 원"이 흐려진다.
+      // 그래서 글자(모바일 메뉴의 라벨)는 위 클래스대로 두고, 아이콘만 잉크로 세운다.
       style={{ paddingInline: withLabel ? 6 : 0, width: withLabel ? undefined : 32, justifyContent: withLabel ? undefined : "center" }}
     >
-      {dark ? <Sun size={18} strokeWidth={1.6} /> : <Moon size={18} strokeWidth={1.6} />}
+      <span style={{ color: "var(--accent)" }} className="inline-flex">
+        <ThemeGlyph />
+      </span>
       {withLabel && (dark ? "라이트 모드" : "다크 모드")}
     </button>
+  );
+}
+
+// 테마 아이콘 — 왼쪽 반원만 채운 원. 배경 없이 형태만.
+// 색을 테마별로 나누지 않는다: 채움과 테두리 모두 currentColor라 라이트에서는 잉크로,
+// 다크에서는 밝은 전경색으로 저절로 뒤집힌다(=시안의 두 장이 같은 도형 하나로 나온다).
+function ThemeGlyph({ size = 18 }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.6" />
+      {/* 위 꼭짓점에서 아래 꼭짓점까지 왼쪽으로 도는 호(sweep=0) + 닫기 = 왼쪽 반원 */}
+      <path d="M12 3 A9 9 0 0 0 12 21 Z" fill="currentColor" />
+    </svg>
   );
 }
 

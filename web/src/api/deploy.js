@@ -187,6 +187,14 @@ export function deleteStorageObject(key) {
   });
 }
 
+// R2 오브젝트 1개의 본문 (텍스트·JSON 미리보기 전용). 응답: { key, text, truncated }
+// 공개 URL로 브라우저가 직접 읽지 않고 core를 거친다 — R2 공개 버킷에 CORS가 없어서
+// 다른 오리진의 fetch가 막히고, 미리보기 하나 때문에 버킷에 CORS를 열 이유는 없다.
+// 상한(256KB)을 넘는 파일은 앞부분만 오고 truncated=true로 알려 준다.
+export function readStorageObject(key) {
+  return request(`/deploy/app/storage/object?key=${encodeURIComponent(key)}`);
+}
+
 // 현재 앱 Pod 상태 — 빌드와 독립. 응답: { status: "running" | "pending" | "crashing" | "missing" }
 export function getAppStatus() {
   return request("/deploy/app/status");
@@ -210,6 +218,32 @@ export function runDbQuery(sql, offset = 0) {
     method: "POST",
     body: JSON.stringify({ sql, offset }),
   });
+}
+
+// 저장된 쿼리 (DB 콘솔) — 플랫폼 DB에 보관. 유저 앱 DB는 건드리지 않는다.
+// 스코프(유저·앱·DB)는 **보내지 않는다** — 서버가 세션 user와 최신 서버 빌드에서 정한다.
+// 응답: [{ id, name, sql, created_at, updated_at }] (최신 저장순)
+export function listSavedQueries() {
+  return request("/deploy/app/db/queries");
+}
+
+export function createSavedQuery(name, sql) {
+  return request("/deploy/app/db/queries", {
+    method: "POST",
+    body: JSON.stringify({ name, sql }),
+  });
+}
+
+// 부분 수정 — 준 필드만 바뀐다 ({ name } 만 주면 SQL은 그대로).
+export function updateSavedQuery(id, fields) {
+  return request(`/deploy/app/db/queries/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify(fields),
+  });
+}
+
+export function deleteSavedQuery(id) {
+  return request(`/deploy/app/db/queries/${id}`, { method: "DELETE" });
 }
 
 // DB 스냅샷 다운로드 URL — 현재 앱 MySQL을 mysqldump → .sql.gz (cookie 인증).

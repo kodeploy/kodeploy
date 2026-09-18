@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
-import { xtermTheme } from "../../lib/xtermTheme.js";
+import { TERM_FONT_FAMILY, xtermTheme } from "../../lib/xtermTheme.js";
 import { useTheme } from "../../contexts/ThemeContext.jsx";
 
 const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
@@ -21,7 +21,7 @@ export default function DbTerminalPanel({ bare = false }) {
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 13,
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+      fontFamily: TERM_FONT_FAMILY,
       theme: xtermTheme(theme),
     });
     const fitAddon = new FitAddon();
@@ -30,6 +30,14 @@ export default function DbTerminalPanel({ bare = false }) {
     term.open(containerRef.current);
     fitAddon.fit();
     termRef.current = term;
+
+    // 웹폰트가 아직 안 붙은 상태로 open()하면 xterm이 대체 글꼴로 글자 폭을 재서 격자가
+    // 어긋난다(한 칸 폭이 실제와 다르면 mysql 표 테두리가 깨져 보인다). 폰트가 준비되면
+    // 한 번 더 재는 것으로 맞춘다 — dispose 뒤에 늦게 도착할 수 있어 플래그로 막는다.
+    let disposed = false;
+    document.fonts?.ready.then(() => {
+      if (!disposed) fitAddon.fit();
+    });
 
     const ws = new WebSocket(WS_URL);
 
@@ -56,6 +64,7 @@ export default function DbTerminalPanel({ bare = false }) {
     ro.observe(containerRef.current);
 
     return () => {
+      disposed = true;
       ro.disconnect();
       ws.close();
       term.dispose();

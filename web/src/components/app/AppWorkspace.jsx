@@ -37,32 +37,50 @@ import {
   Download,
   File as FileIcon,
   FileCode,
+  FileText,
   Image as ImageIcon,
   Layers,
   Maximize2,
   Minimize2,
   MoreHorizontal,
+  Pencil,
   Play,
   RefreshCw,
   Search,
   Table2,
   TerminalSquare,
   Trash2,
+  X,
 } from "lucide-react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import {
+  createSavedQuery,
+  deleteSavedQuery,
   deleteStorageObject,
   getAppLogs,
   getAppMetrics,
+  listSavedQueries,
   listStorageObjects,
+  readStorageObject,
   runDbQuery,
+  updateSavedQuery,
 } from "../../api/deploy.js";
 import { parseDate } from "../../lib/format.js";
-import { xtermTheme } from "../../lib/xtermTheme.js";
+import {
+  historyKey,
+  loadHistory,
+  makeEntry,
+  pushEntry,
+  saveHistory,
+} from "../../lib/sqlHistory.js";
+import { tokenizeSql } from "../../lib/sqlHighlight.js";
+import { TERM_FONT_FAMILY, xtermTheme } from "../../lib/xtermTheme.js";
+import { useAuth } from "../../contexts/AuthContext.jsx";
 import { useTheme } from "../../contexts/ThemeContext.jsx";
+import StatusBadge from "../StatusBadge.jsx";
 import DbTerminalPanel from "../panels/DbTerminalPanel.jsx";
 import MetricsView from "./MetricsView.jsx";
 
@@ -423,6 +441,30 @@ function nextSort(prev, key) {
   return null;
 }
 
+// 카드 안 툴바의 밑줄 탭 — 결과 영역 탭(조회 결과/최근 실행/저장된 쿼리)과 스토리지의
+// 목록/격자가 같이 쓴다.
+//
+// 밑줄을 흐름에서 빼는 것이 이 조각의 요점이다. 글자·간격·선을 한 덩어리로 세면 그 덩어리
+// (29px)의 가운데가 줄 가운데에 맞춰져 정작 글자는 위로 4.5px 밀린다. 줄에서 눈이 잡는 기준은
+// 글자지 밑줄이 아니므로, 밑줄은 글자 아래 6px에 얹히는 덤으로 두고 가운데 계산에서 뺀다
+// (화면 탭 줄이 "밑줄은 덤"으로 여백을 재는 것과 같은 규칙).
+function UnderlineTab({ label, count, active, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className="kd-t-body-s kd-pick-x flex items-center shrink-0"
+      style={{ color: "var(--fg-2)", fontWeight: 500 }}
+    >
+      <span className="relative inline-flex items-baseline gap-1.5 whitespace-nowrap">
+        <span className="kd-pick-name">{label}</span>
+        {count > 0 && <span className="kd-t-caption text-fg-3 tabular-nums">{count}</span>}
+        <span className="kd-pick-bar absolute" style={{ left: 0, top: "100%", marginTop: 6 }} />
+      </span>
+    </button>
+  );
+}
+
 function Centered({ children }) {
   return (
     <div className="flex-1 min-h-0 flex items-center justify-center" style={{ padding: 20 }}>
@@ -486,8 +528,7 @@ function WorkspaceTerminal({ wsPath, onStatus }) {
     const term = new Terminal({
       cursorBlink: true,
       fontSize: 13,
-      fontFamily:
-        'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+      fontFamily: TERM_FONT_FAMILY,
       theme: xtermTheme(theme),
     });
     const fitAddon = new FitAddon();
@@ -496,6 +537,14 @@ function WorkspaceTerminal({ wsPath, onStatus }) {
     term.open(containerRef.current);
     fitAddon.fit();
     termRef.current = term;
+
+    // 웹폰트가 아직 안 붙은 상태로 open()하면 xterm이 대체 글꼴로 글자 폭을 재서 격자가
+    // 어긋난다(한 칸 폭이 실제와 다르면 mysql 표 테두리가 깨져 보인다). 폰트가 준비되면
+    // 한 번 더 재는 것으로 맞춘다 — dispose 뒤에 늦게 도착할 수 있어 플래그로 막는다.
+    let disposed = false;
+    document.fonts?.ready.then(() => {
+      if (!disposed) fitAddon.fit();
+    });
 
     const ws = new WebSocket(WS_BASE + wsPath);
 
@@ -534,6 +583,7 @@ function WorkspaceTerminal({ wsPath, onStatus }) {
     ro.observe(containerRef.current);
 
     return () => {
+      disposed = true;
       ro.disconnect();
       ws.close();
       term.dispose();
@@ -885,7 +935,7 @@ function DatabaseView({ dbType }) {
       {/* 두 모드 모두 마운트 유지 — 터미널 WebSocket이 토글로 끊기지 않게 display로 전환
           (DbConsolePanel과 같은 이유). 터미널은 헤더 없는 bare 모드로 얹는다. */}
       <div className="flex-1 min-h-0 flex-col" style={{ display: mode === "table" ? "flex" : "none" }}>
-        <SqlConsole />
+        <SqlConsole dbType={dbType} />
       </div>
       <div className="flex-1 min-h-0 flex-col" style={{ display: mode === "terminal" ? "flex" : "none" }}>
         <DbTerminalPanel bare />
@@ -894,19 +944,108 @@ function DatabaseView({ dbType }) {
   );
 }
 
-function SqlConsole() {
+// 탭 3장 — 조회 결과 / 최근 실행 / 저장된 쿼리.
+// 탭은 "결과 영역을 무엇으로 채울까"만 고른다. 편집 중인 SQL과 마지막 결과는 SqlConsole의
+// state라 탭을 옮겨도 그대로 살아 있다(뷰 탭이 display로만 전환하는 것과 같은 이유).
+const SQL_TABS = [
+  { id: "result", label: "조회 결과" },
+  { id: "recent", label: "최근 실행" },
+  { id: "saved", label: "저장된 쿼리" },
+];
+
+// 목록 한 줄의 글자 위계 — 1줄은 그 행의 주인공, 2줄은 보조. 두 목록이 같은 쌍을 쓴다
+// (최근 실행 = SQL/실행요약, 저장된 쿼리 = 이름/SQL 미리보기).
+// kd-t-code는 코드 블록 기준의 12px이라 목록에서는 한 단 올려 쓴다 — 안 그러면 행의 주인공인
+// SQL이 제 보조정보(13px)보다 작아져 위아래가 뒤집혀 보인다.
+const ROW_PRIMARY = { fontSize: 14, lineHeight: 1.5 };
+const ROW_SECONDARY = { fontSize: 13, lineHeight: 1.5 };
+
+// 목록 한 줄에 넣을 SQL — 줄바꿈·들여쓰기를 한 칸 공백으로 눌러 한 줄로 만든다.
+// 원문은 title(툴팁)과 "불러오기"가 그대로 들고 있으므로 여기서 잃는 정보는 없다.
+const oneLine = (sql) => (sql || "").replace(/\s+/g, " ").trim();
+
+// request()가 만드는 "400 알 수 없는 컬럼: x"에서 상태코드 접두사를 떼고 한 줄로 줄인다.
+// 목록은 "왜 실패했나"를 한눈에 보여주는 자리고, 전문은 조회 결과 탭의 오류 칸에 있다.
+function shortError(msg) {
+  const text = oneLine(msg).replace(/^\d{3}\s+/, "");
+  return text.length > 90 ? `${text.slice(0, 90)}…` : text;
+}
+
+// "오늘 18:24" / "9월 14일 18:24" — 이력은 대부분 방금 것이라 오늘은 날짜를 생략한다.
+function historyTime(iso) {
+  const d = parseDate(iso);
+  if (!d) return "";
+  const hm = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  return sameDay ? `오늘 ${hm}` : `${d.getMonth() + 1}월 ${d.getDate()}일 ${hm}`;
+}
+
+function SqlConsole({ dbType }) {
+  const { user } = useAuth();
+
   const [sql, setSql] = useState("");
   const [result, setResult] = useState(null);
   const [executed, setExecuted] = useState(""); // 실행/페이징 중인 쿼리(편집과 분리)
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [filter, setFilter] = useState("");
+  const [filter, setFilter] = useState("");     // 조회 결과 내 검색
+  const [queryFilter, setQueryFilter] = useState(""); // 최근 실행·저장된 쿼리 검색
   const [tall, setTall] = useState(false);
   const [sort, setSort] = useState(null);
+  const [tab, setTab] = useState("result");
+  const [history, setHistory] = useState([]);
+  const [saved, setSaved] = useState([]);
+  const [savedError, setSavedError] = useState(null);
+  const [dialog, setDialog] = useState(null);   // 저장/수정 폼 또는 편집기 덮어쓰기 확인
   const gutterRef = useRef(null);
+  const editorRef = useRef(null);
+
+  // 최근 실행의 보관 스코프 — 유저·앱·DB. 저장된 쿼리의 서버측 스코프와 같은 세 축이라
+  // 계정을 바꾸거나 DB를 갈아탄 뒤 남의 이력이 보이지 않는다.
+  const scope = useMemo(
+    () => ({ userId: user?.id, appName: user?.app_name, dbType }),
+    [user?.id, user?.app_name, dbType],
+  );
+  const scopeKey = historyKey(scope);
+
+  // 스코프가 정해지거나 바뀌면 그 칸의 이력을 통째로 다시 읽는다.
+  useEffect(() => {
+    setHistory(loadHistory(scope));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scopeKey]);
+
+  // 저장된 쿼리 — 스코프는 서버가 정하므로 요청에 아무것도 싣지 않는다.
+  // DB 없는 앱이면 API가 400이라 아예 부르지 않고 빈 목록으로 둔다.
+  useEffect(() => {
+    if (!dbType || !user?.app_name) {
+      setSaved([]);
+      return;
+    }
+    let cancelled = false;
+    listSavedQueries()
+      .then((rows) => !cancelled && (setSaved(rows), setSavedError(null)))
+      .catch((e) => !cancelled && setSavedError(e.message || "저장된 쿼리를 불러오지 못했어요"));
+    return () => {
+      cancelled = true;
+    };
+  }, [dbType, user?.app_name, user?.id]);
+
+  // 실행 1건 기록. 저장은 setState 안에서 — 스코프가 바뀌는 순간과 엇갈려 옛 이력이
+  // 새 칸에 덮어써지는 일이 없도록, 항상 "지금 읽은 그 목록"과 함께 쓴다.
+  const record = (entry) =>
+    setHistory((prev) => {
+      const next = pushEntry(prev, entry);
+      saveHistory(scope, next);
+      return next;
+    });
 
   // 한 페이지 fetch — 실행(offset 0)과 페이지 이동이 공유한다.
-  const fetchPage = async (q, offset) => {
+  // log는 실행일 때만 true — 페이지 넘김은 같은 쿼리라 이력을 더럽히지 않는다.
+  const fetchPage = async (q, offset, { log = false } = {}) => {
     if (loading) return;
     setLoading(true);
     setError(null);
@@ -914,9 +1053,26 @@ function SqlConsole() {
       const res = await runDbQuery(q, offset);
       setResult(res);
       setExecuted(q);
+      if (log)
+        record(
+          makeEntry(q, {
+            outcome: "ok",
+            duration_ms: res.duration_ms,
+            row_count: res.row_count,
+          }),
+        );
     } catch (e) {
-      setError(e.message || "쿼리 실패");
+      const msg = e.message || "쿼리 실패";
+      setError(msg);
       setResult(null);
+      // 400은 백엔드가 "이 SQL이 실패했다"고 답한 것(QueryError). 그 외(응답 없음·5xx·
+      // 인증 만료)는 쿼리가 돌았는지조차 모르므로 실패라고 단정하지 않는다.
+      if (log)
+        record(
+          makeEntry(q, e.status === 400
+            ? { outcome: "error", error: msg }
+            : { outcome: "unknown", error: msg }),
+        );
     } finally {
       setLoading(false);
     }
@@ -927,7 +1083,59 @@ function SqlConsole() {
     if (!q || loading) return;
     setFilter(""); // 새 쿼리마다 결과 필터·정렬 초기화
     setSort(null);
-    fetchPage(q, 0);
+    setResult(null); // 옛 결과를 먼저 치운다 — 로딩 중에 지난 표가 지금 결과처럼 보이면 안 된다
+    setTab("result"); // 실행하면 결과를 보여 준다 (로딩·결과·오류 모두 이 탭)
+    fetchPage(q, 0, { log: true });
+  };
+
+  // 불러오기 — 편집기에 SQL을 **넣기만** 한다. 자동 실행하지 않는다.
+  const putIntoEditor = (nextSql) => {
+    setSql(nextSql);
+    setDialog(null);
+    editorRef.current?.focus();
+  };
+
+  // 편집기에 살아 있는 내용이 조용히 사라지지 않게. 지금 내용이 비었거나, 불러올 것과
+  // 같거나, 방금 실행해서 최근 실행에 남아 있는 것이면 되돌릴 수 있으니 바로 바꾼다.
+  const loadIntoEditor = (nextSql) => {
+    const incoming = (nextSql || "").trim();
+    const current = sql.trim();
+    if (!current || current === incoming || current === executed.trim()) {
+      putIntoEditor(incoming);
+      return;
+    }
+    setDialog({ kind: "replace", sql: incoming });
+  };
+
+  const openSave = (text) => {
+    const target = (text || "").trim();
+    if (!target) return;
+    setDialog({ kind: "create", name: "", sql: target });
+  };
+
+  // 저장/수정 제출 — 실패하면 다이얼로그를 열어 둔 채 오류를 보여 준다(성공처럼 닫지 않는다).
+  const submitDialog = async ({ name, sql: text }) => {
+    if (dialog.kind === "create") {
+      const row = await createSavedQuery(name, text);
+      setSaved((prev) => [row, ...prev]);
+      setSavedError(null);
+      setTab("saved"); // 방금 저장한 것이 목록에 있음을 바로 보여 준다
+    } else {
+      const row = await updateSavedQuery(dialog.id, { name, sql: text });
+      setSaved((prev) => prev.map((q) => (q.id === row.id ? row : q)));
+      setSavedError(null);
+    }
+    setDialog(null);
+  };
+
+  const removeSaved = async (id) => {
+    setSavedError(null);
+    try {
+      await deleteSavedQuery(id);
+      setSaved((prev) => prev.filter((q) => q.id !== id));
+    } catch (e) {
+      setSavedError(e.message || "삭제하지 못했어요");
+    }
   };
 
   const hasTable = result && result.columns && result.columns.length > 0;
@@ -957,9 +1165,27 @@ function SqlConsole() {
     });
   }, [filtered, sort]);
 
+  // 쿼리 검색 — 최근 실행은 SQL을, 저장된 쿼리는 이름과 SQL을 훑는다.
+  const needle = queryFilter.trim().toLowerCase();
+  const shownHistory = useMemo(
+    () => (needle ? history.filter((h) => h.sql.toLowerCase().includes(needle)) : history),
+    [history, needle],
+  );
+  const shownSaved = useMemo(
+    () =>
+      needle
+        ? saved.filter(
+            (q) =>
+              q.name.toLowerCase().includes(needle) || q.sql.toLowerCase().includes(needle),
+          )
+        : saved,
+    [saved, needle],
+  );
+
   // 여러 페이지짜리 결과인지 — 이전/다음 버튼 노출 조건
   const multiPage = hasTable && result.paginated && (result.offset > 0 || result.has_more);
   const lineCount = Math.max(5, sql.split("\n").length);
+  const counts = { result: 0, recent: history.length, saved: saved.length };
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -992,11 +1218,13 @@ function SqlConsole() {
           SQL
         </span>
 
-        <textarea
+        <SqlCodeInput
+          className="flex-1 min-w-0"
+          inputRef={editorRef}
           value={sql}
           onChange={(e) => setSql(e.target.value)}
-          onScroll={(e) => {
-            // 줄번호는 별도 박스라 스크롤을 따라가게 맞춰 준다
+          // 줄번호는 별도 박스라 스크롤을 따라가게 맞춰 준다
+          onScrollSync={(e) => {
             if (gutterRef.current) gutterRef.current.scrollTop = e.target.scrollTop;
           }}
           onKeyDown={(e) => {
@@ -1005,10 +1233,8 @@ function SqlConsole() {
               run();
             }
           }}
-          spellCheck={false}
           placeholder="SELECT id, title FROM posts ORDER BY id DESC LIMIT 5;"
-          className="kd-t-code flex-1 min-w-0 resize-none bg-transparent outline-none scroll-thin"
-          style={{ paddingTop: 30, paddingLeft: 14, paddingRight: 120, color: "var(--term-fg)" }}
+          pad={{ paddingTop: 30, paddingLeft: 14, paddingRight: 170 }}
         />
 
         <div className="absolute" style={{ right: 14, top: 10 }}>
@@ -1020,7 +1246,23 @@ function SqlConsole() {
           />
         </div>
 
+        {/* 저장은 실행 옆 — "지금 편집기에 있는 SQL"을 다루는 동작이라 같은 줄에 둔다.
+            잉크 면 위라 테두리 없이 글자만, 높이는 실행 버튼(32)과 맞춘다. */}
         <div className="absolute flex items-center gap-3" style={{ right: 14, bottom: 12 }}>
+          <button
+            onClick={() => openSave(sql)}
+            disabled={!sql.trim()}
+            className="kd-t-label inline-flex items-center"
+            style={{
+              height: 32,
+              paddingInline: 6,
+              color: "var(--term-fg)",
+              opacity: sql.trim() ? 0.9 : 0.4,
+              cursor: sql.trim() ? "pointer" : "default",
+            }}
+          >
+            저장
+          </button>
           <span className="kd-t-caption" style={{ color: "var(--term-fg)", opacity: 0.55 }}>
             Ctrl + Enter
           </span>
@@ -1035,24 +1277,41 @@ function SqlConsole() {
         </div>
       </div>
 
-      {/* ── 조회 결과 ── */}
+      {/* ── 결과 영역 탭 줄 ──
+          왼쪽은 탭, 오른쪽은 조회 결과의 요약(행 수·소요시간)과 검색.
+          요약은 조회 결과 탭에서만 — 저장된 쿼리 옆에 붙으면 저장 개수로 읽힌다. */}
       <div
-        className="shrink-0 flex items-center gap-3"
+        className="shrink-0 flex items-center gap-3 overflow-x-auto scroll-thin"
         style={{ height: 54, paddingInline: 20, borderBottom: "1px solid var(--kd-border)" }}
       >
-        <h2 className="kd-t-section text-fg-1 shrink-0">조회 결과</h2>
-        <span className="kd-t-body-s text-fg-3 shrink-0 tabular-nums">
-          {error
-            ? "실패"
-            : result
-              ? [
-                  filter.trim() ? `${rows.length} / ${result.row_count}행` : `${result.row_count}행`,
-                  `${result.duration_ms}ms`,
-                ].join(" · ")
-              : "—"}
-        </span>
+        <nav className="flex items-center gap-6 sm:gap-8 shrink-0">
+          {SQL_TABS.map((t) => (
+            <UnderlineTab
+              key={t.id}
+              label={t.label}
+              count={counts[t.id]}
+              active={tab === t.id}
+              onClick={() => setTab(t.id)}
+            />
+          ))}
+        </nav>
 
-        {multiPage && (
+        {tab === "result" && (
+          <span className="kd-t-caption text-fg-3 ml-auto shrink-0 tabular-nums">
+            {error
+              ? "실패"
+              : result
+                ? [
+                    filter.trim()
+                      ? `${rows.length} / ${result.row_count}행`
+                      : `${result.row_count}행`,
+                    `${result.duration_ms}ms`,
+                  ].join(" · ")
+                : "—"}
+          </span>
+        )}
+
+        {tab === "result" && multiPage && (
           <span className="flex items-center gap-1 shrink-0">
             <PageBtn
               icon={ChevronLeft}
@@ -1070,20 +1329,31 @@ function SqlConsole() {
           </span>
         )}
 
-        <div className="ml-auto relative shrink-0" style={{ width: 230 }}>
+        {/* 좁은 화면에서는 검색칸이 먼저 줄어든다(탭은 그대로 읽혀야 한다) */}
+        <div
+          className={`relative min-w-0 ${tab === "result" ? "" : "ml-auto"}`}
+          style={{ width: 230, minWidth: 140, flexShrink: 1 }}
+        >
           <Search size={15} strokeWidth={1.7} className="absolute text-fg-4" style={{ left: 10, top: 10 }} />
           <input
             className="kd-input"
             style={{ height: 36, paddingLeft: 32 }}
-            placeholder="결과 내 검색"
-            value={filter}
+            placeholder={tab === "result" ? "결과 내 검색" : "쿼리 검색"}
+            value={tab === "result" ? filter : queryFilter}
             spellCheck={false}
-            onChange={(e) => setFilter(e.target.value)}
+            onChange={(e) =>
+              tab === "result" ? setFilter(e.target.value) : setQueryFilter(e.target.value)
+            }
           />
         </div>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto scroll-thin">
+      {/* 세 탭 모두 마운트를 유지하고 display로만 전환 — 결과 표의 스크롤 위치와
+          입력 중인 검색어가 탭을 옮겨도 살아 있어야 한다(뷰 탭과 같은 규칙). */}
+      <div
+        className="flex-1 min-h-0 overflow-auto scroll-thin"
+        style={{ display: tab === "result" ? "block" : "none" }}
+      >
         {error ? (
           <pre
             className="kd-t-code whitespace-pre-wrap"
@@ -1097,6 +1367,8 @@ function SqlConsole() {
           >
             {error}
           </pre>
+        ) : loading && !result ? (
+          <Centered>실행 중…</Centered>
         ) : !result ? (
           <Centered>쿼리를 입력하고 실행하세요.</Centered>
         ) : !hasTable ? (
@@ -1158,7 +1430,483 @@ function SqlConsole() {
           </table>
         )}
       </div>
+
+      {/* ── 최근 실행 — 이 브라우저에만 남는 실행 흔적(최대 50개). 결과 데이터는 안 남는다 ── */}
+      <div
+        className="flex-1 min-h-0 overflow-auto scroll-thin"
+        style={{ display: tab === "recent" ? "block" : "none" }}
+      >
+        {shownHistory.length === 0 ? (
+          <Centered>
+            {needle
+              ? "검색 결과가 없어요."
+              : scopeKey
+                ? "실행한 쿼리가 없어요. 위에서 SQL을 실행하면 여기에 쌓여요."
+                : "실행 이력을 보관할 수 없는 상태예요."}
+          </Centered>
+        ) : (
+          shownHistory.map((h) => (
+            <QueryRow
+              key={h.id}
+              actions={
+                <>
+                  <button
+                    onClick={() => loadIntoEditor(h.sql)}
+                    className="kd-btn-secondary kd-btn-sm"
+                  >
+                    불러오기
+                  </button>
+                  <RowTextBtn onClick={() => openSave(h.sql)}>저장</RowTextBtn>
+                </>
+              }
+            >
+              <SqlPreview sql={h.sql} className="text-fg-1" style={ROW_PRIMARY} />
+              <div
+                className="kd-t-caption text-fg-3 flex items-center gap-2 min-w-0"
+                style={{ marginTop: 6 }}
+              >
+                <span className="tabular-nums shrink-0">{historyTime(h.at)}</span>
+                <MetaDot />
+                <StatusBadge status={h.outcome} kind="query" />
+                {h.outcome === "ok" && (
+                  <>
+                    <MetaDot />
+                    <span className="tabular-nums shrink-0">{h.row_count}행</span>
+                    <MetaDot />
+                    <span className="tabular-nums shrink-0">{h.duration_ms}ms</span>
+                  </>
+                )}
+                {h.error && (
+                  <>
+                    <MetaDot />
+                    <span className="truncate" title={h.error}>
+                      {shortError(h.error)}
+                    </span>
+                  </>
+                )}
+              </div>
+            </QueryRow>
+          ))
+        )}
+      </div>
+
+      {/* ── 저장된 쿼리 — 플랫폼 DB 보관(유저 앱 DB엔 아무것도 안 만든다) ── */}
+      <div
+        className="flex-1 min-h-0 overflow-auto scroll-thin"
+        style={{ display: tab === "saved" ? "block" : "none" }}
+      >
+        {savedError && (
+          <p
+            className="kd-t-body-s"
+            style={{ paddingInline: 20, paddingTop: 16, color: "var(--err-fg)" }}
+          >
+            {savedError}
+          </p>
+        )}
+        {shownSaved.length === 0 ? (
+          <Centered>
+            {needle
+              ? "검색 결과가 없어요."
+              : !dbType
+                ? "DB를 추가한 앱에서만 쿼리를 저장할 수 있어요."
+                : "저장한 쿼리가 없어요. 편집기의 저장으로 추가하세요."}
+          </Centered>
+        ) : (
+          shownSaved.map((q) => (
+            <QueryRow
+              key={q.id}
+              actions={
+                <>
+                  <button
+                    onClick={() => loadIntoEditor(q.sql)}
+                    className="kd-btn-secondary kd-btn-sm"
+                  >
+                    불러오기
+                  </button>
+                  <RowMenu
+                    label="쿼리 작업"
+                    items={[
+                      {
+                        id: "edit",
+                        label: "수정",
+                        icon: Pencil,
+                        onClick: () =>
+                          setDialog({ kind: "edit", id: q.id, name: q.name, sql: q.sql }),
+                      },
+                      {
+                        id: "delete",
+                        label: "삭제",
+                        icon: Trash2,
+                        danger: true,
+                        onClick: () => removeSaved(q.id),
+                      },
+                    ]}
+                  />
+                </>
+              }
+            >
+              <p className="kd-t-body-s text-fg-1 truncate" style={ROW_PRIMARY}>
+                {q.name}
+              </p>
+              <SqlPreview
+                sql={q.sql}
+                className="text-fg-3"
+                style={{ ...ROW_SECONDARY, marginTop: 6 }}
+              />
+            </QueryRow>
+          ))
+        )}
+      </div>
+
+      {dialog?.kind === "replace" ? (
+        <ReplaceEditorDialog
+          onConfirm={() => putIntoEditor(dialog.sql)}
+          onClose={() => setDialog(null)}
+        />
+      ) : dialog ? (
+        <SaveQueryDialog
+          key={`${dialog.kind}-${dialog.id ?? "new"}`}
+          mode={dialog.kind}
+          initialName={dialog.name}
+          initialSql={dialog.sql}
+          onSubmit={submitDialog}
+          onClose={() => setDialog(null)}
+        />
+      ) : null}
     </div>
+  );
+}
+
+// SQL 입력 — 잉크 면 위에서 키워드·리터럴·주석에 색을 입힌다.
+//
+// textarea는 글자를 투명으로 두고 캐럿만 남기고, 정확히 같은 자리에 겹친 <pre>가 색칠한
+// 같은 문자열을 그린다. 그래서 둘의 폰트·줄높이·패딩·줄바꿈 규칙이 하나라도 어긋나면 글자와
+// 색이 어긋나 보인다 — 치수(metrics)를 한 벌만 만들어 양쪽에 그대로 넣는 이유다.
+// 편집은 여전히 진짜 textarea가 받는다(IME·되돌리기·선택이 브라우저 기본 그대로다).
+function SqlCodeInput({
+  value, onChange, onKeyDown, onScrollSync, placeholder,
+  inputRef, pad, className = "", style = {},
+}) {
+  const hiRef = useRef(null);
+  const tokens = useMemo(() => tokenizeSql(value), [value]);
+  const metrics = { ...pad, whiteSpace: "pre-wrap", overflowWrap: "break-word" };
+
+  return (
+    <div className={`relative ${className}`} style={style}>
+      <pre
+        ref={hiRef}
+        aria-hidden="true"
+        className="kd-t-code absolute inset-0 overflow-hidden pointer-events-none"
+        style={{ ...metrics, margin: 0, color: "var(--term-fg)" }}
+      >
+        {tokens.map((t, i) => (
+          <span key={i} style={t.kind === "text" ? undefined : { color: `var(--sql-${t.kind})` }}>
+            {t.text}
+          </span>
+        ))}
+        {"\n"}
+      </pre>
+      <textarea
+        ref={inputRef}
+        value={value}
+        onChange={onChange}
+        onKeyDown={onKeyDown}
+        onScroll={(e) => {
+          // 색 레이어는 스크롤이 없는 박스라 textarea를 따라 직접 밀어 준다
+          if (hiRef.current) {
+            hiRef.current.scrollTop = e.target.scrollTop;
+            hiRef.current.scrollLeft = e.target.scrollLeft;
+          }
+          onScrollSync?.(e);
+        }}
+        spellCheck={false}
+        placeholder={placeholder}
+        className="kd-t-code kd-code-input absolute inset-0 w-full h-full resize-none bg-transparent outline-none scroll-thin"
+        style={metrics}
+      />
+    </div>
+  );
+}
+
+// 종이 면(카드) 위에서 쓰는 SQL 색. 잉크 면용 --sql-* 은 어두운 바탕 기준이라 흰 카드에서는
+// 흐려진다 — 무엇을 칠하는지(키워드/리터럴/주석)는 그대로 두고 명도만 면에 맞춘다.
+// 새 색을 만들지 않고 기존 신호색을 쓴다: 두 토큰 모두 라이트·다크에 각각 정의돼 있어
+// 카드가 어느 테마든 그대로 읽힌다.
+const PAPER_SQL_COLOR = {
+  keyword: "var(--info-fg)",
+  literal: "var(--warn-fg)",
+  comment: "var(--fg-4)",
+};
+
+// 목록 한 줄짜리 SQL 미리보기 — 한 줄로 눌러 담고 편집기와 같은 규칙으로 칠한다.
+// 바탕 글자색은 부르는 쪽이 정한다: 최근 실행은 SQL이 행의 주인공이라 fg-1,
+// 저장된 쿼리는 이름 아래 보조라 fg-3. 색은 그 위에 얹히는 것이라 위계를 흔들지 않는다.
+function SqlPreview({ sql, className = "", style }) {
+  const tokens = useMemo(() => tokenizeSql(oneLine(sql)), [sql]);
+  return (
+    <p className={`kd-t-code truncate ${className}`} style={style} title={sql}>
+      {tokens.map((t, i) => (
+        <span key={i} style={t.kind === "text" ? undefined : { color: PAPER_SQL_COLOR[t.kind] }}>
+          {t.text}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+// 최근 실행 · 저장된 쿼리가 공유하는 한 줄. 왼쪽은 글(2줄), 오른쪽은 액션이며
+// 액션 칸은 높이를 고정해 두 목록의 버튼이 같은 자리에 선다.
+function QueryRow({ children, actions }) {
+  return (
+    <div
+      className="flex items-center gap-4"
+      style={{
+        paddingInline: 20,
+        paddingBlock: 12,
+        borderBottom: "1px solid var(--kd-border)",
+      }}
+    >
+      <div className="flex-1 min-w-0">{children}</div>
+      <div className="shrink-0 flex items-center gap-2" style={{ height: 32 }}>
+        {actions}
+      </div>
+    </div>
+  );
+}
+
+// 보조 정보 사이의 가운뎃점
+function MetaDot() {
+  return <span className="text-fg-4 shrink-0">·</span>;
+}
+
+// 목록 오른쪽 끝 액션 칸의 고정 폭 — 글자 버튼("저장")과 아이콘 메뉴("…")가 같은 폭을
+// 차지해야 그 앞의 "불러오기"가 두 목록에서 같은 자리에 선다.
+const ROW_ACTION_W = 44;
+
+// 테두리 없는 글자 버튼 — 목록 오른쪽의 보조 액션("저장"). 높이는 옆 버튼과 같다.
+function RowTextBtn({ onClick, children }) {
+  return (
+    <button
+      onClick={onClick}
+      className="kd-t-label text-fg-2 hover:text-fg-1 inline-flex items-center justify-center transition-colors"
+      style={{ height: 32, width: ROW_ACTION_W }}
+    >
+      {children}
+    </button>
+  );
+}
+
+// 행 오른쪽 "…" 메뉴. 목록이 overflow-auto라 안에서 absolute로 띄우면 아래쪽 행에서
+// 잘린다 — MiniSelect와 같은 이유로 body에 포털해 fixed로 띄운다.
+function RowMenu({ label, items }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
+  const wrapRef = useRef(null);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = wrapRef.current?.getBoundingClientRect();
+      if (r) setPos({ right: window.innerWidth - r.right, top: r.bottom + 4 });
+    };
+    place();
+    const onDown = (e) =>
+      !wrapRef.current?.contains(e.target) && !menuRef.current?.contains(e.target) && setOpen(false);
+    const onKey = (e) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
+
+  return (
+    <span
+      ref={wrapRef}
+      className="inline-flex items-center justify-center"
+      style={{ width: ROW_ACTION_W }}
+    >
+      <IconBtn icon={MoreHorizontal} label={label} onClick={() => setOpen((v) => !v)} />
+      {open && pos && createPortal(
+        <div
+          ref={menuRef}
+          className="fixed z-50 kd-card"
+          style={{ right: pos.right, top: pos.top, width: 150, paddingBlock: 6 }}
+        >
+          {items.map((it) => {
+            const Icon = it.icon;
+            return (
+              <button
+                key={it.id}
+                onClick={() => {
+                  setOpen(false);
+                  it.onClick();
+                }}
+                className="kd-t-label w-full flex items-center gap-2.5 text-left"
+                style={{
+                  height: "var(--row-md)",
+                  paddingInline: 14,
+                  color: it.danger ? "var(--err-fg)" : "var(--fg-1)",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = "var(--sel-soft)")}
+                onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+              >
+                {Icon && <Icon size={15} strokeWidth={1.7} />}
+                {it.label}
+              </button>
+            );
+          })}
+        </div>,
+        document.body,
+      )}
+    </span>
+  );
+}
+
+// 모달 껍데기 — LoginModal과 같은 면·그림자·스크림을 쓴다.
+function ConsoleDialog({ title, onClose, children, busy }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && !busy && onClose();
+    document.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose, busy]);
+
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center kd-fade-in"
+      style={{ background: "var(--kd-scrim-strong)" }}
+      onClick={() => !busy && onClose()}
+    >
+      <div
+        className="relative w-[460px] max-w-[92vw]"
+        style={{
+          background: "var(--kd-surface)",
+          borderRadius: 6,
+          padding: 24,
+          boxShadow: "0 24px 60px rgba(23,23,23,0.18)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center">
+          <h2 className="kd-t-section text-fg-1">{title}</h2>
+          <button
+            onClick={onClose}
+            disabled={busy}
+            className="ml-auto w-7 h-7 text-fg-3 hover:text-fg-1 transition-colors flex items-center justify-center disabled:opacity-40"
+            aria-label="닫기"
+          >
+            <X size={17} strokeWidth={1.7} />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// 저장/수정 폼 — 이름과 SQL을 함께 다룬다(수정 메뉴가 둘 다 고칠 수 있어야 한다).
+// 실패하면 닫지 않고 오류를 이 안에 띄운다 — 저장 안 된 것을 저장된 것처럼 보이면 안 된다.
+function SaveQueryDialog({ mode, initialName, initialSql, onSubmit, onClose }) {
+  const [name, setName] = useState(initialName || "");
+  const [sql, setSql] = useState(initialSql || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const canSubmit = name.trim() && sql.trim() && !busy;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit({ name: name.trim(), sql: sql.trim() });
+    } catch (err) {
+      setError(err.message || "저장하지 못했어요");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ConsoleDialog title={mode === "edit" ? "쿼리 수정" : "쿼리 저장"} onClose={onClose} busy={busy}>
+      <form onSubmit={submit}>
+        <p className="kd-t-label text-fg-1" style={{ marginTop: 18, marginBottom: 8 }}>
+          이름
+        </p>
+        <input
+          className="kd-input"
+          value={name}
+          autoFocus
+          maxLength={100}
+          spellCheck={false}
+          placeholder="예: 최근 가입 회원"
+          onChange={(e) => setName(e.target.value)}
+        />
+
+        <p className="kd-t-label text-fg-1" style={{ marginTop: 16, marginBottom: 8 }}>
+          SQL
+        </p>
+        {/* 편집기와 같은 잉크 면 + 같은 색 규칙 — 저장 직전에 보는 SQL이 방금 친 것과
+            다르게 보이면 "이게 그거 맞나"를 눈으로 확인할 수 없다. */}
+        <SqlCodeInput
+          value={sql}
+          onChange={(e) => setSql(e.target.value)}
+          placeholder="SELECT id, title FROM posts LIMIT 5;"
+          pad={{ paddingTop: 10, paddingLeft: 12, paddingRight: 12, paddingBottom: 10 }}
+          style={{
+            height: 130,
+            background: "var(--term-bg)",
+            borderRadius: "var(--kd-radius)",
+            overflow: "hidden",
+          }}
+        />
+
+        {error && (
+          <p className="kd-t-caption" style={{ marginTop: 12, color: "var(--err-fg)" }}>
+            {error}
+          </p>
+        )}
+
+        <div className="flex items-center gap-2" style={{ marginTop: 18 }}>
+          <button type="submit" disabled={!canSubmit} className="kd-btn-primary kd-btn-md disabled:opacity-50">
+            {busy ? "저장 중…" : "저장"}
+          </button>
+          <button type="button" onClick={onClose} disabled={busy} className="kd-btn-secondary kd-btn-md disabled:opacity-50">
+            취소
+          </button>
+        </div>
+      </form>
+    </ConsoleDialog>
+  );
+}
+
+// 편집기 덮어쓰기 확인 — 불러오기가 작성 중인 SQL을 조용히 지우지 않게.
+function ReplaceEditorDialog({ onConfirm, onClose }) {
+  return (
+    <ConsoleDialog title="편집기 내용을 바꿀까요?" onClose={onClose}>
+      <p className="kd-t-body-s text-fg-2" style={{ marginTop: 12 }}>
+        편집기에 아직 실행하지 않은 SQL이 있어요. 불러오면 그 내용은 사라집니다.
+      </p>
+      <div className="flex items-center gap-2" style={{ marginTop: 20 }}>
+        <button onClick={onConfirm} className="kd-btn-primary kd-btn-md">
+          불러오기
+        </button>
+        <button onClick={onClose} className="kd-btn-secondary kd-btn-md">
+          취소
+        </button>
+      </div>
+    </ConsoleDialog>
   );
 }
 
@@ -1175,18 +1923,23 @@ function PageBtn({ icon: Icon, disabled, onClick }) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// 3) 스토리지 — 파일 목록 + 미리보기 (use_storage일 때만 탭이 뜬다)
-// 목록·삭제 호출과 이미지 판정은 panels/StoragePanel.jsx에서 가져왔다.
+// 3) 스토리지 — 파일 목록/격자 + 미리보기 (use_storage일 때만 탭이 뜬다)
+//
+// 보기가 둘인 이유: 이 버킷의 파일 이름은 대개 앱이 지어 준 UUID다. 이름을 읽어서는 사진을
+// 못 찾으므로 격자(썸네일)가 기본이고, 이름·크기·수정일을 나란히 비교할 때만 목록으로 간다.
+// 격자에서도 JSON·TXT는 억지로 그림을 만들지 않는다 — 종류만 알아보게 하고, 고르면 오른쪽에서
+// 내용을 읽는다.
 // ────────────────────────────────────────────────────────────────────────────
 const IMAGE_EXTS = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif", ".bmp", ".ico"];
 const isImage = (key) => IMAGE_EXTS.some((ext) => key.toLowerCase().endsWith(ext));
-// 브라우저가 그대로 열 수 있는 형식은 미리보기를 붙인다.
-// iframe으로 파일 주소를 그대로 띄우므로 CORS 설정이 필요 없다(내려받아 그리는 게 아니다).
-const TEXT_EXTS = [".json", ".txt", ".md", ".csv", ".log", ".yaml", ".yml", ".xml", ".ini", ".toml"];
+// 내용을 글로 읽는 형식 — core를 거쳐 앞부분을 받아 그린다.
+const TEXT_EXTS = [".txt", ".md", ".csv", ".log", ".yaml", ".yml", ".xml", ".ini", ".toml"];
 function previewKind(key) {
   const k = key.toLowerCase();
   if (isImage(key)) return "image";
   if (k.endsWith(".pdf")) return "pdf";
+  // JSON은 text와 갈라 둔다 — 같은 글이지만 줄 번호를 달고 들여쓰기를 정규화해서 읽힌다.
+  if (k.endsWith(".json")) return "json";
   if (TEXT_EXTS.some((ext) => k.endsWith(ext))) return "text";
   return "none";
 }
@@ -1195,6 +1948,14 @@ function fileIcon(key) {
   if (isImage(key)) return ImageIcon;
   if (/\.(json|ya?ml|toml|js|ts|jsx|tsx|css|html|py|java|php|sh|sql)$/i.test(key)) return FileCode;
   return FileIcon;
+}
+
+const baseName = (key) => key.split("/").pop();
+// 격자 칸에 적을 종류 표시. 확장자가 없으면 "파일".
+function fileExt(key) {
+  const name = baseName(key);
+  const i = name.lastIndexOf(".");
+  return i > 0 ? name.slice(i + 1).toUpperCase().slice(0, 6) : "파일";
 }
 
 const STORAGE_COLS = "46% 26% 28%";
@@ -1207,6 +1968,9 @@ function StorageView() {
   const [error, setError] = useState(null);
   const [selectedKey, setSelectedKey] = useState(null);
   const [sort, setSort] = useState(null);
+  // 격자가 기본 — 이름이 UUID면 목록에서는 찾을 수가 없다.
+  const [view, setView] = useState("grid");
+  const [previewOpen, setPreviewOpen] = useState(true);
 
   // 첫 페이지 로드 / 새로고침 — 목록을 초기화하고 처음부터.
   const load = useCallback(async () => {
@@ -1259,12 +2023,20 @@ function StorageView() {
     });
   }, [objects, sort]);
 
-  const selected = rows.find((o) => o.key === selectedKey) || rows[0] || null;
+  // 미리보기를 닫으면 고른 것이 없는 상태 — 목록/격자가 칸 전체를 쓴다.
+  const selected = previewOpen ? rows.find((o) => o.key === selectedKey) || rows[0] || null : null;
+
+  const pick = (key) => {
+    setSelectedKey(key);
+    setPreviewOpen(true);
+  };
 
   const onDeleted = (key) => {
     setObjects((prev) => prev.filter((o) => o.key !== key));
     if (selectedKey === key) setSelectedKey(null);
   };
+
+  const empty = !loaded && loading ? "불러오는 중…" : rows.length === 0 ? "올라온 파일이 없어요." : null;
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -1277,10 +2049,26 @@ function StorageView() {
         <span className="kd-t-body-s text-fg-3 tabular-nums">
           {loaded && !error ? `${objects.length}개` : "—"}
         </span>
+
+        {/* 보기 전환 — 결과 영역 탭과 같은 잉크 밑줄 */}
+        <nav className="ml-auto flex items-center gap-5 shrink-0">
+          {[
+            { id: "list", label: "목록" },
+            { id: "grid", label: "격자" },
+          ].map((v) => (
+            <UnderlineTab
+              key={v.id}
+              label={v.label}
+              active={view === v.id}
+              onClick={() => setView(v.id)}
+            />
+          ))}
+        </nav>
+
         <button
           onClick={load}
           disabled={loading}
-          className="kd-btn-secondary kd-btn-sm ml-auto inline-flex items-center gap-1.5 disabled:opacity-50"
+          className="kd-btn-secondary kd-btn-sm inline-flex items-center gap-1.5 shrink-0 disabled:opacity-50"
         >
           <RefreshCw size={15} strokeWidth={1.8} className={loading ? "kd-spin" : ""} />
           새로고침
@@ -1288,75 +2076,101 @@ function StorageView() {
       </div>
 
       <div className="flex-1 min-h-0 flex">
-        {/* 좌: 목록 (시안 802:622 → 56%) */}
-        <div className="min-h-0 flex flex-col" style={{ width: "56%", flexShrink: 0 }}>
-          <div
-            className="shrink-0 grid items-center"
-            style={{
-              gridTemplateColumns: STORAGE_COLS,
-              height: 40,
-              paddingInline: 20,
-              borderBottom: "1px solid var(--kd-border)",
-            }}
-          >
-            <SortHeader
-              label="파일명"
-              active={sort?.key === "name"}
-              dir={sort?.dir}
-              onClick={() => setSort((p) => nextSort(p, "name"))}
-            />
-            <SortHeader
-              label="크기"
-              active={sort?.key === "size"}
-              dir={sort?.dir}
-              onClick={() => setSort((p) => nextSort(p, "size"))}
-            />
-            <SortHeader
-              label="수정일"
-              active={sort?.key === "date"}
-              dir={sort?.dir}
-              onClick={() => setSort((p) => nextSort(p, "date"))}
-            />
-          </div>
+        {/* 좌: 목록 또는 격자. 미리보기가 닫히면 칸 전체를 쓴다. */}
+        <div
+          className="min-h-0 flex flex-col"
+          style={selected ? { width: view === "grid" ? "62%" : "56%", flexShrink: 0 } : { flex: 1, minWidth: 0 }}
+        >
+          {view === "list" && (
+            <div
+              className="shrink-0 grid items-center"
+              style={{
+                gridTemplateColumns: STORAGE_COLS,
+                height: 40,
+                paddingInline: 20,
+                borderBottom: "1px solid var(--kd-border)",
+              }}
+            >
+              <SortHeader
+                label="파일명"
+                active={sort?.key === "name"}
+                dir={sort?.dir}
+                onClick={() => setSort((p) => nextSort(p, "name"))}
+              />
+              <SortHeader
+                label="크기"
+                active={sort?.key === "size"}
+                dir={sort?.dir}
+                onClick={() => setSort((p) => nextSort(p, "size"))}
+              />
+              <SortHeader
+                label="수정일"
+                active={sort?.key === "date"}
+                dir={sort?.dir}
+                onClick={() => setSort((p) => nextSort(p, "date"))}
+              />
+            </div>
+          )}
 
           <div className="flex-1 min-h-0 overflow-auto scroll-thin">
             {error ? (
               <p className="kd-t-body-s" style={{ padding: 20, color: "var(--err-fg)" }}>
                 {error}
               </p>
-            ) : !loaded && loading ? (
-              <Centered>불러오는 중…</Centered>
-            ) : rows.length === 0 ? (
-              <Centered>올라온 파일이 없어요.</Centered>
+            ) : empty ? (
+              <Centered>{empty}</Centered>
             ) : (
               <>
-                {rows.map((o) => {
-                  const Icon = fileIcon(o.key);
-                  const on = selected?.key === o.key;
-                  return (
-                    <button
-                      key={o.key}
-                      onClick={() => setSelectedKey(o.key)}
-                      aria-current={on ? "true" : undefined}
-                      className="kd-pick w-full grid items-center text-left"
-                      style={{
-                        gridTemplateColumns: STORAGE_COLS,
-                        height: "var(--row-lg)",
-                        paddingInline: 20,
-                        borderBottom: "1px solid var(--kd-border)",
-                      }}
-                    >
-                      <span className="kd-t-body-s text-fg-1 flex items-center gap-3 min-w-0">
-                        <Icon size={18} strokeWidth={1.5} className="shrink-0 text-fg-2" />
-                        <span className="kd-pick-name truncate">{o.key}</span>
-                      </span>
-                      <span className="kd-t-body-s text-fg-2 tabular-nums">{fmtBytes(o.size)}</span>
-                      <span className="kd-t-body-s text-fg-2 tabular-nums">
-                        {fmtDateTime(o.last_modified)}
-                      </span>
-                    </button>
-                  );
-                })}
+                {view === "grid" ? (
+                  <div
+                    style={{
+                      display: "grid",
+                      // 미리보기가 열려 있으면 3열 고정(시안), 닫히면 넓어진 만큼 칸이 늘어난다
+                      gridTemplateColumns: selected
+                        ? "repeat(3, minmax(0, 1fr))"
+                        : "repeat(auto-fill, minmax(170px, 1fr))",
+                      gap: 18,
+                      padding: 20,
+                    }}
+                  >
+                    {rows.map((o) => (
+                      <StorageCard
+                        key={o.key}
+                        obj={o}
+                        selected={selected?.key === o.key}
+                        onSelect={() => pick(o.key)}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  rows.map((o) => {
+                    const Icon = fileIcon(o.key);
+                    const on = selected?.key === o.key;
+                    return (
+                      <button
+                        key={o.key}
+                        onClick={() => pick(o.key)}
+                        aria-current={on ? "true" : undefined}
+                        className="kd-pick w-full grid items-center text-left"
+                        style={{
+                          gridTemplateColumns: STORAGE_COLS,
+                          height: "var(--row-lg)",
+                          paddingInline: 20,
+                          borderBottom: "1px solid var(--kd-border)",
+                        }}
+                      >
+                        <span className="kd-t-body-s text-fg-1 flex items-center gap-3 min-w-0">
+                          <Icon size={18} strokeWidth={1.5} className="shrink-0 text-fg-2" />
+                          <span className="kd-pick-name truncate">{o.key}</span>
+                        </span>
+                        <span className="kd-t-body-s text-fg-2 tabular-nums">{fmtBytes(o.size)}</span>
+                        <span className="kd-t-body-s text-fg-2 tabular-nums">
+                          {fmtDateTime(o.last_modified)}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
                 {next && (
                   <div className="flex justify-center" style={{ padding: 14 }}>
                     <button
@@ -1373,22 +2187,84 @@ function StorageView() {
           </div>
         </div>
 
-        <span style={{ width: 1, background: "var(--kd-border)" }} />
-
-        {/* 우: 미리보기 */}
-        <div className="flex-1 min-w-0 min-h-0 overflow-auto scroll-thin flex flex-col">
-          {selected ? (
-            <StoragePreview obj={selected} onDeleted={onDeleted} />
-          ) : (
-            <Centered>왼쪽에서 파일을 고르세요.</Centered>
-          )}
-        </div>
+        {selected && (
+          <>
+            <span style={{ width: 1, background: "var(--kd-border)" }} />
+            <div className="flex-1 min-w-0 min-h-0 overflow-auto scroll-thin flex flex-col">
+              <StoragePreview
+                key={selected.key}
+                obj={selected}
+                onDeleted={onDeleted}
+                onClose={() => setPreviewOpen(false)}
+              />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
 }
 
-function StoragePreview({ obj, onDeleted }) {
+// 격자 한 칸 — 표지 + 파일명 + 용량.
+// 면(회색 배경)이나 그림자를 두지 않고 여백으로 나눈다. 고른 칸만 얇은 잉크 테두리가 생기며,
+// 안 고른 칸도 같은 두께의 투명 테두리를 들고 있어 선택해도 격자가 흔들리지 않는다.
+function StorageCard({ obj, selected, onSelect }) {
+  return (
+    <button
+      onClick={onSelect}
+      aria-pressed={selected}
+      title={obj.key}
+      className="text-left min-w-0"
+      style={{
+        padding: 8,
+        borderRadius: 6,
+        border: `1px solid ${selected ? "var(--accent)" : "transparent"}`,
+      }}
+    >
+      <span
+        className="flex items-center justify-center overflow-hidden"
+        style={{
+          aspectRatio: "5 / 4",
+          borderRadius: 4,
+          border: "1px solid var(--kd-border)",
+          background: "var(--kd-surface)",
+        }}
+      >
+        <FileGlyph obj={obj} />
+      </span>
+      <span
+        className="kd-t-body-s text-fg-1 truncate block"
+        style={{ marginTop: 8 }}
+      >
+        {baseName(obj.key)}
+      </span>
+      <span className="kd-t-caption text-fg-3 block tabular-nums">{fmtBytes(obj.size)}</span>
+    </button>
+  );
+}
+
+// 격자 칸의 표지 — 사진은 실물, 그 외는 종류만.
+// JSON만 중괄호로 따로 세운다: 미리보기가 코드로 열리는 유일한 종류라 고르기 전에 알 수 있다.
+function FileGlyph({ obj }) {
+  const kind = previewKind(obj.key);
+  if (kind === "image" && obj.url) {
+    return <img src={obj.url} alt="" loading="lazy" className="w-full h-full object-cover" />;
+  }
+  return (
+    <span className="flex flex-col items-center justify-center gap-2">
+      {kind === "json" ? (
+        <span className="kd-t-code text-fg-2" style={{ fontSize: 26, lineHeight: 1 }}>
+          {"{ }"}
+        </span>
+      ) : (
+        <FileText size={30} strokeWidth={1.3} className="text-fg-2" />
+      )}
+      <span className="kd-t-micro text-fg-3">{fileExt(obj.key)}</span>
+    </span>
+  );
+}
+
+function StoragePreview({ obj, onDeleted, onClose }) {
   const [copied, setCopied] = useState(false);
   const [menu, setMenu] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -1396,9 +2272,10 @@ function StoragePreview({ obj, onDeleted }) {
   // 오른쪽 칸을 채우고 object-contain으로 바꿔 사진 전체가 보이게 한다.
   const [big, setBig] = useState(false);
   const Icon = fileIcon(obj.key);
-  const kind = obj.url ? previewKind(obj.key) : "none";
-  const img = kind === "image";
-  const framed = kind === "pdf" || kind === "text";
+  const kind = previewKind(obj.key);
+  const img = kind === "image" && obj.url;
+  const reads = kind === "json" || kind === "text";   // core를 거쳐 글로 읽는 종류
+  const framed = kind === "pdf" && obj.url;
 
   const copy = async () => {
     if (!obj.url) return;
@@ -1425,9 +2302,9 @@ function StoragePreview({ obj, onDeleted }) {
   return (
     <div style={{ padding: 20 }}>
       <div className="flex items-start gap-3">
-        <h2 className="kd-t-subtitle text-fg-1 truncate">{obj.key.split("/").pop()}</h2>
+        <h2 className="kd-t-subtitle text-fg-1 truncate">{baseName(obj.key)}</h2>
         <div className="relative ml-auto shrink-0 flex items-center gap-1">
-          {(img || framed) && (
+          {(img || framed || reads) && (
             <IconBtn
               icon={big ? Minimize2 : Maximize2}
               label={big ? "원래 크기" : "크게 보기"}
@@ -1435,6 +2312,8 @@ function StoragePreview({ obj, onDeleted }) {
             />
           )}
           <IconBtn icon={MoreHorizontal} label="파일 작업" onClick={() => setMenu((v) => !v)} />
+          {/* 닫으면 왼쪽 격자/목록이 칸 전체로 넓어진다 */}
+          <IconBtn icon={X} label="미리보기 닫기" onClick={onClose} />
           {menu && (
             <div className="absolute right-0 z-30 kd-card" style={{ top: 28, width: 168, paddingBlock: 6 }}>
               <button
@@ -1451,46 +2330,49 @@ function StoragePreview({ obj, onDeleted }) {
         </div>
       </div>
 
-      <div
-        className="w-full flex items-center justify-center overflow-hidden"
-        style={{
-          marginTop: 14,
-          // 크게 보기: 오른쪽 칸 높이를 채우되 화면을 넘지 않게 상한을 둔다
-          height: big ? "min(58vh, 520px)" : 152,
-          borderRadius: 4,
-          background: "var(--sel-soft)",
-          border: framed ? "1px solid var(--kd-border)" : undefined,
-          transition: "height 180ms ease",
-        }}
-      >
-        {img && (
-          <button
-            type="button"
-            onClick={() => setBig((v) => !v)}
-            aria-label={big ? "원래 크기로" : "사진 전체 보기"}
-            className="w-full h-full"
-            style={{ cursor: big ? "zoom-out" : "zoom-in" }}
-          >
-            <img
+      {reads ? (
+        <TextPreview obj={obj} json={kind === "json"} tall={big} />
+      ) : (
+        <div
+          className="w-full flex items-center justify-center overflow-hidden"
+          style={{
+            marginTop: 14,
+            // 크게 보기: 오른쪽 칸 높이를 채우되 화면을 넘지 않게 상한을 둔다
+            height: big ? "min(58vh, 520px)" : 152,
+            borderRadius: 4,
+            background: "var(--sel-soft)",
+            border: framed ? "1px solid var(--kd-border)" : undefined,
+            transition: "height 180ms ease",
+          }}
+        >
+          {img && (
+            <button
+              type="button"
+              onClick={() => setBig((v) => !v)}
+              aria-label={big ? "원래 크기로" : "사진 전체 보기"}
+              className="w-full h-full"
+              style={{ cursor: big ? "zoom-out" : "zoom-in" }}
+            >
+              <img
+                src={obj.url}
+                alt={obj.key}
+                // 접힌 상태는 썸네일처럼 꽉 채우고(cover), 크게 보기는 잘리지 않게(contain)
+                className={`w-full h-full ${big ? "object-contain" : "object-cover"}`}
+              />
+            </button>
+          )}
+          {framed && (
+            // PDF는 브라우저 PDF 뷰어가 그대로 그린다.
+            <iframe
               src={obj.url}
-              alt={obj.key}
-              // 접힌 상태는 썸네일처럼 꽉 채우고(cover), 크게 보기는 잘리지 않게(contain)
-              className={`w-full h-full ${big ? "object-contain" : "object-cover"}`}
+              title={`${obj.key} 미리보기`}
+              className="w-full h-full"
+              style={{ border: 0, background: "var(--kd-surface)" }}
             />
-          </button>
-        )}
-        {framed && (
-          // PDF는 브라우저 PDF 뷰어가, 텍스트(JSON 등)는 브라우저가 그대로 그린다.
-          <iframe
-            src={obj.url}
-            title={`${obj.key} 미리보기`}
-            className="w-full h-full"
-            style={{ border: 0, background: "var(--kd-surface)" }}
-            sandbox={kind === "pdf" ? undefined : ""}
-          />
-        )}
-        {kind === "none" && <Icon size={32} strokeWidth={1.3} className="text-fg-4" />}
-      </div>
+          )}
+          {!img && !framed && <Icon size={32} strokeWidth={1.3} className="text-fg-4" />}
+        </div>
+      )}
 
       <div style={{ marginTop: 18, borderTop: "1px solid var(--kd-border)" }}>
         <InfoRow label="크기">{fmtBytes(obj.size) || "—"}</InfoRow>
@@ -1531,6 +2413,132 @@ function StoragePreview({ obj, onDeleted }) {
       ) : (
         <p className="kd-t-body-s text-fg-3">공개 URL이 없는 객체예요.</p>
       )}
+    </div>
+  );
+}
+
+// 글로 읽는 미리보기 — core를 거쳐 앞부분만 받아 그린다.
+// 공개 URL로 브라우저가 직접 읽지 못하는 이유는 R2 공개 버킷에 CORS가 없어서다. 미리보기
+// 하나 때문에 버킷에 CORS를 여느니, 이미 인가를 거치는 core가 제 자격증명으로 읽어 넘긴다.
+function TextPreview({ obj, json, tall }) {
+  const [state, setState] = useState({ loading: true });
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ loading: true });
+    readStorageObject(obj.key)
+      .then((res) => !cancelled && setState({ loading: false, text: res.text, truncated: res.truncated }))
+      .catch((e) => !cancelled && setState({ loading: false, error: e.message || "파일을 읽지 못했어요" }));
+    return () => {
+      cancelled = true;
+    };
+  }, [obj.key]);
+
+  // JSON은 들여쓰기를 정규화한다 — 한 줄로 저장된 JSON이 그대로 한 줄로 보이면 읽을 수 없다.
+  // 잘린 파일은 파싱이 안 되므로(중간에서 끊긴 JSON) 원문 그대로 둔다.
+  const body = useMemo(() => {
+    const raw = state.text || "";
+    if (!json || !raw || state.truncated) return raw;
+    try {
+      return JSON.stringify(JSON.parse(raw), null, 2);
+    } catch {
+      return raw;
+    }
+  }, [state.text, state.truncated, json]);
+
+  const lines = useMemo(() => body.split("\n"), [body]);
+
+  const copyText = async () => {
+    try {
+      await navigator.clipboard.writeText(body);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard 거부 — 조용히 무시 */
+    }
+  };
+
+  return (
+    <div
+      style={{
+        marginTop: 14,
+        border: "1px solid var(--kd-border)",
+        borderRadius: 4,
+        overflow: "hidden",
+      }}
+    >
+      <div
+        className="flex items-center gap-2"
+        style={{ height: 34, paddingInline: 12, borderBottom: "1px solid var(--kd-border)" }}
+      >
+        <span className="kd-t-micro text-fg-3">{json ? "JSON" : "TEXT"}</span>
+        {state.truncated && (
+          <span className="kd-t-micro text-fg-4">앞부분만</span>
+        )}
+        <button
+          onClick={copyText}
+          disabled={!body}
+          className="kd-t-micro text-fg-2 hover:text-fg-1 ml-auto transition-colors disabled:opacity-40"
+        >
+          {copied ? "복사됨" : "복사"}
+        </button>
+      </div>
+
+      <div
+        className="overflow-auto scroll-thin"
+        style={{ height: tall ? "min(58vh, 520px)" : 220, transition: "height 180ms ease" }}
+      >
+        {state.loading ? (
+          <p className="kd-t-body-s text-fg-3" style={{ padding: 14 }}>
+            불러오는 중…
+          </p>
+        ) : state.error ? (
+          <p className="kd-t-body-s" style={{ padding: 14, color: "var(--err-fg)" }}>
+            {state.error}
+          </p>
+        ) : !body ? (
+          <p className="kd-t-body-s text-fg-3" style={{ padding: 14 }}>
+            빈 파일이에요.
+          </p>
+        ) : json ? (
+          // 줄 번호는 별도 칸 — 본문을 골라 복사할 때 번호가 섞이지 않는다.
+          <div className="flex" style={{ minHeight: "100%" }}>
+            <div
+              className="kd-t-code text-right select-none shrink-0"
+              style={{
+                width: 44,
+                paddingBlock: 12,
+                paddingRight: 10,
+                color: "var(--fg-4)",
+                borderRight: "1px solid var(--kd-border)",
+              }}
+            >
+              {lines.map((_, i) => (
+                <div key={i}>{i + 1}</div>
+              ))}
+            </div>
+            <pre
+              className="kd-t-code text-fg-1"
+              style={{ margin: 0, paddingBlock: 12, paddingInline: 12, whiteSpace: "pre" }}
+            >
+              {body}
+            </pre>
+          </div>
+        ) : (
+          <pre
+            className="kd-t-code text-fg-1"
+            style={{
+              margin: 0,
+              padding: 12,
+              whiteSpace: "pre-wrap",
+              overflowWrap: "break-word",
+            }}
+          >
+            {body}
+          </pre>
+        )}
+      </div>
     </div>
   );
 }

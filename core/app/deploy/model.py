@@ -149,3 +149,34 @@ class BuildRecord(Base):
     # Grafana 패널이 전부 $__timeFilter(started_at)로 들어오고, admin 빌드 기록 목록도
     # ORDER BY started_at DESC LIMIT이다 — 두 읽기 경로가 같은 컬럼을 탄다.
     __table_args__ = (Index("ix_build_records_started_at", "started_at"),)
+
+
+# DB 콘솔에서 유저가 저장한 SQL — **플랫폼(관리) DB**에 둔다.
+# 유저 앱 DB에 관리 테이블을 만들지 않는다: 그 스택은 유저 소유라 우리가 스키마를 얹으면
+# 안 되고, 덤프 복원/DB 교체로 통째로 갈려도 저장한 쿼리는 남아야 한다.
+#
+# 스코프는 (user_id, app_name, db_type) 세 축 전부다. 하나라도 빠지면 다른 앱/DB의 쿼리가
+# 섞인다 — 조회·수정·삭제 모두 세 축을 WHERE에 걸고, 값은 세션 user와 최신 서버 빌드에서만
+# 뽑는다(요청 body로 받지 않는다). router._db_scope가 그 유일한 출처.
+class SavedQuery(Base):
+    __tablename__ = "saved_queries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    app_name: Mapped[str] = mapped_column(String(50))
+    db_type: Mapped[str] = mapped_column(String(20))      # "mysql" | "postgres" ("none"은 저장 불가)
+    name: Mapped[str] = mapped_column(String(100))
+    # 컬럼명은 sql이 아니라 sql_text — 방언에 따라 예약어로 걸릴 수 있는 이름을 피한다.
+    # API 필드명은 그대로 sql (router._to_saved_query가 변환).
+    sql_text: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+    )
+
+    # 읽기 경로가 전부 "이 유저의 이 앱의 이 DB" 목록이라 세 축을 그대로 인덱스로.
+    __table_args__ = (Index("ix_saved_queries_scope", "user_id", "app_name", "db_type"),)

@@ -254,12 +254,13 @@ def _signing_key(secret: str, date_stamp: str, region: str, service: str) -> byt
     return _sign(k_service, "aws4_request")
 
 
-# 버킷 스코프 S3 자격증명(env)으로 R2에 SigV4 서명 요청. GET/DELETE만 — body 없음.
+# 버킷 스코프 S3 자격증명(env)으로 SigV4 서명해 (url, headers)를 만든다. GET/DELETE만 — body 없음.
 # key 있으면 객체 경로(/{bucket}/{key}), 없으면 버킷 경로(/{bucket}, list용).
-def _s3_request(
+# 요청 실행과 분리해 둔 이유: 미리보기(get_object_text)는 같은 서명으로 **스트리밍**해서
+# 앞부분만 읽고 끊어야 한다 — 서명 코드를 두 벌로 두면 한쪽만 고치는 사고가 난다.
+def _sign_request(
     env: dict, method: str, key: str = "", query: dict | None = None,
-    timeout: float = 30.0,
-) -> httpx.Response:
+) -> tuple[str, dict]:
     endpoint = (env.get("S3_ENDPOINT") or "").rstrip("/")
     bucket = env.get("S3_BUCKET") or ""
     access = env.get("S3_ACCESS_KEY") or ""
@@ -315,6 +316,14 @@ def _s3_request(
         "x-amz-date": amz_date,
     }
     url = endpoint + canonical_uri + (f"?{canonical_qs}" if canonical_qs else "")
+    return url, headers
+
+
+def _s3_request(
+    env: dict, method: str, key: str = "", query: dict | None = None,
+    timeout: float = 30.0,
+) -> httpx.Response:
+    url, headers = _sign_request(env, method, key=key, query=query)
     with httpx.Client(timeout=timeout) as client:
         return client.request(method, url, headers=headers)
 
@@ -370,3 +379,33 @@ def delete_object(env: dict, key: str) -> None:
     resp = _s3_request(env, "DELETE", key=key)
     if resp.status_code not in (200, 204, 404):
         raise R2Error(f"객체 삭제 실패 (status={resp.status_code})")
+
+
+# 미리보기로 읽어올 최대 바이트. 미리보기는 "앞부분을 읽는 것"이지 파일을 통째로 들고
+# 오는 게 아니다 — 로그처럼 수백 MB인 파일이 core 메모리와 응답을 통째로 먹으면 안 된다.
+PREVIEW_MAX_BYTES = 256 * 1024
+
+
+# 객체 앞부분을 텍스트로 읽는다 → (내용, 잘렸나).
+# Range 헤더 대신 스트리밍으로 받아 상한에서 끊는다: Range를 쓰려면 서명 대상 헤더가 늘어
+# _sign_request를 건드려야 하는데, 그 함수는 list/delete가 함께 쓰는 자리다.
+# 바이너리를 잘못 열어도 죽지 않게 errors="replace"로 디코드한다(유저 자기 버킷의 파일이다).
+def get_object_text(
+    env: dict, key: str, max_bytes: int = PREVIEW_MAX_BYTES,
+) -> tuple[str, bool]:
+    if not key:
+        raise R2Error("읽을 key가 필요합니다")
+    url, headers = _sign_request(env, "GET", key=key)
+    buf, truncated = bytearray(), False
+    with httpx.Client(timeout=30.0) as client:
+        with client.stream("GET", url, headers=headers) as resp:
+            if resp.status_code == 404:
+                raise R2Error("파일을 찾을 수 없습니다")
+            if resp.status_code != 200:
+                raise R2Error(f"파일 읽기 실패 (status={resp.status_code})")
+            for chunk in resp.iter_bytes():
+                buf += chunk
+                if len(buf) >= max_bytes:
+                    truncated = True
+                    break
+    return buf[:max_bytes].decode("utf-8", errors="replace"), truncated

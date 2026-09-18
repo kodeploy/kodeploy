@@ -71,6 +71,14 @@
   --warn-fg: #9c5a08;
   --info-fg: #2b6e8f;
 
+  /* SQL 하이라이트 — 잉크 면(--term-bg) 위에서만 쓰는 색.
+     라이트·다크 모두 그 면은 어두우므로 테마별로 갈리지 않는다(아래 dark 블록에 없는 이유).
+     규칙은 셋뿐: 문장의 뼈대(키워드) / 눈으로 확인할 값(리터럴) / 꺼진 것(주석).
+     함수명·연산자는 칠하지 않는다 — 색이 늘수록 어디를 봐야 하는지가 흐려진다. */
+  --sql-keyword: #7fa9e8;
+  --sql-literal: #e0a06a;
+  --sql-comment: #8a8a83;
+
   /* 상태 dot — 배지가 참조 */
   --dot-ok: #0f6330;
   --dot-warn: #9c5a08;
@@ -454,6 +462,20 @@ select {
 /* select·input을 품은 입력 상자(앞에 아이콘이 붙는 형태) — 자식이 포커스돼도 테두리가 같이 반응한다 */
 .kd-input:focus-within { border-color: var(--fg-3); }
 textarea.kd-input { height: auto; padding-block: 10px; line-height: 1.6; resize: vertical; }
+
+/* SQL 입력창 — 글자는 투명하고(뒤에 겹친 색 레이어가 같은 글자를 그린다) 캐럿만 남긴다.
+   placeholder는 color:transparent를 물려받지 않게 여기서 명시한다 — 안 그러면 안내문이 사라진다. */
+.kd-code-input {
+  color: transparent;
+  caret-color: var(--term-fg);
+}
+.kd-code-input::placeholder {
+  color: var(--term-fg);
+  opacity: 0.38;
+}
+.kd-code-input::selection {
+  background: rgba(244, 244, 239, 0.25);
+}
 
 .kd-chip {
   display: inline-flex;

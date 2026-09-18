@@ -9,7 +9,7 @@ from app.auth.model import User
 from app.deploy import crud
 from app.deploy.routing import domains
 from app.deploy.stack import r2
-from app.deploy.model import Build
+from app.deploy.model import Build, SavedQuery
 from app.deploy.stack.resources import _read_r2_token_id
 from app.shared import k8s
 
@@ -152,6 +152,9 @@ def delete_app(db: Session, user: User) -> None:
     # build_records(빌드 행위 영구 기록)는 운영 분석용 append-only라 의도적으로 보존.
     # extra_hostnames도 클리어 — 옛 앱용 hostname이 다음(다른) 앱 route에 자동 주입되면 안 됨.
     db.query(Build).filter(Build.user_id == user.id).delete()
+    # DB 콘솔의 저장된 쿼리도 같이 — 앱이 사라지면 그 앱/DB 스코프는 다시 안 온다
+    # (다음 배포는 새 app_name). 남겨두면 아무도 못 읽는 orphan row만 쌓인다.
+    db.query(SavedQuery).filter(SavedQuery.user_id == user.id).delete()
     user.app_name = None
     user.custom_domain = None
     user.custom_domain_status = None
