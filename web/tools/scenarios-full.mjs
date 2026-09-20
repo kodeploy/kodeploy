@@ -5,7 +5,7 @@ const s = (name, steps) => ({ name, viewport: VP, steps });
 
 export const scenarios = [
   s("marketing", [
-    { goto: "/" },            { expectText: "만든 서비스," },        { shot: "landing", full: true },
+    { goto: "/" },            { expectText: "GitHub 주소 하나로" }, { shot: "landing", full: true },
     { goto: "/how" },         { wait: 800 },                         { shot: "howto", full: true },
     { goto: "/guide" },       { wait: 800 },                         { shot: "docs", full: true },
     { goto: "/blog" },        { wait: 1000 },                        { shot: "blog", full: true },

@@ -27,7 +27,7 @@ export default {
         "red-err": "var(--err-fg)",
       },
       fontFamily: {
-        // 본문·UI — 국문 산세리프 우선(Pretendard). 헤드라인과 대비를 만든다.
+        // 본문·UI·제목 전부 이 한 벌. 2026-09에 헤드라인 명조를 걷어내고 여기로 합쳤다.
         sans: [
           '"Pretendard Variable"',
           "Pretendard",
@@ -36,8 +36,6 @@ export default {
           "system-ui",
           "sans-serif",
         ],
-        // 헤드라인 — 국문 명조. .kd-display와 같은 스택.
-        display: ['"Nanum Myeongjo"', '"Noto Serif KR"', "Georgia", "serif"],
         // JetBrains Mono엔 한글 글리프가 없어 로그·코드의 한글이 두부(□)가 된다.
         // 스택 끝에 Pretendard를 둬 한글만 폴백시킨다 (라틴은 그대로 모노).
         mono: [

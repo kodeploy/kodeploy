@@ -83,7 +83,7 @@ export function StepRail({ step, onJump }) {
   );
 }
 
-// 단계 제목 — 마법사 h1은 명조(.kd-t-display). 부제는 회색 본문.
+// 단계 제목 — 마법사 h1은 큰 제목(.kd-t-display). 부제는 회색 본문.
 export function StepHeading({ title, desc }) {
   return (
     <header style={{ marginBottom: 40 }}>

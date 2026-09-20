@@ -309,7 +309,7 @@ export default function Guide() {
             )}
           </nav>
 
-          {/* 제목 — 시안은 명조가 아니라 굵은 산세리프(잉크 57) */}
+          {/* 제목 — 시안 잉크 57 */}
           <h1
             className="kd-t-display"
             style={{ color: "var(--fg-1)", marginTop: 16 }}

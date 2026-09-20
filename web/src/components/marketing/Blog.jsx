@@ -148,7 +148,7 @@ function PostRow({ post, last }) {
       </div>
       <div className="flex items-center gap-6" style={{ marginTop: 4 }}>
         <h2
-          className="kd-t-display-s kd-t-sans flex-1 min-w-0"
+          className="kd-t-display-s flex-1 min-w-0"
           style={{ color: "var(--fg-1)" }}
         >
           {post.title}

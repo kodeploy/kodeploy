@@ -175,16 +175,6 @@ body,
   min-height: 100vh;
 }
 
-/* 디스플레이 서체 — 국문 세리프(명조). 헤드라인 전용, 본문엔 쓰지 않는다.
-   본문 산세리프와 대비를 만드는 게 이 디자인의 중심 장치. */
-.kd-display {
-  font-family: "Nanum Myeongjo", "Noto Serif KR", Georgia, serif;
-  font-weight: 700;
-  letter-spacing: -0.01em;
-  word-break: keep-all;
-  text-wrap: balance;
-}
-
 /* 섹션 번호표 — "'01 / 운영". 모노 + 넓은 자간의 작은 캡션 */
 .kd-eyebrow {
   font-family: "JetBrains Mono", ui-monospace, SF Mono, Menlo,
@@ -263,7 +253,7 @@ select {
 /* 랜딩 히어로 — 좌 문장 / 우 배포 흐름. 폭은 아래 섹션과 같은 열(.kd-page-narrow)을 쓴다. */
 .kd-hero-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.95fr);
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
   align-items: center;
   /* 글과 그림 사이 — 이 사이를 좁혀 바깥(좌우) 여백 쪽에 자리를 넘긴다 */
   gap: clamp(20px, 2.6vw, 36px);
@@ -361,38 +351,45 @@ select {
    규칙: 앱 화면의 페이지 제목(kd-t-title)은 마케팅 섹션 제목(kd-t-display)보다 크지 않다.
    ────────────────────────────────────────────────────────────────────────── */
 
-/* 명조 — 마케팅 화면 전용.
+/* 큰 제목 — 마케팅 화면. 2026-09: 명조(나눔명조)를 걷어내고 본문·UI와 같은 산세리프로 통일했다.
+   글꼴은 body에서 상속받는다(따로 선언하지 않는 게 통일을 깨지 않는 방법).
    크기는 시안에서 잰 잉크 높이를 캔버스 TextMetrics 비율로 환산한 값이다(tools/inkratio.mjs).
    랜딩 시안(1024폭 렌더 = CSS 959)에서 히어로 58px / 섹션제목 38px / FAQ제목 34px 였다.
-   vw로 잡아 좁은 화면에서 줄고, 넓은 화면에서는 승인 기준(메인 제목 64~76px)을 넘지 않게 캡을 둔다. */
+   vw로 잡아 좁은 화면에서 줄고, 넓은 화면에서는 승인 기준(메인 제목 64~76px)을 넘지 않게 캡을 둔다.
+   굵기는 앱 제목(kd-t-title)과 같은 600 — 화면 전체가 400/500/600 한 벌로 닫힌다.
+   자간은 크기가 커질수록 더 조인다. 산세리프는 큰 글자에서 자간이 벌어져 보이기 때문. */
 .kd-t-hero {
-  font-family: "Nanum Myeongjo", "Noto Serif KR", Georgia, serif;
-  font-weight: 700;
-  /* 2026-09: 시안 대비 10% 줄였다(72 → 65). 승인 기준 64~76px의 아래쪽 끝. */
-  font-size: clamp(31px, 5.45vw, 65px);
+  font-weight: 600;
+  /* 2026-09: 시안 72 → 65로 줄였다가, 명조를 걷어낸 뒤 70으로 되올렸다.
+     승인 기준 64~76px의 가운데. 세 값을 같은 비율로 키워 줄어드는 곡선은 그대로 둔다. */
+  font-size: clamp(33px, 5.87vw, 70px);
   line-height: 1.05;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.025em;
   word-break: keep-all;
   text-wrap: balance;
 }
+/* 긴 첫 줄을 세 줄 구성으로 유지하면서 제목 크기를 확보한다. */
+.kd-t-home-hero {
+  font-size: clamp(33px, 5.4vw, 56px);
+}
+@media (max-width: 600px) {
+  .kd-t-home-hero {
+    font-size: clamp(29px, 9vw, 42px);
+  }
+}
 .kd-t-display {
-  font-family: "Nanum Myeongjo", "Noto Serif KR", Georgia, serif;
-  font-weight: 700;
+  font-weight: 600;
   font-size: clamp(26px, 3.96vw, 44px);
   line-height: 1.2;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
   word-break: keep-all;
 }
 .kd-t-display-s {
-  font-family: "Nanum Myeongjo", "Noto Serif KR", Georgia, serif;
-  font-weight: 700;
+  font-weight: 600;
   font-size: clamp(22px, 2.8vw, 30px);
   line-height: 1.3;
+  letter-spacing: -0.015em;
   word-break: keep-all;
-}
-/* 명조 대신 굵은 산세리프로 쓰고 싶을 때 붙이는 변형 (문서·블로그 제목이 시안에서 산세리프다) */
-.kd-t-sans {
-  font-family: "Pretendard Variable", Pretendard, "Inter Variable", Inter, system-ui, sans-serif;
 }
 
 /* 산세리프 — 앱 화면과 모든 UI.

@@ -152,7 +152,7 @@ export default function AppsList() {
   return (
     <div className="kd-page" style={{ paddingTop: 48, paddingBottom: 64 }}>
       {/* ── 페이지 헤더 (시안 제목 잉크 y144 · 설명 y198) ── */}
-      <h1 className="kd-t-display kd-t-sans text-fg-1">대시보드</h1>
+      <h1 className="kd-t-display text-fg-1">대시보드</h1>
       <p className="kd-t-lead text-fg-2" style={{ marginTop: 2 }}>
         배포한 앱과 프론트엔드를 관리하세요.
       </p>
@@ -304,7 +304,7 @@ function buildLabel(build) {
 function Section({ title, first, children }) {
   return (
     <section style={{ marginTop: first ? 52 : 66 }}>
-      <h2 className="kd-t-display-s kd-t-sans text-fg-1">{title}</h2>
+      <h2 className="kd-t-display-s text-fg-1">{title}</h2>
       <div style={{ borderTop: "1px solid var(--kd-border)", marginTop: 12 }} />
       {children}
     </section>

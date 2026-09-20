@@ -7,7 +7,7 @@ export const scenarios = [
     viewport: [1536, 1024],
     steps: [
       { goto: "/" },
-      { expectText: "만든 서비스," },
+      { expectText: "GitHub 주소 하나로" },
       { shot: "landing" },
       { goto: "/blog" },
       { wait: 2500 },

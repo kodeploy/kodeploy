@@ -188,7 +188,7 @@ export default function FrontendDeploy() {
         <div className="grid h-full grid-cols-1 lg:grid-cols-[minmax(0,1fr)_286px] lg:grid-rows-1">
           {/* ─────────── 좌: 폼 ─────────── */}
           <div className="lg:pr-9" style={{ paddingTop: 40, paddingBottom: 24 }}>
-            {/* 제목 — 시안 잉크 y152 (명조) / 설명 y226 */}
+            {/* 제목 — 시안 잉크 y152 / 설명 y226 */}
             <h1 className="kd-t-display" style={{ color: "var(--fg-1)" }}>
               프론트엔드도 함께 배포하세요.
             </h1>
@@ -371,7 +371,7 @@ export default function FrontendDeploy() {
               </div>
             )}
 
-            {/* 좁은 레일이라 한국어 어절이 잘리지 않게 keep-all (명조 램프와 같은 규칙) */}
+            {/* 좁은 레일이라 한국어 어절이 잘리지 않게 keep-all (제목 램프와 같은 규칙) */}
             <div
               className="break-keep"
               style={{ borderTop: "1px solid var(--kd-border)", marginTop: 22, paddingTop: 22 }}

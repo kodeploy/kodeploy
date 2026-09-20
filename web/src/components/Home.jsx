@@ -1,6 +1,6 @@
 // 랜딩 페이지 ("/") — design/라이트모드-시안/01_랜딩.png(v2) 기준.
 //
-// 구성: Hero(명조 헤드라인 + CTA) + 배포 흐름 일러스트 → 운영 섹션(예시 워크스페이스 + 3열)
+// 구성: Hero(헤드라인 + CTA) + 배포 흐름 일러스트 → 운영 섹션(예시 워크스페이스 + 3열)
 //       → 자주 묻는 질문 → 푸터. 섹션 사이 구분선은 콘텐츠 폭이 아니라 화면 전체를 가로지른다.
 // 치수 주석의 숫자는 시안 원본 px(1024폭 렌더)이고 실제 값은 ÷1.082한 CSS px이다.
 import { useEffect, useRef, useState } from "react";
@@ -171,21 +171,21 @@ export default function Home() {
       <div className="kd-page-narrow">
         <section className="kd-fade-in kd-hero-grid">
           <div className="min-w-0">
-            <h1 className="kd-t-hero text-fg-strong">
-              만든 서비스,
+            <h1 className="kd-t-hero kd-t-home-hero text-fg-strong">
+              GitHub 주소 하나로
               <br />
-              배포와 운영을
+              배포부터 운영까지
               <br />
-              가볍게.
+              간편하게
             </h1>
 
             <p
               className="kd-t-lead mt-5 text-fg-2"
               style={{ maxWidth: 520, wordBreak: "keep-all" }}
             >
-              GitHub 저장소를 연결하면, 빌드부터 앱 서버 실행까지.
+              빌드부터 앱 서버 실행까지.
               <br />
-              터미널과 로그, 데이터베이스도 한곳에서 관리하세요.
+              로그, 터미널, 데이터베이스도 한곳에서 관리하세요.
             </p>
 
             <div className="mt-8 flex items-center gap-7 flex-wrap">

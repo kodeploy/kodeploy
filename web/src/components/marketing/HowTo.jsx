@@ -1,6 +1,6 @@
 // 이용 방법 ("/how") — design/라이트모드-시안/19_이용방법.png 기준.
 //
-// 구성: 가운데 명조 히어로 → 3단계 목록(좌: 번호·제목·설명 / 우: 배포 화면을 축약한 미리보기 카드)
+// 구성: 가운데 히어로 → 3단계 목록(좌: 번호·제목·설명 / 우: 배포 화면을 축약한 미리보기 카드)
 //       → 바닥 가운데 CTA. 행 사이는 콘텐츠 폭 괘선 하나로만 나눈다(면·그림자 없음).
 // 시안은 CTA까지가 딱 한 화면(1024)이라 푸터 없이 끝난다 — 세로 리듬을 좁게 잡은 이유다.
 //
@@ -98,7 +98,7 @@ export default function HowTo() {
     <div className="kd-page-narrow" style={{ paddingTop: 40, paddingBottom: 48 }}>
       <header className="text-center">
         <h1 className="kd-t-hero" style={{ color: "var(--fg-1)" }}>
-          처음이라면, 이 순서로.
+          처음이라면, 이 순서로
         </h1>
         {/* 시안: 히어로 잉크 아래 24 → 리드문 잉크 230 */}
         <p className="kd-t-lead" style={{ color: "var(--fg-2)", marginTop: 8 }}>
