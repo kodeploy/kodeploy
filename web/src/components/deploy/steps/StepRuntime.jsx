@@ -1,5 +1,5 @@
 // 배포 마법사 2단계 — 실행 환경.
-// 좌: 폼(앱 이름·포트·빌드 방식·DB·스토리지·접이식) / 세로 괘선 / 우: "현재 선택" 요약 레일.
+// 좌: 폼(앱 이름·포트·빌드 방식·런타임·DB·스토리지·접이식) / 세로 괘선 / 우: "현재 선택" 요약 레일.
 // 값과 검증은 전부 DeployWizard에 있다. 여기서는 props로 받은 값을 그리고 setter를 부르기만 한다.
 import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import { RUNTIMES } from "../../../api/deploy.js";
@@ -7,6 +7,7 @@ import {
   DB_OPTIONS,
   RUNTIME_META,
   STORAGE_OPTIONS,
+  UNSUPPORTED_RUNTIME_NAMES,
   labelOf,
 } from "./options.js";
 import {
@@ -39,6 +40,8 @@ export default function StepRuntime({
   onDockerfilePath,
   runtime,
   onRuntime,
+  detected,
+  runtimeBlocked,
   // 데이터
   dbType,
   onDbType,
@@ -142,7 +145,7 @@ export default function StepRuntime({
             </Radio>
           </div>
 
-          {buildMode === "dockerfile" ? (
+          {buildMode === "dockerfile" && (
             <div style={{ marginTop: 14 }}>
               <input
                 value={dockerfilePath}
@@ -167,37 +170,27 @@ export default function StepRuntime({
                 </button>
               </div>
             </div>
-          ) : (
-            // 시안의 "감지된 런타임 · Python" 줄. 런타임은 빌드 이미지와 기본 포트를 정하는 실제 입력이라
-            // 읽기 전용 문구로 만들면 값을 잃는다 — 같은 줄 모양을 유지한 채 작은 선택기로 둔다.
-            <div
-              className="kd-t-body-s"
-              style={{ marginTop: 14, display: "flex", alignItems: "center", gap: 8, color: "var(--fg-3)" }}
-            >
-              <span>감지된 런타임</span>
-              <span aria-hidden>·</span>
-              <select
-                value={runtime}
-                onChange={(e) => onRuntime(e.target.value)}
-                disabled={submitting}
-                aria-label="런타임"
-                className="kd-t-body-s"
-                style={{
-                  appearance: "none",
-                  background: "transparent",
-                  border: 0,
-                  color: "var(--fg-2)",
-                  cursor: "pointer",
-                  padding: 0,
-                }}
-              >
-                {RUNTIMES.map((r) => (
-                  <option key={r} value={r}>
-                    {RUNTIME_META[r]?.name || r}
-                  </option>
-                ))}
-              </select>
-            </div>
+          )}
+        </div>
+
+        {/* 런타임 — Dockerfile로 빌드해도 필요하다. 메모리·CPU 한도, 기동 대기(startupProbe),
+            플랫폼 env(JAVA_TOOL_OPTIONS 등), 기본 포트가 런타임으로 정해진다. 그래서 두 빌드 방식 모두에서 보인다. */}
+        <div style={{ marginTop: 32 }}>
+          <FieldLabel htmlFor="wz-runtime">런타임</FieldLabel>
+          <Select
+            id="wz-runtime"
+            value={runtime}
+            onChange={onRuntime}
+            options={RUNTIMES.map((r) => ({ id: r, name: RUNTIME_META[r]?.name || r }))}
+            disabled={submitting}
+            width={324}
+            label="런타임"
+          />
+          <RuntimeNote detected={detected} runtime={runtime} blocked={runtimeBlocked} onRuntime={onRuntime} />
+          {buildMode === "dockerfile" && (
+            <p className="kd-t-caption" style={{ marginTop: 8, color: "var(--fg-3)" }}>
+              Dockerfile로 빌드해도 메모리 한도와 시작 대기 시간이 런타임에 맞춰져요.
+            </p>
           )}
         </div>
 
@@ -206,17 +199,14 @@ export default function StepRuntime({
           <FieldLabel htmlFor="wz-db">데이터베이스</FieldLabel>
           <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
             <Select
+              id="wz-db"
               value={dbType}
-              onChange={(e) => onDbType(e.target.value)}
+              onChange={onDbType}
+              options={DB_OPTIONS}
               disabled={submitting}
               width={324}
-            >
-              {DB_OPTIONS.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </Select>
+              label="데이터베이스"
+            />
             <Checkbox checked={useRedis} onChange={() => onUseRedis(!useRedis)} disabled={submitting}>
               Redis 사용
             </Checkbox>
@@ -369,6 +359,48 @@ export default function StepRuntime({
         </dl>
       </aside>
     </div>
+  );
+}
+
+// 런타임 추정 결과 한 줄. 막힌 경우(지원 안 하는 런타임)만 붉게, 나머지는 보조 설명 톤.
+function RuntimeNote({ detected, runtime, blocked, onRuntime }) {
+  if (!detected || detected.state === "idle" || detected.state === "error") return null;
+  const muted = { marginTop: 8, color: "var(--fg-3)" };
+  if (detected.state === "loading") {
+    return <p className="kd-t-caption" style={muted}>저장소에서 런타임을 찾는 중이에요.</p>;
+  }
+  const { runtime: found, marker, unsupported } = detected;
+  if (unsupported) {
+    const lang = UNSUPPORTED_RUNTIME_NAMES[unsupported] || unsupported;
+    return blocked ? (
+      <p className="kd-t-caption" style={{ ...muted, color: "var(--err-fg)" }}>
+        {lang} 프로젝트로 보여요({marker}). 아직 지원하지 않는 런타임이라 배포할 수 없어요. 잘못 감지됐다면
+        직접 골라 주세요.
+      </p>
+    ) : (
+      <p className="kd-t-caption" style={muted}>
+        {marker} 파일이 보여요. {lang}는 지원하지 않아 고른 런타임 설정으로 실행돼요.
+      </p>
+    );
+  }
+  if (!found) {
+    return <p className="kd-t-caption" style={muted}>저장소에서 런타임을 알아내지 못했어요. 직접 골라 주세요.</p>;
+  }
+  if (found === runtime) {
+    return <p className="kd-t-caption" style={muted}>{marker}에서 감지했어요.</p>;
+  }
+  return (
+    <p className="kd-t-caption" style={muted}>
+      저장소는 {RUNTIME_META[found]?.name || found} 프로젝트로 보여요({marker}).{" "}
+      <button
+        type="button"
+        onClick={() => onRuntime(found)}
+        className="kd-strong"
+        style={{ color: "var(--accent)", textDecoration: "underline" }}
+      >
+        이걸로 바꾸기
+      </button>
+    </p>
   );
 }
 

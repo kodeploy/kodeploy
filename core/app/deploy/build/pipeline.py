@@ -18,7 +18,7 @@ from app import config
 from app.auth import github_app
 from app.auth.model import User
 from app.deploy import crud
-from app.deploy.console import snapshots
+from app.deploy.console import logs as runtime_logs, snapshots
 from app.deploy.stack import env as env_module, manifests, r2
 from app.deploy.build import diagnose
 from app.deploy.build.github import _detect_build, _fetch_github_raw
@@ -840,15 +840,19 @@ async def _run_build(
             # 수동 drift가 이 시점에 DB 선언값으로 복원된다.
             _reconcile_route_hostnames(owner)
 
-            ready = await _wait_for_rollout(build.app_name, build.tenant_id)
+            problem = await _wait_for_rollout(build.app_name, build.tenant_id)
             if _check_cancelled():
                 return
-            if ready:
+            app_log_tail = ""
+            if problem is None:
                 record.deploy_ready_at = datetime.now(timezone.utc)  # rollout 완료 = 사용자 대기 종료
                 build.status = "running"
                 db.commit()
             else:
-                _mark_failed(db, build, record, "Pod 시작 실패 (타임아웃)")
+                # 크래시한 인스턴스 로그는 지금 잡아 둔다 — 아래 reap이 cache export를 기다리는 사이
+                # 재배포로 Pod이 사라질 수 있다. 붙이는 건 로그가 최종본으로 확정된 뒤(아래 failed 블록).
+                app_log_tail = _app_log_tail(build)
+                _mark_failed(db, build, record, problem)
 
             # early-trigger reap: 배포 판정이 끝났다. 뒤에서 돌던 Job(cache export)을 회수한다.
             # ★ 델타2 — Job이 실패해도 build.status를 덮지 않는다. push 마커를 봤으니 이미지는
@@ -882,6 +886,10 @@ async def _run_build(
             # reap 뒤에 두는 이유: cache export 회수를 API 호출만큼 지연시키지 않으려고.
             if build.status == "failed":
                 _stamp_finished()  # 진단 시간이 빌드 소요시간에 섞이지 않게 먼저 마감
+                # 진행 화면은 이 로그 하나만 보여 준다 — 앱 로그가 없으면 크래시 원인을 화면에서 못 본다.
+                if app_log_tail:
+                    build.logs = (build.logs or "").rstrip() + app_log_tail
+                    db.commit()
                 _attach_diagnosis(db, build, record, diagnose.rollout_failure)
 
         except Exception as e:
@@ -955,11 +963,25 @@ async def _wait_for_job(
 
 
 ROLLOUT_TIMEOUT_SECONDS = 900
+# 의존성(DB·Redis)이 준비된 뒤에도 이만큼 더 죽으면 타임아웃을 기다리지 않고 실패로 본다.
+# 첫 배포는 DB가 뜨기 전에 앱이 몇 번 죽는 게 정상이라, 그동안의 재시작은 세지 않는다.
+CRASH_RESTART_LIMIT = 2
+# 기다려도 스스로 풀리지 않는 컨테이너 대기 사유 — 보는 즉시 실패.
+_FATAL_WAITING = {
+    "ImagePullBackOff": "이미지를 받아오지 못했어요",
+    "InvalidImageName": "이미지 이름이 올바르지 않아요",
+    "CreateContainerConfigError": "컨테이너 설정에 오류가 있어요",
+}
+_DEP_SELECTOR = "component in (mysql,postgres,redis)"
+APP_LOG_TAIL_LINES = 80
 
 
-async def _wait_for_rollout(app_name: str, namespace: str) -> bool:
+# rollout 대기. 준비되면 None, 실패면 화면에 보일 이유를 돌려준다.
+# 준비 여부만 보면 크래시하는 앱도 타임아웃(15분)까지 "배포 중"으로 남는다 — Pod 상태로 조기 실패를 가른다.
+async def _wait_for_rollout(app_name: str, namespace: str) -> str | None:
     deadline = time.time() + ROLLOUT_TIMEOUT_SECONDS
     apps = k8s.apps_v1()
+    crash_base: dict[str, int] = {}  # Pod 이름 → 의존성이 준비됐을 때의 재시작 횟수
     while time.time() < deadline:
         try:
             dep = apps.read_namespaced_deployment_status(
@@ -973,9 +995,88 @@ async def _wait_for_rollout(app_name: str, namespace: str) -> bool:
         observed = dep.status.observed_generation or 0
         current = dep.metadata.generation or 0
         if ready >= desired and observed >= current:
-            return True
+            return None
+        try:
+            problem = _rollout_problem(dep, app_name, namespace, crash_base)
+        except ApiException:
+            problem = None
+        if problem:
+            return problem
         await asyncio.sleep(5)
-    return False
+    return "Pod 시작 실패 (타임아웃)"
+
+
+# 이번 rollout의 앱 Pod만 본다 — 현재 템플릿 이미지를 쓰는 Pod. 빌드마다 이미지 태그가 바뀌므로
+# 이전 빌드의 크래시 Pod을 Recreate 전환 중에 보고 오판하지 않는다. (ReplicaSet 조회는 core RBAC에 없어 쓰지 않는다.)
+def _rollout_problem(dep, app_name: str, namespace: str, crash_base: dict[str, int]) -> str | None:
+    containers = dep.spec.template.spec.containers or []
+    image = next((c.image for c in containers if c.name == "app"), None)
+    if not image:
+        return None
+    core = k8s.core_v1()
+    pods = [
+        p for p in core.list_namespaced_pod(namespace=namespace, label_selector=f"app={app_name}").items
+        if any(c.name == "app" and c.image == image for c in (p.spec.containers or []))
+    ]
+    dep_pods = core.list_namespaced_pod(namespace=namespace, label_selector=_DEP_SELECTOR).items
+    return _crash_reason(pods, dep_pods, crash_base)
+
+
+# 순수 판정 — 앱 Pod 목록 + 의존성 Pod 목록 → 실패 사유 또는 None. crash_base는 호출 사이에 이어 쓴다.
+def _crash_reason(pods, dep_pods, crash_base: dict[str, int]) -> str | None:
+    deps_ready = all(_pod_ready(p) for p in dep_pods)
+    for pod in pods:
+        if pod.metadata.deletion_timestamp:
+            continue
+        for cs in pod.status.container_statuses or []:
+            if cs.name != "app":
+                continue
+            waiting = cs.state.waiting.reason if cs.state and cs.state.waiting else None
+            if waiting in _FATAL_WAITING:
+                return f"{_FATAL_WAITING[waiting]} ({waiting})."
+            if not deps_ready:
+                continue
+            restarts = cs.restart_count or 0
+            base = crash_base.setdefault(pod.metadata.name, restarts)
+            if restarts - base >= CRASH_RESTART_LIMIT:
+                return _crash_message(cs)
+    return None
+
+
+def _pod_ready(pod) -> bool:
+    return any(
+        c.type == "Ready" and c.status == "True" for c in (pod.status.conditions or [])
+    )
+
+
+def _crash_message(cs) -> str:
+    term = cs.last_state.terminated if cs.last_state else None
+    if term and term.reason == "OOMKilled":
+        head = "메모리가 부족해 앱이 강제 종료됐어요 (OOMKilled)."
+    elif term and term.exit_code in (137, 143):
+        head = (
+            f"앱이 제시간에 응답하지 않아 플랫폼이 재시작했어요 (종료 코드 {term.exit_code}). "
+            "포트 설정을 확인하세요."
+        )
+    elif term:
+        head = f"앱이 시작 중에 종료됐어요 (종료 코드 {term.exit_code})."
+    else:
+        head = "앱이 계속 재시작되고 있어요."
+    return f"{head} 재시작이 반복돼 배포를 멈췄어요. 로그 끝의 앱 로그를 확인하세요."
+
+
+# 실패한 앱의 런타임 로그 꼬리 — 빌드 로그 끝에 붙일 블록. 없으면 "".
+def _app_log_tail(build: Build) -> str:
+    try:
+        logs = runtime_logs.fetch_app_logs(build.tenant_id, build.app_name)
+    except Exception:
+        return ""
+    lines = logs.get("previous") or logs.get("current") or []
+    if not lines:
+        return ""
+    label = "마지막으로 종료된 인스턴스" if logs.get("previous") else "현재 인스턴스"
+    tail = "\n".join(lines[-APP_LOG_TAIL_LINES:])
+    return f"\n\n=== 앱 로그 ({label}) ===\n{tail}\n"
 
 
 # build-id 라벨로 BuildKit Pod 찾아 로그 조회 (main container 기본)

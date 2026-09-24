@@ -10,6 +10,14 @@ export const RUNTIME_META = {
   none: { name: "사용 안 함", tag: "정적 사이트 단독" },
 };
 
+// 런타임 추정이 알려주는 "아직 지원하지 않는" 런타임 표기 (백엔드 _UNSUPPORTED_MARKERS와 같은 키).
+export const UNSUPPORTED_RUNTIME_NAMES = {
+  go: "Go",
+  ruby: "Ruby",
+  rust: "Rust",
+  elixir: "Elixir",
+};
+
 // runtime별 기본 listen 포트 — runtime을 바꾸면 포트가 따라 바뀐다.
 export const DEFAULT_PORTS = {
   python: 8000,

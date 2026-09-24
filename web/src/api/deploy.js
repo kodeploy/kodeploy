@@ -133,6 +133,13 @@ export function listGithubBranches(repoUrl) {
   return request(`/deploy/github/branches?repo=${encodeURIComponent(repoUrl)}`);
 }
 
+// 저장소 런타임 추정 — 배포 마법사 2단계 미리 채우기용. 마커 파일(pom.xml 등) 기반.
+// { checked, runtime, marker, unsupported } — 지원 안 하는 런타임이면 runtime=null, unsupported="go" 등.
+export function detectRuntime(repoUrl, branch, path) {
+  const q = new URLSearchParams({ repo: repoUrl, branch: branch || "main", path: path || "" });
+  return request(`/deploy/github/detect?${q}`);
+}
+
 // 사용자 앱 환경변수 — {app_name}-env Secret을 진실원으로 GET/PUT.
 // 첫 배포 전이거나 한 번도 설정 안 했으면 빈 dict.
 export function getEnvVars() {

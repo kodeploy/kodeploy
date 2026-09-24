@@ -3,7 +3,8 @@
 // 왜 따로 두나: 3단계가 같은 골격(레일 + 폼 + 하단 버튼)을 공유하는데,
 // 각 단계 컴포넌트가 제 나름의 치수를 들고 있으면 단계를 오갈 때 레이아웃이 흔들린다.
 // 시안(1536폭 렌더, 스케일 1.39)에서 잰 값을 여기 한 곳에서만 CSS px로 환산해 둔다.
-import { Check, ChevronRight } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronRight } from "lucide-react";
 
 // 시안 실측 → CSS 환산 (÷1.39). 레일 전체 폭 = 폼 시작 x348 - 콘텐츠 좌단 x56.
 export const RAIL_W = 211;      // 시안 (348-56)/1.39
@@ -121,32 +122,149 @@ export function FieldHint({ children }) {
   );
 }
 
-// 네이티브 select + 우측 갈매기. appearance를 지워야 시안처럼 한 겹으로 보인다.
-export function Select({ value, onChange, disabled, children, width }) {
+// 고르는 칸 — 상자는 .kd-input, 펼친 목록은 소개 페이지 PickField·작업 공간 MiniSelect와 같은 모양
+// (kd-card 면, --row-md 줄, 고른 값 --sel-soft · 호버 --sel).
+// native <select>는 펼친 목록을 OS가 그려 다크 테마에서 흰 바탕에 흐린 글자로 나와서 직접 그린다.
+// 키보드: 상자에서 Enter/Space/↓로 열고, ↑↓로 이동, Enter로 고르고, Esc·바깥 클릭으로 닫는다.
+// options: [{ id, name }], onChange(id)
+export function Select({ id, value, onChange, options, disabled, width, label }) {
+  const [open, setOpen] = useState(false);
+  const [hover, setHover] = useState(-1);
+  const wrapRef = useRef(null);
+  const btnRef = useRef(null);
+  const current = options.find((o) => o.id === value);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e) => !wrapRef.current?.contains(e.target) && setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  useEffect(() => {
+    if (disabled) setOpen(false);
+  }, [disabled]);
+
+  const openMenu = () => {
+    setHover(Math.max(0, options.findIndex((o) => o.id === value)));
+    setOpen(true);
+  };
+  const pick = (next) => {
+    onChange(next);
+    setOpen(false);
+    btnRef.current?.focus();
+  };
+
+  const onKeyDown = (e) => {
+    if (!open) {
+      if (["Enter", " ", "ArrowDown", "ArrowUp"].includes(e.key)) {
+        e.preventDefault();
+        openMenu();
+      }
+      return;
+    }
+    if (e.key === "Escape") {
+      e.preventDefault();
+      setOpen(false);
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setHover((i) => Math.min(options.length - 1, i + 1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setHover((i) => Math.max(0, i - 1));
+    } else if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      if (options[hover]) pick(options[hover].id);
+    } else if (e.key === "Tab") {
+      setOpen(false);
+    }
+  };
+
   return (
-    <div style={{ position: "relative", width: width || "100%" }}>
-      <select
-        value={value}
-        onChange={onChange}
+    <div ref={wrapRef} style={{ position: "relative", width: width || "100%", minWidth: 0 }}>
+      <button
+        ref={btnRef}
+        id={id}
+        type="button"
+        onClick={() => (open ? setOpen(false) : openMenu())}
+        onKeyDown={onKeyDown}
         disabled={disabled}
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
         className="kd-input"
-        style={{ appearance: "none", paddingRight: 34, cursor: "pointer" }}
-      >
-        {children}
-      </select>
-      <ChevronRight
-        aria-hidden
-        size={15}
-        strokeWidth={1.8}
         style={{
-          position: "absolute",
-          right: 12,
-          top: "50%",
-          transform: "translateY(-50%) rotate(90deg)",
-          color: "var(--fg-3)",
-          pointerEvents: "none",
+          display: "flex",
+          alignItems: "center",
+          textAlign: "left",
+          cursor: disabled ? "default" : "pointer",
+          borderColor: open ? "var(--fg-3)" : undefined,
         }}
-      />
+      >
+        <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {current?.name ?? "—"}
+        </span>
+        <ChevronDown
+          aria-hidden
+          size={15}
+          strokeWidth={1.8}
+          style={{
+            flexShrink: 0,
+            marginLeft: 8,
+            color: "var(--fg-3)",
+            transform: open ? "rotate(180deg)" : "none",
+            transition: "transform 150ms ease",
+          }}
+        />
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          aria-label={label}
+          onMouseLeave={() => setHover(-1)}
+          className="kd-card"
+          style={{
+            position: "absolute",
+            left: 0,
+            top: "calc(100% + 4px)",
+            zIndex: 30,
+            width: "100%",
+            minWidth: 140,
+            maxHeight: 280,
+            overflowY: "auto",
+            paddingBlock: 6,
+          }}
+        >
+          {options.map((o, i) => {
+            const selected = o.id === value;
+            return (
+              <div
+                key={o.id}
+                role="option"
+                aria-selected={selected}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => pick(o.id)}
+                onMouseEnter={() => setHover(i)}
+                className="kd-t-label"
+                style={{
+                  height: "var(--row-md)",
+                  display: "flex",
+                  alignItems: "center",
+                  paddingInline: 14,
+                  color: "var(--fg-1)",
+                  cursor: "pointer",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                  background: hover === i ? "var(--sel)" : selected ? "var(--sel-soft)" : "transparent",
+                }}
+              >
+                {o.name}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

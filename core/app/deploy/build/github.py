@@ -53,13 +53,21 @@ _RUNTIME_MARKERS = {
     "java": frozenset({"pom.xml", "build.gradle", "build.gradle.kts"}),
     "php": frozenset({"composer.json"}),
     "javascript": frozenset({"package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml"}),
-    # --- 미지원 런타임 (지원 추가 시 활성화) ---
-    # "go": frozenset({"go.mod"}),
-    # "ruby": frozenset({"Gemfile"}),
-    # "rust": frozenset({"Cargo.toml"}),
-    # "elixir": frozenset({"mix.exs"}),
 }
 _NIXPACKS_MARKERS = frozenset().union(*_RUNTIME_MARKERS.values())
+
+# 아직 지원하지 않는 런타임의 마커 — 런타임 추정에서 "지원 안 함"을 알려주는 데만 쓴다.
+# 지원을 추가하면 _RUNTIME_MARKERS로 옮긴다.
+_UNSUPPORTED_MARKERS = {
+    "go": frozenset({"go.mod"}),
+    "ruby": frozenset({"Gemfile"}),
+    "rust": frozenset({"Cargo.toml"}),
+    "elixir": frozenset({"mix.exs"}),
+}
+
+# 런타임 추정 순서 — 깊이가 같으면 앞쪽이 이긴다. package.json은 다른 언어 repo에도 프론트·도구용으로
+# 흔해서 맨 뒤다 (Laravel = composer.json + package.json → php, Rails = Gemfile + package.json → ruby).
+_DETECT_ORDER = ("java", "python", "php", "go", "ruby", "rust", "elixir", "javascript")
 
 
 # build_mode="detect" 해소 — GitHub tree API로 빌드 방식 + 경로를 한 번에 감지 (깊이 3까지).
@@ -70,27 +78,34 @@ _NIXPACKS_MARKERS = frozenset().union(*_RUNTIME_MARKERS.values())
 # private은 installation 토큰. fallback 아님(존재 기반).
 def _detect_build(build: Build) -> "tuple[str, str]":
     fallback = ("auto", build.project_path or "")
-    m = _GITHUB_REPO_PATTERN.match(build.repo_url.rstrip("/"))
-    if not m:
+    tree = _fetch_tree(build.repo_url, build.branch, _installation_id_for(build))
+    if tree is None:
         return fallback
+    chosen = _choose_build_target(tree, build.project_path, build.runtime)
+    return chosen if chosen else fallback
+
+
+# GitHub tree API(recursive)로 repo 파일 목록 조회. private은 installation 토큰. 실패하면 None.
+def _fetch_tree(repo_url: str, branch: str, installation_id: "int | None") -> "list[dict] | None":
+    m = _GITHUB_REPO_PATTERN.match(repo_url.rstrip("/"))
+    if not m:
+        return None
     owner, repo = m.group(1), m.group(2)
     headers = {"Accept": "application/vnd.github+json", "User-Agent": "kodeploy"}
-    token = github_app.get_clone_token(_installation_id_for(build))
+    token = github_app.get_clone_token(installation_id)
     if token:
         headers["Authorization"] = f"Bearer {token}"
     api_url = (
         f"https://api.github.com/repos/{owner}/{repo}/git/trees/"
-        f"{urllib.parse.quote(build.branch)}?recursive=1"
+        f"{urllib.parse.quote(branch)}?recursive=1"
     )
     try:
         req = urllib.request.Request(api_url, headers=headers)
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.load(resp)
     except (urllib.error.URLError, TimeoutError, ValueError):
-        return fallback
-
-    chosen = _choose_build_target(data.get("tree", []), build.project_path, build.runtime)
-    return chosen if chosen else fallback
+        return None
+    return data.get("tree", [])
 
 
 # tree(파싱된 GitHub tree API 응답)에서 빌드 방식+경로 선택 — 순수 함수.
@@ -127,6 +142,55 @@ def _choose_build_target(
         best = markers[0]
         return ("auto", best.rsplit("/", 1)[0] if "/" in best else "")
     return None
+
+
+# 배포 폼 2단계 런타임 미리 채우기 — repo 마커 파일로 런타임을 추정한다.
+# 폼이 저장소·브랜치·경로를 바꿀 때마다 부르므로 tree를 잠깐 캐시한다(비인증 한도 IP당 60req/h 보호).
+# 빌드 시점 감지(_detect_build)는 최신 tree가 필요해서 이 캐시를 쓰지 않는다.
+_TREE_CACHE: dict[tuple, tuple[float, list]] = {}
+_TREE_TTL_SECONDS = 60
+
+
+def detect_runtime(
+    repo_url: str, branch: str, project_path: str, installation_id: "int | None",
+) -> dict:
+    key = (repo_url.rstrip("/").lower(), branch, installation_id is not None)
+    hit = _TREE_CACHE.get(key)
+    if hit and time.monotonic() - hit[0] < _TREE_TTL_SECONDS:
+        tree = hit[1]
+    else:
+        tree = _fetch_tree(repo_url, branch, installation_id)
+        if tree is None:
+            return {"checked": False, "runtime": None, "marker": None, "unsupported": None}
+        _TREE_CACHE[key] = (time.monotonic(), tree)
+    return {"checked": True, **_choose_runtime(tree, project_path)}
+
+
+# tree에서 런타임 추정 — 순수 함수. project_path 안, 깊이 3까지.
+# root에 가까운 마커가 이기고, 깊이가 같으면 _DETECT_ORDER 앞쪽이 이긴다.
+# 지원하는 런타임이면 runtime, 지원 안 하는 런타임이면 unsupported, 마커가 없으면 둘 다 None.
+def _choose_runtime(tree: "list[dict]", project_path: "str | None") -> dict:
+    prefix = (project_path or "").strip("/")
+    markers = {**_RUNTIME_MARKERS, **_UNSUPPORTED_MARKERS}
+    found = []                                         # (깊이, 순서, 런타임, 경로)
+    for item in tree:
+        if item.get("type") != "blob":
+            continue
+        path = item.get("path", "")
+        if path.count("/") > 3:
+            continue
+        if prefix and not (path == prefix or path.startswith(f"{prefix}/")):
+            continue
+        name = path.rsplit("/", 1)[-1]
+        for rank, rt in enumerate(_DETECT_ORDER):
+            if name in markers[rt]:
+                found.append((path.count("/"), rank, rt, path))
+    if not found:
+        return {"runtime": None, "marker": None, "unsupported": None}
+    _, _, rt, path = min(found)
+    if rt in _RUNTIME_MARKERS:
+        return {"runtime": rt, "marker": path, "unsupported": None}
+    return {"runtime": None, "marker": path, "unsupported": rt}
 
 
 # GitHub 커밋 캐시 — unauthenticated 한도(IP당 60req/h, core egress IP 공유) 보호.

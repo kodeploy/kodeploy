@@ -551,7 +551,7 @@ def rollout_failure(build) -> CallResult:
     previous = "\n".join(app_logs.get("previous") or [])
 
     case = f"""\
-이미지 빌드는 성공했지만, 컨테이너가 정상 기동에 실패해 배포가 타임아웃됐습니다.
+이미지 빌드는 성공했지만, 컨테이너가 정상 기동에 실패했습니다 (플랫폼 판정: {build.error}).
 플랫폼은 선택 포트로 TCP probe를 보내며, 응답이 없으면 이 상태가 됩니다.
 아래 정보를 근거로 원인과 조치를 진단하세요.
 

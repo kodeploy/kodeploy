@@ -12,6 +12,7 @@ import { useNavigate } from "react-router-dom";
 import {
   createDeploy,
   CUSTOM_DOMAIN_CNAME_TARGET,
+  detectRuntime,
   getEnvVars,
   getReservedKeys,
   listBuilds,
@@ -70,6 +71,10 @@ export default function DeployWizard({ onRequestGuide }) {
   const [storage, setStorage] = useState("none");
   const [volumeMountPath, setVolumeMountPath] = useState("/var/www/html/data"); // local 전용
   const [runtime, setRuntime] = useState(RUNTIMES[0]);
+  // 저장소 런타임 추정 — { state: "idle"|"loading"|"done"|"error", runtime, marker, unsupported }
+  const [detected, setDetected] = useState({ state: "idle" });
+  // 유저가 런타임을 직접 골랐는지 — 고른 뒤에는 추정값으로 덮지 않는다.
+  const [runtimeTouched, setRuntimeTouched] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   // 접이식 — 시안 기본값은 전부 접힘.
@@ -233,6 +238,27 @@ export default function DeployWizard({ onRequestGuide }) {
     };
   }, [repoUrl]);
 
+  // 저장소 런타임 추정 — repo·브랜치·경로가 정해지면 서버가 마커 파일(pom.xml 등)로 추정한다.
+  // 다른 GitHub 조회와 같은 500ms 디바운스. 조회 실패는 조용히 넘긴다(직접 고르면 된다).
+  useEffect(() => {
+    const url = repoUrl.trim();
+    if (!url.match(/github\.com[/:]([^/]+)\/([^/]+?)(?:\.git)?\/?$/)) {
+      setDetected({ state: "idle" });
+      return;
+    }
+    let cancelled = false;
+    setDetected({ state: "loading" });
+    const timer = setTimeout(() => {
+      detectRuntime(url, branch.trim() || "main", projectPath.trim())
+        .then((d) => !cancelled && setDetected({ ...d, state: d.checked ? "done" : "error" }))
+        .catch(() => !cancelled && setDetected({ state: "error" }));
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [repoUrl, branch, projectPath]);
+
   // 연결됨(installation 있음)이면 접근 가능한 repo 목록 받아 드롭다운 채움. 미연결/실패면 빈 배열.
   useEffect(() => {
     if (!user?.github_connected) {
@@ -272,12 +298,28 @@ export default function DeployWizard({ onRequestGuide }) {
     setEnvRows((r) => r.map((row, idx) => (idx === i ? { ...row, visible: !row.visible } : row)));
 
   const serverNone = runtime === "none";
+  // 추정값은 첫 배포에서 유저가 직접 고르기 전까지만 쓴다. 재배포는 이전 빌드의 런타임이 우선.
+  const runtimeLocked = !isFirstDeploy || runtimeTouched;
+  // 지원 안 하는 런타임(go 등)으로 보이면 배포를 막는다. 잘못 감지됐으면 직접 골라 풀 수 있다.
+  const runtimeBlocked =
+    !serverNone && !runtimeLocked && detected.state === "done" && !!detected.unsupported;
   // 도메인 안내용 이름 — 첫 배포 입력값/확정 app_name, 없으면 placeholder
   const appLabel = user?.app_name || name.trim() || "앱이름";
   // 1차 repo — 서버 ON이면 서버 링크, OFF(정적 단독)면 프론트 링크가 곧 repo.
   const primaryRepo = (serverNone ? staticRepoUrl : repoUrl).trim();
   // 서버도 정적도 없으면 배포할 게 없음 / 1차 repo 비면 불가
-  const disabled = !primaryRepo || submitting || (serverNone && !useStatic);
+  const disabled = !primaryRepo || submitting || (serverNone && !useStatic) || runtimeBlocked;
+
+  // 추정한 런타임을 폼에 채운다 (포트는 runtime effect가 기본값으로 따라온다).
+  useEffect(() => {
+    if (serverNone || runtimeLocked || detected.state !== "done") return;
+    if (RUNTIMES.includes(detected.runtime)) setRuntime(detected.runtime);
+  }, [detected, runtimeLocked, serverNone]);
+
+  const pickRuntime = (r) => {
+    setRuntimeTouched(true);
+    setRuntime(r);
+  };
 
   // 지금 켜진 dep들이 자동 주입하는 예약 키 집합 (서버 슬롯에만 env 주입되므로 serverNone이면 빈 집합).
   // env가 이 키와 충돌하면 Option A로 유저 값이 이겨 관리형 연결이 깨지므로 폼에서 미리 막는다.
@@ -432,9 +474,13 @@ export default function DeployWizard({ onRequestGuide }) {
         ...(storage === "local" && volumeMountPath.trim() ? [volumeMountPath.trim()] : []),
       ],
     },
+    // 환경변수 — 이름만 보여준다(값은 확인 화면에 노출하지 않는다). "수정"은 2단계 편집기를 펼쳐 둔다.
+    envKeys.length > 0
+      ? { label: "환경변수", step: 2, focus: "env", parts: envKeys, code: true }
+      : { label: "환경변수", step: 2, focus: "env", parts: ["추가된 값 없음"] },
   ];
 
-  const nextDisabled = step === 1 ? !primaryRepo || submitting : submitting;
+  const nextDisabled = step === 1 ? !primaryRepo || submitting : submitting || runtimeBlocked;
 
   return (
     <form onSubmit={handleFormSubmit} className="kd-page kd-fade-in" style={{ paddingBottom: 72 }}>
@@ -487,7 +533,9 @@ export default function DeployWizard({ onRequestGuide }) {
               dockerfilePath={dockerfilePath}
               onDockerfilePath={setDockerfilePath}
               runtime={runtime}
-              onRuntime={setRuntime}
+              onRuntime={pickRuntime}
+              detected={detected}
+              runtimeBlocked={runtimeBlocked}
               dbType={dbType}
               onDbType={setDbType}
               useRedis={useRedis}
@@ -526,11 +574,10 @@ export default function DeployWizard({ onRequestGuide }) {
               appLabel={appLabel}
               appUrl={appUrl}
               rows={reviewRows}
-              envCount={envKeys.length}
-              envSummary={envKeys}
-              showEnv={showEnv}
-              onToggleEnv={() => setShowEnv((v) => !v)}
-              onJump={setStep}
+              onJump={(to, focus) => {
+                if (focus === "env") setShowEnv(true);
+                setStep(to);
+              }}
             />
           )}
 

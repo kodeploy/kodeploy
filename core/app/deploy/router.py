@@ -578,6 +578,18 @@ def github_branches(repo: str, user: User = Depends(get_current_user)) -> list[d
     return github_app.list_branches(user.github_installation_id, m.group(1), m.group(2))
 
 
+# 저장소 런타임 추정 — 배포 폼 2단계 런타임 미리 채우기용. ?repo=<github url>&branch=&path=
+# 마커 파일 기반. 지원 안 하는 런타임(go 등)이면 unsupported, 조회 실패면 checked=False.
+# /{build_id} GET보다 위에 등록해야 "github"가 build_id로 안 잡힘.
+@router.get("/github/detect")
+def github_detect(
+    repo: str, branch: str = "main", path: str = "", user: User = Depends(get_current_user),
+) -> dict:
+    return github.detect_runtime(
+        repo.strip(), branch.strip() or "main", path, user.github_installation_id,
+    )
+
+
 # DB 스냅샷 추출 — 현재 앱 MySQL을 mysqldump → .sql.gz 다운로드 스트림.
 # /{build_id} GET 핸들러보다 위에 등록해야 "db"가 build_id로 잡히지 않음.
 @router.get("/db/export")

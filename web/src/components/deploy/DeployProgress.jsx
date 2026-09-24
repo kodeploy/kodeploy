@@ -195,11 +195,13 @@ export default function DeployProgress() {
   }, [build?.created_at, build?.updated_at, live, now]);
 
   // 진행 중(live)엔 갱신마다 맨 밑으로 붙여 tail -f처럼 흐르게 한다.
-  // 끝나면 강제 스크롤을 풀어 위로 올려 읽게 둔다(에러는 보통 맨 끝) — BuildDetail과 같은 규칙.
+  // 끝나면 강제 스크롤을 풀어 위로 올려 읽게 둔다 — BuildDetail과 같은 규칙.
+  // 실패는 로그가 바뀔 때 한 번 더 맨 밑으로 — 배포 실패면 크래시한 앱 로그가 끝에 붙는다.
+  const failedNow = build?.status === "failed";
   useEffect(() => {
     const el = logBoxRef.current;
-    if (el && live) el.scrollTop = el.scrollHeight;
-  }, [build?.logs, live]);
+    if (el && (live || failedNow)) el.scrollTop = el.scrollHeight;
+  }, [build?.logs, live, failedNow]);
 
   const title = done
     ? "앱이 준비됐어요."

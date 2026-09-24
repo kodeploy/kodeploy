@@ -180,13 +180,14 @@ export default function StepRepo({
         <div>
           <FieldLabel htmlFor="wz-branch">브랜치</FieldLabel>
           {hasBranchList ? (
-            <Select value={branch} onChange={(e) => onBranch(e.target.value)} disabled={submitting}>
-              {branchOptions.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </Select>
+            <Select
+              id="wz-branch"
+              value={branch}
+              onChange={onBranch}
+              options={branchOptions.map((b) => ({ id: b, name: b }))}
+              disabled={submitting}
+              label="브랜치"
+            />
           ) : (
             <input
               id="wz-branch"
