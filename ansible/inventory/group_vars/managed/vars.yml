@@ -1,0 +1,6 @@
+# managed 그룹 변수 (평문). 비밀값은 vault.yml(ansible-vault 암호화)에 vault_ 접두사로 두고 여기서 이어받는다.
+
+# Argo CD repo-creds용 org GitHub App (75-argocd.yml)
+gh_app_id: 5060324
+gh_installation_id: 164421415
+gh_private_key: "{{ vault_gh_private_key }}"
