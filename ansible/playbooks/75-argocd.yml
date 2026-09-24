@@ -1,0 +1,97 @@
+# Argo CD (core 설치본 v3.5.3) - kodeploy-apps의 values를 테넌트 네임스페이스에 적용한다.
+# 매니페스트: deploy/k8s/argocd/kustomization.yaml (리소스·worker2 선호 패치)
+# AppProject·ApplicationSet은 kodeploy-charts repo에 있고 따로 적용한다.
+#
+# repo-creds(org GitHub App)는 변수를 주면 만든다. 비밀값은 레포에 두지 않는다:
+#   -e gh_app_id=... -e gh_installation_id=... -e gh_private_key_file=/abs/path/app.pem
+- name: Argo CD 설치
+  hosts: managed
+  become: false
+  vars:
+    # 80-k8s-copy-manifests.yml과 같은 경로. 75가 80보다 먼저 돌 수 있어서 여기서도 복사한다
+    remote_dir: /home/opc/k8s-manifests/argocd
+    local_dir: "{{ playbook_dir }}/../../deploy/k8s/argocd"
+    gh_app_id: ""
+    gh_installation_id: ""
+    gh_private_key_file: ""               # 컨트롤 머신의 pem 경로
+    gh_creds: "{{ [gh_app_id, gh_installation_id, gh_private_key_file] | select | list | length }}"
+  tasks:
+    - name: repo-creds 변수 확인 (셋 다 주거나 셋 다 비운다)
+      assert:
+        that: gh_creds | int in [0, 3]
+        fail_msg: gh_app_id, gh_installation_id, gh_private_key_file 중 일부만 주어졌다
+
+    - name: argocd 네임스페이스 (이미 있으면 그대로)
+      shell: kubectl create namespace argocd --dry-run=client -o yaml | kubectl apply -f -
+      register: ns_result
+      changed_when: "'created' in ns_result.stdout"
+
+    - name: argocd 매니페스트 디렉터리
+      file:
+        path: "{{ remote_dir }}"
+        state: directory
+
+    - name: argocd 매니페스트 복사
+      copy:
+        src: "{{ local_dir }}/"
+        dest: "{{ remote_dir }}/"
+        mode: preserve
+
+    # server-side apply는 바뀐 게 없어도 serverside-applied를 출력해서 변경 여부를 가릴 수 없다
+    - name: Argo CD apply (CRD가 커서 server-side)
+      command: kubectl apply --server-side --force-conflicts -k {{ remote_dir }}
+      register: apply_result
+
+    - name: 컴포넌트 rollout 대기
+      command: kubectl -n argocd rollout status {{ item }} --timeout=300s
+      loop:
+        - statefulset/argocd-application-controller
+        - deployment/argocd-repo-server
+        - deployment/argocd-applicationset-controller
+        - deployment/argocd-redis
+      changed_when: false
+
+    - name: GitHub App 자격증명 (repo-creds)
+      when: gh_creds | int == 3
+      block:
+        - name: pem 임시 파일
+          tempfile:
+            state: file
+            suffix: .pem
+          register: pem_tmp
+
+        - name: pem 업로드 (0600)
+          copy:
+            src: "{{ gh_private_key_file }}"
+            dest: "{{ pem_tmp.path }}"
+            mode: "0600"
+          no_log: true
+
+        # --server-side: client-side apply는 last-applied 어노테이션에 키를 한 벌 더 남긴다
+        - name: kodeploy-org-creds Secret
+          shell: >
+            kubectl -n argocd create secret generic kodeploy-org-creds
+            --from-literal=type=git
+            --from-literal=url=https://github.com/kodeploy
+            --from-literal=githubAppID={{ gh_app_id | quote }}
+            --from-literal=githubAppInstallationID={{ gh_installation_id | quote }}
+            --from-file=githubAppPrivateKey={{ pem_tmp.path | quote }}
+            --dry-run=client -o yaml
+            | kubectl label --local -f - argocd.argoproj.io/secret-type=repo-creds -o yaml
+            | kubectl apply --server-side -f -
+          no_log: true
+      always:
+        - name: pem 임시 파일 삭제
+          file:
+            path: "{{ pem_tmp.path }}"
+            state: absent
+          when: pem_tmp.path is defined
+
+    - name: 설치 확인 (어느 노드에 떴는지)
+      command: kubectl -n argocd get pods -o wide
+      register: pods_result
+      changed_when: false
+
+    - name: Pod 상태 출력
+      debug:
+        var: pods_result.stdout_lines
