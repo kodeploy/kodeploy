@@ -1,0 +1,17 @@
+{
+  "build_id": "e2e00001",
+  "actor": "d6d8b759",
+  "namespace": "tenant-d6d8b759",
+  "slot": "server",
+  "kind": "build",
+  "values": {"userId": "d6d8b75985524d6f9a9000665e7ca0da"},
+  "unit": {"runtime": "java", "port": 8080},
+  "build": {
+    "repo": "https://github.com/yuntyu01/kodeploy-test-spring.git",
+    "ref": "r2-test-v1",
+    "mode": "dockerfile",
+    "dockerfile_name": "Dockerfile",
+    "image_repo": "ghcr.io/yuntyu01/d6d8b759/kodeploy-test-spring",
+    "image_tag": "e2e00001"
+  }
+}

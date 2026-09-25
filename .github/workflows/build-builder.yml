@@ -1,0 +1,125 @@
+name: Build Builder Image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "builder/**"
+      - ".github/workflows/build-builder.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write             # deployment.yaml 이미지 고정 커밋을 되돌려 push
+  packages: write             # GHCR push
+
+concurrency:
+  group: build-builder
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # 고정 커밋을 되돌려 push할 때 rebase가 필요 - shallow면 깨진다
+
+      # core 워크플로에는 없는 단계 - 이미지 전에 테스트부터 통과시킨다
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: builder/go.mod
+          cache-dependency-path: builder/go.sum
+
+      - name: vet + test
+        working-directory: builder
+        run: |
+          go vet ./...
+          go test -race ./...
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 태그 계산
+        id: vars
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"       # GHCR 경로는 소문자만
+          echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${owner}/kodeploy-builder" >> "$GITHUB_OUTPUT"
+
+      - name: 빌드 + push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./builder
+          platforms: linux/arm64
+          push: true
+          # latest는 main에서만. 다른 브랜치에서 수동 실행하면 sha 태그만 올린다 (E2E용)
+          tags: |
+            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
+            ${{ github.ref == 'refs/heads/main' && format('{0}:latest', steps.vars.outputs.image) || '' }}
+
+      # 고정 커밋은 main에서만 - 다른 브랜치에서 돌면 HEAD:main push가 그 브랜치를 main에 올려 버린다
+      - name: deployment.yaml에 이미지 고정
+        id: pin
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          IMAGE="${{ steps.vars.outputs.image }}"
+          TAG="${{ steps.vars.outputs.tag }}"
+          DIGEST="${{ steps.build.outputs.digest }}"
+          REF="${IMAGE}:${TAG}@${DIGEST}"
+          FILE=deploy/k8s/builder/deployment.yaml
+
+          sed -i -E "s#^(\s*image: ).*kodeploy-builder.*#\1${REF}#" "$FILE"
+
+          if ! grep -q "${DIGEST}" "$FILE"; then
+            echo "✗ 이미지 줄을 못 바꿨다 - deployment.yaml의 image 줄 형식을 확인할 것"
+            grep -n "image:" "$FILE"
+            exit 1
+          fi
+          echo "pinned=${REF}" >> "$GITHUB_OUTPUT"
+          echo "고정: ${REF}"
+
+      - name: 고정 커밋 push
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- deploy/k8s/builder/deployment.yaml; then
+            echo "이미 같은 이미지 - 커밋할 것 없음"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add deploy/k8s/builder/deployment.yaml
+          git commit -m "chore(k8s): pin builder image to ${{ steps.vars.outputs.tag }}"
+          # 이 커밋은 deploy/k8s/**만 건드리므로 builder/** 경로 필터에 안 걸린다 - 재실행 루프 없음
+          git pull --rebase origin main
+          git push origin HEAD:main
+
+      - name: 배포 명령 안내
+        if: github.ref == 'refs/heads/main'
+        run: |
+          {
+            echo "### builder 이미지 빌드 완료"
+            echo ""
+            echo '```'
+            echo "${{ steps.pin.outputs.pinned }}"
+            echo '```'
+            echo ""
+            echo "적용 (managed 노드에서):"
+            echo '```sh'
+            echo "git pull && kubectl apply -f deploy/k8s/builder/"
+            echo "kubectl rollout status deployment/kodeploy-builder -n default"
+            echo '```'
+            echo ""
+            echo "되돌리기:"
+            echo '```sh'
+            echo "kubectl rollout undo deployment/kodeploy-builder -n default"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

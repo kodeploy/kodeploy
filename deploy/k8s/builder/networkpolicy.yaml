@@ -1,0 +1,21 @@
+# 들어오는 쪽은 core Pod의 8080만. 나가는 쪽은 막지 않는다 (API 서버, GitHub, GHCR, core 콜백).
+# kubelet 프로브는 Calico가 노드 → 로컬 Pod 트래픽으로 허용한다 - 적용 후 Pod이 Ready로 남는지 확인할 것.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kodeploy-builder
+  namespace: default
+spec:
+  podSelector:
+    matchLabels:
+      app: kodeploy-builder
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: kodeploy-core
+      ports:
+        - protocol: TCP
+          port: 8080

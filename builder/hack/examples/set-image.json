@@ -1,0 +1,9 @@
+{
+  "build_id": "e2e0000a",
+  "actor": "d6d8b759",
+  "namespace": "tenant-d6d8b759",
+  "slot": "server",
+  "kind": "set-image",
+  "unit": {"runtime": "java", "port": 8080},
+  "image": "ghcr.io/yuntyu01/d6d8b759/kodeploy-test-spring:99483bd9@sha256:275b76e156264d6fcd350d9fdcb4ee9dba9b7e2f91ea4446d81b4cd6035a161e"
+}

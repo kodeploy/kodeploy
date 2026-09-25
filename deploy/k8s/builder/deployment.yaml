@@ -1,0 +1,82 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kodeploy-builder
+  namespace: default
+  labels:
+    app: kodeploy-builder
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate                                       # 두 빌더가 겹치면 둘 다 같은 Job을 재개한다 - 옛 Pod이 멈춘 뒤 새 Pod
+  selector:
+    matchLabels:
+      app: kodeploy-builder
+  template:
+    metadata:
+      labels:
+        app: kodeploy-builder
+    spec:
+      serviceAccountName: kodeploy-builder
+      automountServiceAccountToken: true                 # client-go in-cluster 설정에 SA 토큰이 필요하다
+      terminationGracePeriodSeconds: 30                  # 빌더는 SIGTERM 뒤 20초 안에 멈춘다 (Job은 남기고 재시작 후 재개)
+      securityContext:                                   # restricted
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:   # worker2 선호 (강제 아님) - argocd와 같은 방침
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - { key: kubernetes.io/hostname, operator: In, values: [worker2] }
+      containers:
+        - name: builder
+          image: ghcr.io/kodeploy/kodeploy-builder:latest      # CI(build-builder.yml)가 sha+digest로 고정한다
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: CORE_URL
+              value: http://kodeploy-core                # 콜백 대상 (core Service :80)
+            - name: GHCR_USER
+              value: yuntyu01                            # core ConfigMap의 GHCR_USER와 같아야 한다 (이미지 경로 검증)
+            - name: GITOPS_REPO
+              value: kodeploy/kodeploy-apps
+            - name: GITOPS_BRANCH
+              value: main
+            - name: EARLY_TRIGGER
+              value: "true"                              # core 라이브 설정과 같게
+            - name: MAX_ACTIVE_BUILDS
+              value: "3"
+          envFrom:
+            - secretRef:
+                name: kodeploy-builder-secrets           # HMAC_SECRET, GITHUB_TOKEN, GHCR_TOKEN - git에 넣지 않는다 (docs/builder-e2e.md)
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            periodSeconds: 10
+            failureThreshold: 3
+      imagePullSecrets:
+        - name: ghcr-auth                                # core와 같은 pull 시크릿

@@ -1,0 +1,57 @@
+# 빌더 권한 - ClusterRole 없이 네임스페이스 두 곳에만 준다.
+#   kodeploy-build: 빌드 Job 생성·Watch·어노테이션·삭제, 빌드 Pod 로그
+#   argocd:         Application refresh 어노테이션·상태 조회
+# 테넌트 네임스페이스·Secret에는 권한이 없다 (배포는 kodeploy-apps 커밋 → Argo가 한다).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kodeploy-builder
+  namespace: kodeploy-build
+rules:
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["create", "get", "list", "watch", "delete", "patch"]   # patch = 진행 상태 어노테이션, list = 재개
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]                                # build-id 라벨로 빌드 Pod 찾기·컨테이너 상태
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]                                                 # follow 스트림
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kodeploy-builder
+  namespace: kodeploy-build
+subjects:
+  - kind: ServiceAccount
+    name: kodeploy-builder
+    namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kodeploy-builder
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kodeploy-builder
+  namespace: argocd
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources: ["applications"]
+    verbs: ["get", "list", "watch", "patch"]                       # patch = argocd.argoproj.io/refresh
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kodeploy-builder
+  namespace: argocd
+subjects:
+  - kind: ServiceAccount
+    name: kodeploy-builder
+    namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kodeploy-builder
