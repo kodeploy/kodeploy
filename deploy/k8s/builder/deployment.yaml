@@ -35,7 +35,7 @@ spec:
                   - { key: kubernetes.io/hostname, operator: In, values: [worker2] }
       containers:
         - name: builder
-          image: ghcr.io/kodeploy/kodeploy-builder:latest      # CI(build-builder.yml)가 sha+digest로 고정한다
+          image: ghcr.io/kodeploy/kodeploy-builder:sha-79b8e63@sha256:91238b88b7f94ef9f6503eaa9be62513ae6f518725cbcc403815455e26a68c88
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
