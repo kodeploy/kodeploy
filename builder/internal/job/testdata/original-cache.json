@@ -1,0 +1,120 @@
+{
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {
+    "labels": {
+      "app": "kodeploy-build",
+      "build-id": "3f9a2c1d",
+      "build-mode": "dockerfile",
+      "user-id": "d6d8b75985524d6f9a9000665e7ca0da"
+    },
+    "name": "build-d6d8b759-3f9a2c1d",
+    "namespace": "kodeploy-build"
+  },
+  "spec": {
+    "activeDeadlineSeconds": 900,
+    "backoffLimit": 0,
+    "template": {
+      "metadata": {
+        "labels": {
+          "app": "kodeploy-build",
+          "build-id": "3f9a2c1d"
+        }
+      },
+      "spec": {
+        "containers": [
+          {
+            "args": [
+              "build",
+              "--frontend=dockerfile.v0",
+              "--local=context=/workspace/src/backend",
+              "--local=dockerfile=/workspace/src/backend",
+              "--opt=filename=Dockerfile.prod",
+              "--output=type=image,name=ghcr.io/yuntyu01/d6d8b759/kodeploy-test-spring:3f9a2c1d,push=true",
+              "--import-cache=type=registry,ref=ghcr.io/yuntyu01/d6d8b759/kodeploy-test-spring:buildcache",
+              "--export-cache=type=registry,ref=ghcr.io/yuntyu01/d6d8b759/kodeploy-test-spring:buildcache,mode=max"
+            ],
+            "command": [
+              "buildctl-daemonless.sh"
+            ],
+            "env": [
+              {
+                "name": "BUILDKITD_FLAGS",
+                "value": "--oci-worker-no-process-sandbox"
+              }
+            ],
+            "image": "moby/buildkit:v0.30.0-rootless",
+            "name": "buildkit",
+            "securityContext": {
+              "runAsGroup": 1000,
+              "runAsUser": 1000,
+              "seccompProfile": {
+                "type": "Unconfined"
+              }
+            },
+            "volumeMounts": [
+              {
+                "mountPath": "/workspace",
+                "name": "workspace"
+              },
+              {
+                "mountPath": "/home/user/.docker",
+                "name": "docker-config",
+                "readOnly": true
+              }
+            ]
+          }
+        ],
+        "initContainers": [
+          {
+            "args": [
+              "set -eu\necho \"[1/1] cloning ${REPO_URL} (${BRANCH})...\"\n# private repo: 토큰을 URL rewrite(insteadOf)로 주입 — REPO_URL/로그엔 토큰 안 보임(set -x 꺼짐)\nif [ -n \"${GIT_AUTH_TOKEN:-}\" ]; then\n  git config --global url.\"https://x-access-token:${GIT_AUTH_TOKEN}@github.com/\".insteadOf \"https://github.com/\"\nfi\ngit clone --depth 1 -b \"$BRANCH\" \"$REPO_URL\" /workspace/src\n"
+            ],
+            "command": [
+              "sh",
+              "-c"
+            ],
+            "env": [
+              {
+                "name": "REPO_URL",
+                "value": "https://github.com/yuntyu01/kodeploy-test-spring.git"
+              },
+              {
+                "name": "BRANCH",
+                "value": "r2-test-v1"
+              }
+            ],
+            "image": "alpine/git:latest",
+            "name": "clone",
+            "volumeMounts": [
+              {
+                "mountPath": "/workspace",
+                "name": "workspace"
+              }
+            ]
+          }
+        ],
+        "restartPolicy": "Never",
+        "volumes": [
+          {
+            "emptyDir": {},
+            "name": "workspace"
+          },
+          {
+            "name": "docker-config",
+            "secret": {
+              "items": [
+                {
+                  "key": ".dockerconfigjson",
+                  "path": "config.json"
+                }
+              ],
+              "secretName": "ghcr-auth"
+            }
+          }
+        ]
+      }
+    },
+    "ttlSecondsAfterFinished": 1200
+  }
+}
