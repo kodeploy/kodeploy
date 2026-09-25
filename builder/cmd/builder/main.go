@@ -29,6 +29,7 @@ import (
 // SIGTERM 후 종료까지 쓰는 시간 (지시서 4-6)
 const shutdownGrace = 20 * time.Second
 
+// main은 serve를 돌리고, 오류로 끝나면 로그를 남기고 종료 코드 1로 나간다.
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	if err := serve(log); err != nil {
@@ -46,6 +47,8 @@ func kubeConfig() (*rest.Config, error) {
 	return clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, nil).ClientConfig()
 }
 
+// serve는 설정·클라이언트를 만들고 패키지들을 조립한 뒤, 끊긴 빌드를 재개하고 HTTP 서버를 띄운다.
+// SIGTERM을 받으면 새 요청을 멈추고, 진행 중인 빌드는 Job을 남긴 채 멈춘다.
 func serve(log *slog.Logger) error {
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {

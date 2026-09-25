@@ -21,6 +21,7 @@ type KubeSource struct {
 	backoff time.Duration
 }
 
+// NewKubeSource는 빌드 네임스페이스용 KubeSource를 만든다.
 func NewKubeSource(cs kubernetes.Interface, namespace string) *KubeSource {
 	return &KubeSource{cs: cs, ns: namespace, backoff: time.Second}
 }
@@ -50,6 +51,7 @@ func (s *KubeSource) WaitPod(ctx context.Context, buildID string) (string, error
 	}
 }
 
+// firstPod는 Watch에서 처음 보이는 Pod 이름이다. 채널이 닫히거나 ctx가 끝나면 "".
 func firstPod(ctx context.Context, w watch.Interface) string {
 	for {
 		select {
@@ -66,6 +68,7 @@ func firstPod(ctx context.Context, w watch.Interface) string {
 	}
 }
 
+// Open은 컨테이너 로그를 follow + 타임스탬프로 연다. since가 있으면 그 시각부터.
 func (s *KubeSource) Open(ctx context.Context, pod, container string, since time.Time) (io.ReadCloser, error) {
 	opts := &corev1.PodLogOptions{Container: container, Follow: true, Timestamps: true}
 	if !since.IsZero() {
@@ -75,6 +78,7 @@ func (s *KubeSource) Open(ctx context.Context, pod, container string, since time
 	return s.cs.CoreV1().Pods(s.ns).GetLogs(pod, opts).Stream(ctx)
 }
 
+// State는 Pod의 한 컨테이너 상태를 읽는다. Pod이 없으면 Gone.
 func (s *KubeSource) State(ctx context.Context, pod, container string) (State, error) {
 	p, err := s.cs.CoreV1().Pods(s.ns).Get(ctx, pod, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {

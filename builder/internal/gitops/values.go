@@ -31,10 +31,12 @@ type Values struct {
 	Hostnames   []string `yaml:"hostnames"`
 }
 
+// Volume은 values.volume이다.
 type Volume struct {
 	MountPath string `yaml:"mountPath"`
 }
 
+// Static은 values.static이다 (정적 사이트 slot).
 type Static struct {
 	Enabled   bool     `yaml:"enabled"`
 	Image     string   `yaml:"image"`
@@ -93,6 +95,7 @@ func (v *Values) Equal(o *Values) bool {
 	return reflect.DeepEqual(a, b)
 }
 
+// normalize는 nil 목록을 빈 목록으로 바꾼다 (직렬화할 때 null 대신 []).
 func (v *Values) normalize() {
 	if v.Hostnames == nil {
 		v.Hostnames = []string{}
@@ -102,6 +105,7 @@ func (v *Values) normalize() {
 	}
 }
 
+// clone은 깊은 복사다 (Merge가 입력을 바꾸지 않게).
 func (v *Values) clone() *Values {
 	c := *v
 	if v.Port != nil {
@@ -152,6 +156,7 @@ func Merge(cur *Values, req *contract.DeployRequest, image string) (*Values, err
 	return v, nil
 }
 
+// applyCore는 core가 보낸 칸만 v에 덮어쓴다. 보내지 않은 칸(nil)은 그대로 둔다.
 func applyCore(v *Values, cv *contract.CoreValues) {
 	if cv == nil {
 		return

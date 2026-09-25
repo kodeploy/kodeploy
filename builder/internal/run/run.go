@@ -30,6 +30,7 @@ const (
 	apiTimeout    = 10 * time.Second // 정리용 API 호출 (run ctx가 이미 끝났을 수 있다)
 )
 
+// resumeState는 재개할 때 Job 어노테이션에서 읽은 진행 상태다. 새 요청이면 0값.
 type resumeState struct {
 	resumed   bool
 	jobName   string
@@ -40,16 +41,19 @@ type resumeState struct {
 	logLines  int64
 }
 
+// jobOutcome은 Job 대기 결과다 (watchJob이 채널로 보낸다).
 type jobOutcome struct {
 	res job.Result
 	err error
 }
 
+// logPipe는 로그 파이프라인 핸들이다. stop으로 멈추고, done이 닫히면 다 끝난 것이다.
 type logPipe struct {
 	stop context.CancelFunc
 	done chan struct{}
 }
 
+// run은 요청 하나의 상태기계다. execute가 kind별 흐름을 끝까지 돌린다.
 type run struct {
 	m   *Manager
 	req *contract.DeployRequest
@@ -79,6 +83,7 @@ type run struct {
 	lastAckWrite time.Time
 }
 
+// newRun은 run을 만들고 콜백 큐를 띄운다. build면 Job 이름을 정하고 acked-seq 기록(onAck)을 연결한다.
 func newRun(m *Manager, req *contract.DeployRequest, st resumeState) *run {
 	ctx, cancel := context.WithCancelCause(m.base)
 	r := &run{m: m, req: req, st: st, ctx: ctx, cancel: cancel,
@@ -95,9 +100,13 @@ func newRun(m *Manager, req *contract.DeployRequest, st resumeState) *run {
 	return r
 }
 
+// reaping은 배포 판정이 끝나고 Job 회수만 남았는지다 (409 판단에서 빠진다).
 func (r *run) reaping() bool { return r.reapingSt.Load() }
+
+// stopped는 취소·종료로 run ctx가 끝났는지다.
 func (r *run) stopped() bool { return r.ctx.Err() != nil }
 
+// execute는 kind별 흐름을 돌리고, 중간에 멈췄으면 cleanup한다. 끝나면 콜백 큐를 닫는다.
 func (r *run) execute() {
 	defer r.cancel(nil)
 	defer r.q.Close()
@@ -118,6 +127,8 @@ func (r *run) execute() {
 
 // ---- build --------------------------------------------------------------------------------------
 
+// build는 kind=build 흐름이다. Job을 만들고, 로그·마커와 Job 대기를 동시에 돌려
+// push 마커와 Job 종료 중 먼저 오는 쪽을 따른다 (지시서 4-2).
 func (r *run) build() {
 	if r.st.commitSHA != "" || r.st.digest != "" {
 		r.buildResumeAfterPush()
@@ -155,6 +166,7 @@ func (r *run) build() {
 	}
 }
 
+// createJob은 요청으로 Job을 만든다. 요청 JSON을 어노테이션에 넣어 재개에 쓴다. 이미 있으면 그대로 이어서 본다.
 func (r *run) createJob() error {
 	b := r.req.Build
 	reqJSON, err := json.Marshal(r.req)
@@ -268,6 +280,8 @@ func (r *run) reap(deployedOK bool, jobDone <-chan jobOutcome, pipe *logPipe) {
 	}
 }
 
+// buildResumeAfterPush는 digest를 이미 아는 상태로 재개한 경우다.
+// 커밋 전이면 배포부터, 커밋 뒤면 committed를 다시 알리고 Argo 대기부터, 동기화 뒤면 reap만 한다.
 func (r *run) buildResumeAfterPush() {
 	jobDone := r.watchJob()
 	b := r.req.Build
@@ -293,6 +307,8 @@ func (r *run) buildResumeAfterPush() {
 
 // ---- 로그 파이프라인: follow → 마커·최근 줄 → 1초 배치 → 콜백 큐 ---------------------------------------
 
+// startLogs는 로그 파이프라인을 띄운다: follow → 마커·최근 줄 → 1초 배치 → 콜백 큐.
+// 마커가 push 줄을 보면 pushDone에 digest를 한 번 보낸다.
 func (r *run) startLogs(pushDone chan<- string) *logPipe {
 	fctx, stop := context.WithCancel(r.ctx)
 	lines := make(chan string, 256)
@@ -330,6 +346,7 @@ func (r *run) startLogs(pushDone chan<- string) *logPipe {
 	return &logPipe{stop: stop, done: done}
 }
 
+// stopLogs는 로그 파이프라인을 멈추고 끝날 때까지 기다린다.
 func (r *run) stopLogs(p *logPipe) {
 	if p == nil {
 		return
@@ -353,6 +370,7 @@ func (r *run) waitLogs(p *logPipe) {
 	r.stopLogs(p)
 }
 
+// remember는 최근 50줄을 보관한다 (failed 이벤트의 last_lines).
 func (r *run) remember(l string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -362,18 +380,21 @@ func (r *run) remember(l string) {
 	}
 }
 
+// lastLines는 보관한 최근 줄의 복사본이다.
 func (r *run) lastLines() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]string(nil), r.lastRing...)
 }
 
+// setPushed는 마커가 찾은 digest와 그 시각을 적는다 (로그 고루틴에서 부른다).
 func (r *run) setPushed(d string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.pushDig, r.pushAt = d, time.Now().UTC()
 }
 
+// pushed는 마커가 찾은 digest와 시각이다. 못 찾았으면 "".
 func (r *run) pushed() (string, time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -382,11 +403,14 @@ func (r *run) pushed() (string, time.Time) {
 
 // ---- 배포 경로 (build·set-image 공통): registry 확인 → 커밋 → committed → Argo → deployed --------------
 
+// deploy는 build 요청의 이미지로 배포 경로(deployImage)를 탄다.
 func (r *run) deploy(digest string) bool {
 	b := r.req.Build
 	return r.deployImage(b.ImageRepo, b.ImageTag, digest)
 }
 
+// deployImage는 배포 경로 공통이다: 레지스트리 확인 → 커밋 → committed → Argo 대기 → deployed.
+// 실패하면 failed를 보내고 false.
 func (r *run) deployImage(repo, tag, digest string) bool {
 	image := repo + ":" + tag + "@" + digest
 	if err := r.m.d.Registry.Exists(r.ctx, repo, digest); err != nil {
@@ -405,6 +429,7 @@ func (r *run) deployImage(repo, tag, digest string) bool {
 	return r.waitArgo(image, res.CommitSHA)
 }
 
+// commit은 칸 주인 규칙으로 values를 병합해 커밋한다. 실패하면 failed(commit).
 func (r *run) commit(tag, image string) (gitops.Result, bool) {
 	res, err := r.m.d.Git.Commit(r.ctx, gitops.Change{
 		Namespace: r.req.Namespace,
@@ -434,6 +459,8 @@ func (r *run) commitMessage(tag string) string {
 	return strings.Join(append(parts, "["+r.req.BuildID+"]", "by", actor), " ")
 }
 
+// waitArgo는 Application을 refresh하고 우리 커밋이 Synced·Healthy가 될 때까지 기다린다.
+// 성공하면 synced 어노테이션과 deployed 이벤트, 실패하면 단계에 맞는 failed.
 func (r *run) waitArgo(image, sha string) bool {
 	cfg := r.m.d.Cfg
 	since := time.Now()
@@ -474,6 +501,7 @@ func (r *run) waitArgo(image, sha string) bool {
 
 // ---- set-image · config · delete (Job 없음, 진행 상태는 메모리) --------------------------------------
 
+// setImage는 kind=set-image 흐름이다. 요청 이미지를 repo·tag·digest로 나눠 배포 경로를 탄다 (Job 없음).
 func (r *run) setImage() {
 	at := strings.LastIndex(r.req.Image, "@")
 	repoTag, digest := r.req.Image[:at], r.req.Image[at+1:]
@@ -481,6 +509,7 @@ func (r *run) setImage() {
 	r.deployImage(repoTag[:colon], repoTag[colon+1:], digest)
 }
 
+// config는 kind=config 흐름이다. core 칸만 커밋하고 Argo를 기다린다.
 func (r *run) config() {
 	res, ok := r.commit("", "")
 	if !ok {
@@ -494,6 +523,7 @@ func (r *run) config() {
 	r.waitArgo(image, res.CommitSHA)
 }
 
+// delete는 kind=delete 흐름이다. values 파일을 지우는 커밋을 하고 deleted를 보낸다 (Argo 대기 없음).
 func (r *run) delete() {
 	res, err := r.m.d.Git.Commit(r.ctx, gitops.Change{Namespace: r.req.Namespace, Message: r.commitMessage(""), Delete: true})
 	if err != nil {
@@ -535,6 +565,7 @@ func (r *run) cleanup() {
 	r.log.Info("cancelled", "cause", cause)
 }
 
+// deleteJob은 Job을 지운다. run ctx가 이미 끝났을 수 있어 따로 만든 ctx로 부른다.
 func (r *run) deleteJob() {
 	ctx, cancel := context.WithTimeout(r.m.base, apiTimeout)
 	defer cancel()
@@ -545,17 +576,20 @@ func (r *run) deleteJob() {
 
 // ---- 이벤트·어노테이션 ------------------------------------------------------------------------------
 
+// emit은 시각을 붙여 이벤트를 큐에 넣는다.
 func (r *run) emit(ev contract.Event) {
 	ev.At = time.Now().UTC()
 	r.q.Event(ev)
 }
 
+// fail은 failed 이벤트를 보내고 끝난 상태로 표시한다.
 func (r *run) fail(stage, reason string, lines []string) {
 	r.terminal = true
 	r.log.Warn("failed", "stage", stage, "reason", reason)
 	r.emit(contract.Event{Type: contract.EventFailed, Stage: stage, Reason: reason, LastLines: lines})
 }
 
+// emitCommitted는 committed 이벤트를 보낸다. build면 push 시각과 early 여부를 붙인다.
 func (r *run) emitCommitted(image, sha string) {
 	ev := contract.Event{Type: contract.EventCommitted, Image: image, CommitSHA: sha}
 	if r.req.Kind == contract.KindBuild {
@@ -570,6 +604,7 @@ func (r *run) emitCommitted(image, sha string) {
 	r.emit(ev)
 }
 
+// emitFinished는 finished 이벤트를 보낸다. push 뒤 Job이 실패했으면 export_failed.
 func (r *run) emitFinished(out jobOutcome, afterPush bool) {
 	ended := out.res.EndedAt.UTC()
 	if ended.IsZero() || out.err != nil {
@@ -581,6 +616,7 @@ func (r *run) emitFinished(out jobOutcome, afterPush bool) {
 	r.emit(contract.Event{Type: contract.EventFinished, JobEndedAt: &ended, JobSucceeded: &ok, ExportFailed: &exportFailed})
 }
 
+// markFinished는 finished 어노테이션을 적는다. 이 Job은 다음 재개 대상에서 빠진다.
 func (r *run) markFinished() {
 	r.annotate(map[string]string{job.AnnFinished: time.Now().UTC().Format(time.RFC3339)})
 }

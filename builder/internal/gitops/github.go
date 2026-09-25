@@ -26,16 +26,19 @@ type GitHub struct {
 	hc      *http.Client
 }
 
+// NewGitHub는 repo(owner/name)·branch·토큰으로 클라이언트를 만든다.
 func NewGitHub(repo, branch, token string) *GitHub {
 	return &GitHub{BaseURL: "https://api.github.com", Repo: repo, Branch: branch, token: token,
 		hc: &http.Client{Timeout: 30 * time.Second}}
 }
 
+// File은 Contents API로 읽은 파일 내용과 blob sha다 (쓸 때 sha가 필요하다).
 type File struct {
 	Content []byte
 	SHA     string
 }
 
+// do는 GitHub API 요청 하나를 보내고 응답 본문(최대 2MB)을 읽는다.
 func (g *GitHub) do(ctx context.Context, method, path string, body any, accept string) (*http.Response, []byte, error) {
 	var rd io.Reader
 	if body != nil {
@@ -64,10 +67,12 @@ func (g *GitHub) do(ctx context.Context, method, path string, body any, accept s
 	return resp, data, err
 }
 
+// contentsPath는 /repos/<repo>/contents/<path>다.
 func (g *GitHub) contentsPath(path string) string {
 	return "/repos/" + g.Repo + "/contents/" + path
 }
 
+// apiError는 GitHub 오류 응답을 "github <op>: <status> <message>"로 만든다 (토큰은 들어가지 않는다).
 func apiError(op string, resp *http.Response, data []byte) error {
 	var msg struct {
 		Message string `json:"message"`
@@ -108,6 +113,7 @@ func (g *GitHub) Get(ctx context.Context, path string) (*File, error) {
 	return &File{Content: content, SHA: out.SHA}, nil
 }
 
+// commitResponse는 PUT·DELETE 응답에서 커밋 sha만 읽는다.
 type commitResponse struct {
 	Commit struct {
 		SHA string `json:"sha"`
@@ -132,6 +138,7 @@ func (g *GitHub) Delete(ctx context.Context, path, sha, message string) (string,
 	return g.commit(ctx, http.MethodDelete, path, map[string]string{"message": message, "sha": sha, "branch": g.Branch})
 }
 
+// commit은 PUT·DELETE 공통이다. 409·422·404는 ErrConflict로 묶어 Writer가 다시 읽고 재시도하게 한다.
 func (g *GitHub) commit(ctx context.Context, method, path string, body map[string]string) (string, error) {
 	resp, data, err := g.do(ctx, method, g.contentsPath(path), body, "application/vnd.github+json")
 	if err != nil {

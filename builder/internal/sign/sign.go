@@ -25,6 +25,7 @@ var (
 	ErrMismatch = errors.New("signature mismatch")
 )
 
+// mac은 서명 대상(timestamp, METHOD, path, body를 줄바꿈으로 이은 것)의 HMAC-SHA256이다.
 func mac(secret []byte, ts, method, path string, body []byte) []byte {
 	m := hmac.New(sha256.New, secret)
 	m.Write([]byte(ts))

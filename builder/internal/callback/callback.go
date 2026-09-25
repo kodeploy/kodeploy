@@ -27,6 +27,7 @@ const (
 // OmittedLine은 버린 줄 자리에 남기는 한 줄이다.
 func OmittedLine(n int) string { return fmt.Sprintf("... %d줄 생략 ...", n) }
 
+// Sender는 core 콜백 엔드포인트로 서명된 POST를 보낸다. 빌드마다 Start로 큐를 만든다.
 type Sender struct {
 	baseURL                string
 	secret                 []byte
@@ -35,6 +36,7 @@ type Sender struct {
 	backoffMin, backoffMax time.Duration
 }
 
+// NewSender는 Sender를 만든다. 재시도 백오프는 1초에서 최대 30초.
 func NewSender(coreURL string, secret []byte, log *slog.Logger) *Sender {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
@@ -50,6 +52,7 @@ type Ack struct {
 	LogLines int64
 }
 
+// item은 큐의 항목 하나다. 로그면 줄을 모아 두었다가 보낼 때 log 이벤트로 만든다.
 type item struct {
 	ev      contract.Event // log가 아니면 이것을 보낸다
 	isLog   bool
@@ -59,6 +62,7 @@ type item struct {
 	sending bool
 }
 
+// Queue는 빌드 하나의 이벤트 큐다. 보내는 고루틴 하나가 앞에서부터 순서대로 보낸다.
 type Queue struct {
 	s       *Sender
 	buildID string
@@ -75,6 +79,7 @@ type Queue struct {
 	done     chan struct{}
 }
 
+// StartOptions는 큐를 시작할 때의 값이다.
 type StartOptions struct {
 	FirstSeq  int64     // 보통 1. 재개하면 acked-seq 다음부터
 	LogOffset int64     // 재개하면 이미 처리한 로그 줄 수 (Ack.LogLines가 이어지게)
@@ -93,6 +98,7 @@ func (s *Sender) Start(ctx context.Context, buildID string, o StartOptions) *Que
 	return q
 }
 
+// signal은 보내는 고루틴을 깨운다. 이미 깨우기 신호가 있으면 버린다 (넣는 쪽이 막히지 않는다).
 func (q *Queue) signal() {
 	select {
 	case q.wake <- struct{}{}:
@@ -204,6 +210,8 @@ func (q *Queue) next(ctx context.Context) (*item, contract.Event) {
 	}
 }
 
+// run은 보내는 고루틴 본체다. 맨 앞 항목을 2xx가 올 때까지 같은 seq로 보내고,
+// 받으면 큐에서 빼고 onAck를 부른다. 닫히고 비었거나 ctx가 끝나면 끝난다.
 func (q *Queue) run(ctx context.Context) {
 	defer close(q.done)
 	for {
@@ -237,6 +245,7 @@ func (q *Queue) run(ctx context.Context) {
 	}
 }
 
+// post는 이벤트 하나를 서명해 보낸다. 2xx가 아니면 오류.
 func (s *Sender) post(ctx context.Context, buildID string, ev contract.Event) error {
 	body, err := json.Marshal(ev)
 	if err != nil {
@@ -261,6 +270,7 @@ func (s *Sender) post(ctx context.Context, buildID string, ev contract.Event) er
 	return nil
 }
 
+// sleep은 ctx를 존중하는 대기다. ctx가 먼저 끝나면 false.
 func sleep(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()

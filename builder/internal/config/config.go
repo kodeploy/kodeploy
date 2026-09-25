@@ -10,6 +10,7 @@ import (
 	"time"
 )
 
+// Config는 빌더 설정 전체다. Load로 만든다.
 type Config struct {
 	Listen string
 

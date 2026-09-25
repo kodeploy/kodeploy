@@ -28,6 +28,7 @@ type Dispatcher interface {
 	Cancel(buildID string) error // 없으면 contract.ErrNotFound
 }
 
+// Server는 core 요청을 받는 HTTP 서버다. 서명 키·검증기·디스패처를 들고 있다.
 type Server struct {
 	secret    []byte
 	validator Validator
@@ -36,6 +37,7 @@ type Server struct {
 	now       func() time.Time
 }
 
+// Options는 New에 넘기는 설정이다.
 type Options struct {
 	Secret     []byte
 	Validator  Validator
@@ -44,6 +46,7 @@ type Options struct {
 	Now        func() time.Time // 테스트용. nil이면 time.Now
 }
 
+// New는 Server를 만든다. Now·Logger가 비면 time.Now·버리는 로거를 쓴다.
 func New(o Options) *Server {
 	s := &Server{secret: o.Secret, validator: o.Validator, disp: o.Dispatcher, log: o.Logger, now: o.Now}
 	if s.now == nil {
@@ -55,6 +58,9 @@ func New(o Options) *Server {
 	return s
 }
 
+// Handler는 라우팅을 붙인 http.Handler를 돌려준다.
+//
+//	GET /healthz, POST /internal/deploys, DELETE /internal/deploys/{build_id}
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -81,6 +87,8 @@ func (s *Server) readVerified(w http.ResponseWriter, r *http.Request) ([]byte, b
 	return body, true
 }
 
+// handleSubmit은 POST /internal/deploys다. 서명 → JSON 파싱 → 검증 → Submit 순서이고,
+// 디스패처 오류를 409(충돌)·429(상한)·400(검증)·500(그 밖)으로 바꾼다.
 func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	body, ok := s.readVerified(w, r)
 	if !ok {
@@ -120,6 +128,7 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleCancel은 DELETE /internal/deploys/{build_id}다. 진행 중이면 취소하고 202, 없으면 404.
 func (s *Server) handleCancel(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.readVerified(w, r); !ok {
 		return
@@ -160,12 +169,14 @@ func decodeRequest(body []byte) (*contract.DeployRequest, error) {
 	return &req, nil
 }
 
+// writeJSON은 상태 코드와 JSON 본문을 쓴다.
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
+// writeError는 {"error": msg} 본문을 쓴다.
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }

@@ -15,6 +15,7 @@ import (
 
 var ErrNotFound = errors.New("image not found in registry")
 
+// Client는 GHCR 매니페스트를 HEAD로 조회한다.
 type Client struct {
 	auth     authn.Authenticator
 	nameOpts []name.Option
@@ -31,6 +32,7 @@ func NewInsecure(tr http.RoundTripper) *Client {
 	return &Client{auth: authn.Anonymous, nameOpts: []name.Option{name.Insecure}, tr: tr}
 }
 
+// opts는 remote 호출 공통 옵션이다 (인증, ctx, 테스트용 transport).
 func (c *Client) opts(ctx context.Context) []remote.Option {
 	o := []remote.Option{remote.WithAuth(c.auth), remote.WithContext(ctx)}
 	if c.tr != nil {
@@ -68,6 +70,7 @@ func (c *Client) Resolve(ctx context.Context, repo, tag string) (string, error) 
 	return d.Digest.String(), nil
 }
 
+// wrap은 404를 ErrNotFound로 바꾼다.
 func wrap(err error) error {
 	var te *transport.Error
 	if errors.As(err, &te) && te.StatusCode == http.StatusNotFound {

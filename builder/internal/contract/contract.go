@@ -39,6 +39,7 @@ type Unit struct {
 	Port    int    `json:"port"`
 }
 
+// BuildSpec은 kind=build의 빌드 입력이다 (repo·ref·Dockerfile 위치·이미지 경로).
 type BuildSpec struct {
 	Repo           string `json:"repo"`
 	Ref            string `json:"ref"`
@@ -66,10 +67,12 @@ type CoreValues struct {
 	Hostnames   *[]string   `json:"hostnames,omitempty"`
 }
 
+// CoreVolume은 values.volume에서 core가 주인인 칸이다.
 type CoreVolume struct {
 	MountPath *string `json:"mountPath,omitempty"`
 }
 
+// CoreStatic은 values.static에서 core가 주인인 칸이다 (image는 빌더 소유라 없다).
 type CoreStatic struct {
 	Enabled   *bool     `json:"enabled,omitempty"`
 	Hostnames *[]string `json:"hostnames,omitempty"`
@@ -78,6 +81,7 @@ type CoreStatic struct {
 // ForbiddenKeyError는 values에 빌더 소유 칸(이미지·runtime·port)이 들어온 경우다.
 type ForbiddenKeyError struct{ Key string }
 
+// Error는 어떤 칸이 빌더 소유인지 알려 준다.
 func (e *ForbiddenKeyError) Error() string {
 	return fmt.Sprintf("values.%s is owned by the builder", e.Key)
 }
@@ -171,6 +175,7 @@ type ConflictError struct {
 	Reason  string
 }
 
+// Error는 충돌 이유와 진행 중인 build_id다.
 func (e *ConflictError) Error() string {
 	return fmt.Sprintf("%s (in progress: %s)", e.Reason, e.BuildID)
 }
@@ -178,4 +183,5 @@ func (e *ConflictError) Error() string {
 // BusyError → 429 + Retry-After.
 type BusyError struct{ RetryAfter time.Duration }
 
+// Error는 동시 빌드 상한에 걸렸다는 메시지다.
 func (e *BusyError) Error() string { return "too many active builds" }

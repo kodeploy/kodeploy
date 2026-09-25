@@ -26,18 +26,21 @@ type Change struct {
 	Apply func(cur *Values) (*Values, error)
 }
 
+// Result는 커밋 결과다.
 type Result struct {
 	CommitSHA string  // 건너뛰었으면 브랜치 끝 sha, 지울 파일이 없었으면 ""
 	Skipped   bool    // 바뀐 게 없어 커밋하지 않음
 	Values    *Values // 커밋된(또는 이미 있던) 값. Delete면 nil
 }
 
+// request는 writer 고루틴에 넘기는 요청이다. reply는 버퍼 1이라 writer가 막히지 않는다.
 type request struct {
 	ctx   context.Context
 	ch    Change
 	reply chan reply
 }
 
+// reply는 writer 고루틴의 응답이다.
 type reply struct {
 	res Result
 	err error
@@ -49,6 +52,7 @@ type Writer struct {
 	reqs chan request
 }
 
+// NewWriter는 Writer를 만든다. Run을 고루틴으로 띄워야 요청을 처리한다.
 func NewWriter(gh Contents) *Writer {
 	return &Writer{gh: gh, reqs: make(chan request)}
 }
@@ -82,6 +86,7 @@ func (w *Writer) Commit(ctx context.Context, ch Change) (Result, error) {
 	}
 }
 
+// apply는 요청 하나를 처리한다. namespace로 경로를 정하고, 충돌이면 최대 5번 다시 시도한다.
 func (w *Writer) apply(ctx context.Context, ch Change) (Result, error) {
 	path, err := Path(ch.Namespace)
 	if err != nil {
@@ -104,6 +109,7 @@ func (w *Writer) apply(ctx context.Context, ch Change) (Result, error) {
 	return Result{}, fmt.Errorf("gave up after %d attempts: %w", maxAttempts, lastErr)
 }
 
+// once는 한 번의 시도다. 읽기 → 삭제 또는 병합 → 같으면 건너뛰기 → 쓰기.
 func (w *Writer) once(ctx context.Context, path string, ch Change) (Result, error) {
 	f, err := w.gh.Get(ctx, path)
 	if err != nil {

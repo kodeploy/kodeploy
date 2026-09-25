@@ -53,12 +53,15 @@ const maxHostnames = 10
 // ValidationError → 400. 메시지는 core에 그대로 돌려준다(비밀값 없음).
 type ValidationError struct{ Msg string }
 
+// Error는 core에 그대로 돌려줄 메시지다.
 func (e *ValidationError) Error() string { return e.Msg }
 
+// invalid는 형식 문자열로 ValidationError를 만든다.
 func invalid(format string, args ...any) error {
 	return &ValidationError{Msg: fmt.Sprintf(format, args...)}
 }
 
+// notSupported는 "<what>: not supported yet" 400을 만든다 (예약 칸, 이번 범위 밖 모드).
 func notSupported(what string) error {
 	return &ValidationError{Msg: what + ": not supported yet"}
 }
@@ -72,8 +75,11 @@ func NamespaceHex8(ns string) string {
 	return m[2]
 }
 
+// ValidBuildID는 build_id가 hex 8자리인지다 (DELETE 경로 검사용).
 func ValidBuildID(id string) bool { return buildIDRe.MatchString(id) }
 
+// Validate는 공통 칸(build_id, namespace, actor, slot, values)을 보고 kind별 검사로 넘긴다.
+// 통과하면 nil, 아니면 400으로 돌려줄 ValidationError.
 func (v Validator) Validate(r *contract.DeployRequest) error {
 	if !buildIDRe.MatchString(r.BuildID) {
 		return invalid("build_id must match %s", buildIDRe)
@@ -123,6 +129,8 @@ func (v Validator) Validate(r *contract.DeployRequest) error {
 	}
 }
 
+// validateBuild는 kind=build 검사다. dockerfile 모드만, 예약 칸 거부, unit·userId 필수,
+// repo·ref·경로 입력 검증, 이미지 경로·태그·cache_ref 규칙.
 func (v Validator) validateBuild(r *contract.DeployRequest, nsHex string) error {
 	if r.Slot == contract.SlotStatic {
 		return notSupported("static build")
@@ -176,6 +184,8 @@ func (v Validator) validateBuild(r *contract.DeployRequest, nsHex string) error 
 	return nil
 }
 
+// validateSetImage는 kind=set-image 검사다. image가 <repo>:<tag>@sha256:<hex> 꼴이고 경로가 맞는지,
+// 서버 slot이면 unit 필수, static이면 unit 금지.
 func (v Validator) validateSetImage(r *contract.DeployRequest, nsHex string) error {
 	if r.Build != nil {
 		return invalid("build is not allowed for kind=set-image")
@@ -199,6 +209,7 @@ func (v Validator) validateSetImage(r *contract.DeployRequest, nsHex string) err
 	return validateUnit(r.Unit)
 }
 
+// validateImageRepo는 repo가 ghcr.io/<GHCR_USER>/<hex8>/<app> 꼴이고 hex8이 namespace와 같은지 본다.
 func (v Validator) validateImageRepo(repo, nsHex, field string) error {
 	m := imageRepoRe.FindStringSubmatch(repo)
 	if m == nil {
@@ -216,6 +227,7 @@ func (v Validator) validateImageRepo(repo, nsHex, field string) error {
 	return nil
 }
 
+// validateUnit은 서버 slot의 runtime(python·java·php·javascript)과 port(1~65535)를 본다.
 func validateUnit(u *contract.Unit) error {
 	if u == nil {
 		return invalid("unit is required for the server slot")
@@ -276,10 +288,12 @@ func validateRelDir(s string) error {
 	return nil
 }
 
+// validPathSeg는 경로 한 칸이 허용 문자만 쓰고 ".."가 아닌지다.
 func validPathSeg(s string) bool {
 	return pathSegRe.MatchString(s) && s != ".."
 }
 
+// validateValues는 core가 보낸 values를 차트 values.schema.json과 같은 규칙으로 본다.
 func validateValues(v *contract.CoreValues) error {
 	if v.Name != nil && !valueNameRe.MatchString(*v.Name) {
 		return invalid("values.name must match %s", valueNameRe)
@@ -310,6 +324,7 @@ func validateValues(v *contract.CoreValues) error {
 	return nil
 }
 
+// validateHostnames는 호스트 개수(최대 10)와 각 호스트 형식을 본다.
 func validateHostnames(field string, hs *[]string) error {
 	if hs == nil {
 		return nil

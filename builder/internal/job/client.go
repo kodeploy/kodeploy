@@ -17,6 +17,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// Client는 빌드 네임스페이스의 Job을 다룬다.
 type Client struct {
 	cs kubernetes.Interface
 	ns string
@@ -24,15 +25,18 @@ type Client struct {
 	backoffMin, backoffMax time.Duration
 }
 
+// NewClient는 Client를 만든다. Watch 재연결 백오프는 1초에서 최대 30초.
 func NewClient(cs kubernetes.Interface, namespace string) *Client {
 	return &Client{cs: cs, ns: namespace, backoffMin: time.Second, backoffMax: 30 * time.Second}
 }
 
+// Create는 Job을 만든다.
 func (c *Client) Create(ctx context.Context, j *batchv1.Job) error {
 	_, err := c.cs.BatchV1().Jobs(c.ns).Create(ctx, j, metav1.CreateOptions{})
 	return err
 }
 
+// Get은 Job 하나를 읽는다.
 func (c *Client) Get(ctx context.Context, name string) (*batchv1.Job, error) {
 	return c.cs.BatchV1().Jobs(c.ns).Get(ctx, name, metav1.GetOptions{})
 }
@@ -169,6 +173,7 @@ func finished(j *batchv1.Job) (Result, bool) {
 	return Result{}, false
 }
 
+// hasCondition은 Job에 t 조건이 True로 있는지다.
 func hasCondition(j *batchv1.Job, t batchv1.JobConditionType) bool {
 	for _, c := range j.Status.Conditions {
 		if c.Type == t && c.Status == corev1.ConditionTrue {

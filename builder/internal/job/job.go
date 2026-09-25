@@ -53,6 +53,7 @@ fi
 git clone --depth 1 -b "$BRANCH" "$REPO_URL" /workspace/src
 `
 
+// Params는 Build에 넘기는 값이다. 원본 buildkit_job()의 인자와 같다.
 type Params struct {
 	Namespace             string
 	BuildID               string
@@ -77,6 +78,8 @@ func Name(buildID, userID string) string {
 	return "build-" + u + "-" + buildID
 }
 
+// Build는 원본 buildkit_job.yaml.j2와 같은 모양의 Job을 만든다.
+// init(clone)이 repo를 emptyDir에 받고, main(rootless BuildKit)이 빌드해 GHCR에 push한다.
 func Build(p Params) *batchv1.Job {
 	filename := p.DockerfileFilename
 	if filename == "" {

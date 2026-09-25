@@ -44,11 +44,13 @@ type Source interface {
 	State(ctx context.Context, pod, container string) (State, error)
 }
 
+// Follower는 Source로 빌드 Pod 로그를 끝까지 읽는다.
 type Follower struct {
 	src                    Source
 	backoffMin, backoffMax time.Duration
 }
 
+// NewFollower는 Follower를 만든다. 다시 열기 백오프는 0.5초에서 최대 10초.
 func NewFollower(src Source) *Follower {
 	return &Follower{src: src, backoffMin: 500 * time.Millisecond, backoffMax: 10 * time.Second}
 }
@@ -191,6 +193,7 @@ func readLine(br *bufio.Reader) (string, error) {
 	}
 }
 
+// splitTimestamp는 "<RFC3339Nano> <text>" 줄을 시각과 본문으로 나눈다. 시각이 없으면 줄 그대로.
 func splitTimestamp(line string) (time.Time, string) {
 	i := strings.IndexByte(line, ' ')
 	if i <= 0 {
@@ -203,6 +206,7 @@ func splitTimestamp(line string) (time.Time, string) {
 	return ts, line[i+1:]
 }
 
+// sleep은 ctx를 존중하는 대기다. ctx가 먼저 끝나면 false.
 func sleep(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()

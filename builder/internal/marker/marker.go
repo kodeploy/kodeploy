@@ -25,6 +25,7 @@ type Matcher struct {
 	found     bool
 }
 
+// New는 이 빌드의 이미지(<imageRepo>:<imageTag>)용 Matcher를 만든다.
 func New(imageRepo, imageTag string) *Matcher {
 	return &Matcher{push: regexp.MustCompile(
 		`^#\d+ pushing manifest for ` + regexp.QuoteMeta(imageRepo+":"+imageTag) +

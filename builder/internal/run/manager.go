@@ -21,7 +21,9 @@ import (
 	"github.com/kodeploy/kodeploy/builder/internal/job"
 )
 
-// 기능별 의존성. 실제 구현은 같은 이름의 패키지, 테스트는 가짜.
+// 아래 인터페이스들은 run이 쓰는 기능만 모은 것이다. 실제 구현은 같은 이름의 패키지, 테스트는 가짜.
+
+// Jobs는 빌드 Job 생성·종료 대기·어노테이션·삭제·목록이다 (job.Client).
 type Jobs interface {
 	Create(ctx context.Context, j *batchv1.Job) error
 	Wait(ctx context.Context, name string) (job.Result, error)
@@ -30,24 +32,29 @@ type Jobs interface {
 	ListManaged(ctx context.Context) ([]batchv1.Job, error)
 }
 
+// LogFollower는 빌드 로그를 줄 단위로 out에 보낸다 (logs.Follower).
 type LogFollower interface {
 	Follow(ctx context.Context, buildID string, out chan<- string) error
 }
 
+// Registry는 이미지 존재 확인과 태그 → digest 조회다 (registry.Client).
 type Registry interface {
 	Exists(ctx context.Context, repo, digest string) error
 	Resolve(ctx context.Context, repo, tag string) (string, error)
 }
 
+// Git은 kodeploy-apps 커밋이다 (gitops.Writer).
 type Git interface {
 	Commit(ctx context.Context, ch gitops.Change) (gitops.Result, error)
 }
 
+// Argo는 Application refresh와 Synced·Healthy 대기다 (argo.Client).
 type Argo interface {
 	Refresh(ctx context.Context, app string) error
 	Wait(ctx context.Context, app, sha string, since time.Time, timeout time.Duration) (argo.Synced, error)
 }
 
+// Deps는 Manager가 쓰는 의존성 묶음이다.
 type Deps struct {
 	Cfg      *config.Config
 	Jobs     Jobs
@@ -73,6 +80,7 @@ const (
 	seqResumeMargin = 100
 )
 
+// Manager는 진행 중인 요청을 관리한다. 409·429 판단, 취소, 종료, 재시작 재개를 맡는다.
 type Manager struct {
 	d    Deps
 	base context.Context // 빌더 수명. 콜백 큐는 이 ctx로 돈다
@@ -85,6 +93,7 @@ type Manager struct {
 	qwg    sync.WaitGroup // 콜백 큐 고루틴 (run이 끝난 뒤에도 남은 이벤트를 보낸다)
 }
 
+// NewManager는 Manager를 만든다. base ctx는 Shutdown 끝에서 취소된다.
 func NewManager(d Deps) *Manager {
 	if d.Log == nil {
 		d.Log = slog.New(slog.DiscardHandler)
@@ -93,7 +102,9 @@ func NewManager(d Deps) *Manager {
 	return &Manager{d: d, base: base, stop: stop, active: map[string]*run{}}
 }
 
-// Submit은 api.Dispatcher 구현이다.
+// Submit은 요청을 받아 새 run을 띄운다 (api.Dispatcher 구현).
+// 같은 build_id나 같은 namespace+slot이 진행 중이면 ConflictError(409),
+// 동시 빌드 상한에 걸리면 BusyError(429). 종료 중이면 errClosed.
 func (m *Manager) Submit(req *contract.DeployRequest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -122,7 +133,8 @@ func (m *Manager) Submit(req *contract.DeployRequest) error {
 	return nil
 }
 
-// Cancel은 api.Dispatcher 구현이다.
+// Cancel은 진행 중인 요청을 사용자 취소로 멈춘다 (api.Dispatcher 구현). 없으면 ErrNotFound.
+// 실제 정리(Job 삭제, cancelled 이벤트)는 run 고루틴이 한다.
 func (m *Manager) Cancel(buildID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -134,6 +146,8 @@ func (m *Manager) Cancel(buildID string) error {
 	return nil
 }
 
+// startLocked는 run을 등록하고 고루틴으로 돌린다 (m.mu를 잡은 채로 부른다).
+// 콜백 큐가 끝나기를 기다리는 고루틴도 하나 띄워 qwg로 센다.
 func (m *Manager) startLocked(r *run) {
 	m.active[r.req.BuildID] = r
 	m.qwg.Add(1)
@@ -178,6 +192,7 @@ func (m *Manager) Wait(ctx context.Context) bool {
 	return waitGroup(ctx, &m.wg) && waitGroup(ctx, &m.qwg)
 }
 
+// waitGroup은 wg.Wait()를 ctx 안에서 기다린다. 다 끝나면 true, ctx가 먼저 끝나면 false.
 func waitGroup(ctx context.Context, wg *sync.WaitGroup) bool {
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()

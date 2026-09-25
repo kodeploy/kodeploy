@@ -20,6 +20,8 @@ import (
 	"github.com/kodeploy/kodeploy/builder/internal/sign"
 )
 
+// main은 콜백 엔드포인트 하나만 있는 서버를 띄운다.
+// 서명이 틀리면 401, -fail-first 동안은 503, 나머지는 화면에 찍고 200.
 func main() {
 	addr := flag.String("addr", ":9090", "listen address")
 	failFirst := flag.Int("fail-first", 0, "answer 503 to the first N events (to watch retries)")

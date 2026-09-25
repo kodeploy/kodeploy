@@ -30,8 +30,10 @@ type Failure struct {
 	Reason string
 }
 
+// Error는 "<stage>: <reason>"이다.
 func (f *Failure) Error() string { return f.Stage + ": " + f.Reason }
 
+// Synced는 대기가 성공했을 때의 시각이다 (deployed 이벤트의 synced_at, healthy_at).
 type Synced struct {
 	SyncedAt  time.Time
 	HealthyAt time.Time
@@ -40,6 +42,7 @@ type Synced struct {
 // AncestorFunc는 base 커밋이 head에 들어 있는지다 (gitops.GitHub.IsAncestor).
 type AncestorFunc func(ctx context.Context, base, head string) (bool, error)
 
+// Client는 argocd 네임스페이스의 Application을 dynamic client로 다룬다.
 type Client struct {
 	dyn        dynamic.Interface
 	ns         string
@@ -48,10 +51,12 @@ type Client struct {
 	poll       time.Duration
 }
 
+// New는 Client를 만든다. valuesRepo는 values source의 repoURL, ancestor는 커밋 포함 여부 확인 함수다.
 func New(dyn dynamic.Interface, namespace, valuesRepo string, ancestor AncestorFunc) *Client {
 	return &Client{dyn: dyn, ns: namespace, valuesRepo: normRepo(valuesRepo), ancestor: ancestor, poll: 2 * time.Second}
 }
 
+// normRepo는 repoURL 비교용 정규화다 (소문자, scheme·끝 슬래시·.git 제거).
 func normRepo(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	s = strings.TrimSuffix(strings.TrimSuffix(s, "/"), ".git")
@@ -59,6 +64,7 @@ func normRepo(s string) string {
 	return s
 }
 
+// apps는 Application 리소스 클라이언트다.
 func (c *Client) apps() dynamic.ResourceInterface {
 	return c.dyn.Resource(ApplicationGVR).Namespace(c.ns)
 }
@@ -129,6 +135,8 @@ func (c *Client) Wait(ctx context.Context, app, sha string, since time.Time, tim
 	}
 }
 
+// contains는 revision rev가 우리 커밋 sha를 포함하는지다.
+// 같으면 바로 true, 아니면 compare API로 확인하고 결과를 known에 캐시한다.
 func (c *Client) contains(ctx context.Context, known map[string]bool, rev, sha string) (bool, error) {
 	if rev == "" {
 		return false, nil
@@ -147,6 +155,7 @@ func (c *Client) contains(ctx context.Context, known map[string]bool, rev, sha s
 	return v, nil
 }
 
+// status는 Application에서 대기 판정에 필요한 칸만 뽑은 것이다.
 type status struct {
 	revision      string
 	sync          string
@@ -186,11 +195,13 @@ func readStatus(u *unstructured.Unstructured, valuesRepo string) status {
 	return st
 }
 
+// isTransient는 다시 시도할 만한 API 오류(타임아웃, 429, 503, 500)인지다.
 func isTransient(err error) bool {
 	return apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err) || apierrors.IsTooManyRequests(err) ||
 		apierrors.IsServiceUnavailable(err) || apierrors.IsInternalError(err) || errors.Is(err, context.DeadlineExceeded)
 }
 
+// nonEmpty는 s가 비면 def를 돌려준다.
 func nonEmpty(s, def string) string {
 	if s == "" {
 		return def
@@ -198,6 +209,7 @@ func nonEmpty(s, def string) string {
 	return s
 }
 
+// short는 커밋 sha를 7자로 줄인다 (메시지용).
 func short(s string) string {
 	if len(s) > 7 {
 		return s[:7]
@@ -205,6 +217,7 @@ func short(s string) string {
 	return s
 }
 
+// sleep은 ctx를 존중하는 대기다. ctx가 먼저 끝나면 false.
 func sleep(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()
