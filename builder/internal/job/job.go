@@ -38,6 +38,8 @@ const (
 	AnnSynced    = "kodeploy.io/synced"
 	AnnFinished  = "kodeploy.io/finished"
 	AnnAckedSeq  = "kodeploy.io/acked-seq"
+	// 재개할 때 이미 core에 보낸 로그 줄을 다시 보내지 않으려고 적는다 (지시서에 없는 추가분)
+	AnnAckedLogLines = "kodeploy.io/acked-log-lines"
 )
 
 // 원본 init 컨테이너 스크립트 그대로. git_auth(private repo)는 이번 범위 밖이라 GIT_AUTH_TOKEN이
