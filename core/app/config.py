@@ -45,6 +45,11 @@ EARLY_TRIGGER_ENABLED = os.getenv("EARLY_TRIGGER", "false").lower() == "true"
 # 응답 경로에서 빼는 게 early-trigger의 목적.
 BUILD_REGISTRY_CACHE_ENABLED = os.getenv("BUILD_REGISTRY_CACHE", "false").lower() == "true"
 
+# Go 빌더 (users.pipeline == "v2"인 앱만 쓴다). HMAC 키는 빌더 Secret kodeploy-builder-secrets의
+# HMAC_SECRET과 같은 값 — core Deployment가 그 Secret에서 직접 읽는다. 비어 있으면 v2 제출·콜백을 막는다.
+BUILDER_URL = os.getenv("BUILDER_URL", "http://kodeploy-builder.default.svc:8080").rstrip("/")
+BUILDER_HMAC_SECRET = os.getenv("BUILDER_HMAC_SECRET", "")
+
 # --- Cloudflare R2 (오브젝트 스토리지, 레벨2 = 앱당 버킷 + bucket-scoped 토큰) ---
 # 시크릿이라 env 주입. 비어 있으면 storage 토글 비활성(r2.is_configured()=False).
 CF_API_TOKEN = os.getenv("CF_API_TOKEN", "")        # 버킷 생성/삭제 + 토큰 발급 권한 가진 CF 토큰
