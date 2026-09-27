@@ -47,8 +47,15 @@ for a in "create jobs -n kodeploy-build" "watch jobs -n kodeploy-build" "patch j
          "get pods/log -n kodeploy-build" "patch applications.argoproj.io -n argocd"; do
   echo "$a: $(kubectl auth can-i $a --as=$SA)"; done
 for a in "get secrets -n tenant-d6d8b759" "create deployments -n default" "get secrets -n kodeploy-build" \
-         "create pods/exec -n kodeploy-build" "list namespaces"; do
+         "create pods/exec -n kodeploy-build" "list namespaces" "list pods -n kube-system"; do
   echo "$a: $(kubectl auth can-i $a --as=$SA)"; done
+```
+
+앱 네임스페이스 읽기(크래시 감지)는 차트가 그린 RoleBinding이 있는 네임스페이스에서만 yes여야 한다:
+
+```sh
+for a in "list pods" "get pods/log" "create pods/exec" "get secrets"; do
+  echo "$a: $(kubectl auth can-i $a -n <Argo 관리 앱 ns> --as=$SA)"; done      # yes yes no no
 ```
 
 NetworkPolicy: 적용 뒤 Pod이 Ready로 남는지 본다 (kubelet 프로브가 막히지 않는지).
@@ -152,6 +159,7 @@ kubectl -n default set env deployment/kodeploy-builder CORE_URL=http://kodeploy-
 19. **CI**: 이미지 전에 `go vet`, `go test -race`. 고정 커밋·`latest` 태그는 main에서만 (다른 브랜치에서 돌면 `HEAD:main` push가 그 브랜치를 main에 올린다. core 워크플로에도 같은 위험이 있다).
 20. **HTTP**: 본문 1MiB 초과는 413, 디스패처 내부 오류(종료 중 포함)는 500 `internal error` (내부 메시지는 밖으로 내지 않는다).
 21. **직접 의존성**: 지시서 목록 외에 `go.yaml.in/yaml/v3`(values 키 순서 유지, 기존 파일과 글자 단위로 같게), `k8s.io/utils`(포인터 헬퍼), `go.uber.org/goleak`(테스트). 앞의 둘은 client-go가 이미 끌어오는 모듈이다.
+22. **앱 크래시 조기 감지** (원본 `_crash_reason`·`_app_log_tail`을 옮김): Argo는 롤아웃이 끝난 뒤 죽는 앱을 Degraded가 아니라 Progressing으로 보고, 롤아웃 중이라도 `progressDeadlineSeconds`(기본 600초)가 지나야 Degraded라서 대기가 늘 timeout으로 끝났다. Argo 대기 중 `APP_CHECK_INTERVAL`(5초)마다 앱 Pod을 읽어, 이미지 받기 실패류는 즉시, 의존성 Ready 뒤 재시작 2회면 `failed(stage=health)`. health·timeout 실패에는 앱 로그 끝 80줄을 `last_lines`로 붙인다. 이번 배포 Pod = 앱 컨테이너 이미지가 같고 대기 시작 뒤 생긴 Pod (config로 크래시를 고치는 배포에서 옛 Pod을 세지 않게). 재개로 들어온 대기는 재시작 전 Pod을 보지 않는다. 권한은 ClusterRole `kodeploy-builder-app-reader`(pods get/list, pods/log get)를 kodeploy-charts가 앱 네임스페이스마다 RoleBinding으로 묶는다. 읽기가 막혀도(RoleBinding 전) 경고 한 번 남기고 Argo 판정대로 간다.
 
 ## 5. 4부 할 일 (빌더 계약에서 core가 지켜야 할 것)
 
@@ -160,3 +168,4 @@ kubectl -n default set env deployment/kodeploy-builder CORE_URL=http://kodeploy-
 - `(build_id, seq)` 중복은 무시하되 **seq 간격은 허용**한다 (재개 시 +100). 재개 때 다시 오는 `committed`·`deployed`는 같은 내용이면 무시해도 되게 멱등으로 처리한다.
 - 409면 본문의 `build_id`를 `DELETE`한 뒤 다시 보내고, 429면 `Retry-After` 뒤, 5xx면 백오프로 다시 보낸다.
 - `kind=build` 요청에는 `values.userId`를 넣는다 (Job 이름·라벨).
+- `failed`의 `last_lines`는 stage에 따라 다르다: `build`는 빌드 로그 끝, `health`·`timeout`은 앱 로그 끝(첫 줄 `=== app logs (<pod>, …) ===`). 원본처럼 빌드 로그 뒤에 붙여 보여 준다.

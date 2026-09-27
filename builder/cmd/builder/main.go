@@ -16,6 +16,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/kodeploy/kodeploy/builder/internal/api"
+	"github.com/kodeploy/kodeploy/builder/internal/apppods"
 	"github.com/kodeploy/kodeploy/builder/internal/argo"
 	"github.com/kodeploy/kodeploy/builder/internal/callback"
 	"github.com/kodeploy/kodeploy/builder/internal/config"
@@ -83,6 +84,7 @@ func serve(log *slog.Logger) error {
 		Registry: registry.New(cfg.GHCRUser, cfg.GHCRToken),
 		Git:      writer,
 		Argo:     argo.New(dyn, cfg.ArgoCDNamespace, "https://github.com/"+cfg.GitOpsRepo, gh.IsAncestor),
+		AppPods:  apppods.NewKubeSource(cs),
 		Events:   callback.NewSender(cfg.CoreURL, cfg.HMACSecret, log),
 		Log:      log,
 	})

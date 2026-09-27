@@ -187,6 +187,47 @@ func (f *fakeArgo) Wait(ctx context.Context, _, sha string, _ time.Time, _ time.
 	return argo.Synced{SyncedAt: now, HealthyAt: now}, nil
 }
 
+// fakeAppPods는 앱 네임스페이스 Pod이다. List마다 bump가 앱 Pod 재시작 수를 올린다 (크래시 흉내).
+type fakeAppPods struct {
+	mu      sync.Mutex
+	pods    []corev1.Pod
+	bump    bool
+	listErr error
+	logs    string
+}
+
+func (f *fakeAppPods) List(context.Context, string) ([]corev1.Pod, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	out := make([]corev1.Pod, len(f.pods))
+	for i := range f.pods {
+		if f.bump && f.pods[i].Labels["component"] == "" {
+			f.pods[i].Status.ContainerStatuses[0].RestartCount++
+		}
+		out[i] = *f.pods[i].DeepCopy()
+	}
+	return out, nil
+}
+
+func (f *fakeAppPods) Logs(_ context.Context, _, _, _ string, _ bool, _ int64) (string, error) {
+	return f.logs, nil
+}
+
+// appPods는 image로 뜬 앱 Pod 하나와 준비된 mysql Pod이다.
+func appPods(image string) []corev1.Pod {
+	return []corev1.Pod{
+		{ObjectMeta: metav1.ObjectMeta{Name: "app-1", CreationTimestamp: metav1.NewTime(time.Now().Add(time.Second))},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: image}}},
+			Status: corev1.PodStatus{ContainerStatuses: []corev1.ContainerStatus{{Name: "app",
+				LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{ExitCode: 1}}}}}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "mysql-0", Labels: map[string]string{"component": "mysql"}},
+			Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}},
+	}
+}
+
 type mockCore struct {
 	mu     sync.Mutex
 	events []contract.Event
@@ -224,6 +265,7 @@ type harness struct {
 	reg    *fakeRegistry
 	git    *fakeGit
 	argo   *fakeArgo
+	pods   AppPods // nil이면 크래시 감지 없음
 	core   *mockCore
 	srv    *httptest.Server
 	cfg    *config.Config
@@ -234,7 +276,8 @@ type harness struct {
 func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 	cfg := &config.Config{
 		BuildNamespace: "kodeploy-build", BuildKitImage: config.DefaultBuildKitImage, BuildActiveDeadlineSeconds: 60,
-		EarlyTrigger: true, ArgoWaitTimeout: 5 * time.Second, LogBatchInterval: 5 * time.Millisecond, MaxActiveBuilds: 3,
+		EarlyTrigger: true, ArgoWaitTimeout: 5 * time.Second, AppCheckInterval: 5 * time.Millisecond,
+		LogBatchInterval: 5 * time.Millisecond, MaxActiveBuilds: 3,
 	}
 	if mutate != nil {
 		mutate(cfg)
@@ -254,7 +297,13 @@ func newHarness(t *testing.T, mutate func(*config.Config)) *harness {
 
 func (h *harness) newManager() *Manager {
 	return NewManager(Deps{Cfg: h.cfg, Jobs: job.NewClient(h.cs, h.cfg.BuildNamespace), Logs: h.logs,
-		Registry: h.reg, Git: h.git, Argo: h.argo, Events: h.sender})
+		Registry: h.reg, Git: h.git, Argo: h.argo, AppPods: h.pods, Events: h.sender})
+}
+
+// withPods는 크래시 감지를 켠 Manager로 바꾼다. Submit 전에 부른다.
+func (h *harness) withPods(p *fakeAppPods) {
+	h.pods = p
+	h.m = h.newManager()
 }
 
 func (h *harness) close() {
@@ -809,4 +858,74 @@ func TestShutdownRejectsNewWork(t *testing.T) {
 		t.Fatalf("got %v", err)
 	}
 	h.close()
+}
+
+// ---- 앱 Pod 크래시 감지 -----------------------------------------------------------------------------
+
+func setImageReq() *contract.DeployRequest {
+	return &contract.DeployRequest{BuildID: "aa11bb22", Namespace: ns, Slot: contract.SlotServer, Kind: contract.KindSetImage,
+		Unit: &contract.Unit{Runtime: "java", Port: 8080}, Image: repo + ":v1@" + digest}
+}
+
+func TestAppCrashEndsArgoWait(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t, nil)
+	defer h.close()
+	h.argo.block = make(chan struct{}) // Argo는 끝까지 Progressing
+	req := setImageReq()
+	h.withPods(&fakeAppPods{pods: appPods(req.Image), bump: true, logs: "Caused by: LazyInitializationException\n"})
+	_ = h.m.Submit(req)
+	failed := h.waitEvent(contract.EventFailed)
+	h.idle()
+	if failed.Stage != contract.StageHealth || !strings.HasPrefix(failed.Reason, "the app exited during startup (exit code 1)") {
+		t.Fatalf("failed %+v", failed)
+	}
+	if strings.Join(failed.LastLines, "|") != "=== app logs (app-1, last terminated instance) ===|Caused by: LazyInitializationException" {
+		t.Fatalf("last_lines %q", failed.LastLines)
+	}
+	if got := strings.Join(types(h.core.list()), ","); got != "committed,failed" {
+		t.Fatalf("events %s", got)
+	}
+}
+
+func TestAppPodCheckErrorKeepsArgoResult(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t, nil)
+	defer h.close()
+	h.withPods(&fakeAppPods{listErr: errors.New(`pods is forbidden: User "system:serviceaccount:default:kodeploy-builder" cannot list resource "pods"`)})
+	_ = h.m.Submit(setImageReq())
+	h.idle()
+	if got := strings.Join(types(h.core.list()), ","); got != "committed,deployed" {
+		t.Fatalf("events %s", got)
+	}
+}
+
+func TestArgoTimeoutAttachesAppLogs(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t, nil)
+	defer h.close()
+	h.argo.waitErr = &argo.Failure{Stage: contract.StageTimeout, Reason: "not synced and healthy within 8m0s"}
+	req := setImageReq()
+	h.withPods(&fakeAppPods{pods: appPods(req.Image), logs: "waiting for db\n"})
+	_ = h.m.Submit(req)
+	failed := h.waitEvent(contract.EventFailed)
+	h.idle()
+	if failed.Stage != contract.StageTimeout || strings.Join(failed.LastLines, "|") != "=== app logs (app-1, current instance) ===|waiting for db" {
+		t.Fatalf("failed %+v", failed)
+	}
+}
+
+func TestArgoSyncFailureHasNoAppLogs(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t, nil)
+	defer h.close()
+	h.argo.waitErr = &argo.Failure{Stage: contract.StageSync, Reason: "one or more objects failed to apply"}
+	req := setImageReq()
+	h.withPods(&fakeAppPods{pods: appPods(req.Image), logs: "x\n"})
+	_ = h.m.Submit(req)
+	failed := h.waitEvent(contract.EventFailed)
+	h.idle()
+	if failed.Stage != contract.StageSync || failed.LastLines != nil {
+		t.Fatalf("failed %+v", failed)
+	}
 }

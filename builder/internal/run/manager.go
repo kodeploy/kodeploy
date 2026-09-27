@@ -12,6 +12,7 @@ import (
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/kodeploy/kodeploy/builder/internal/argo"
 	"github.com/kodeploy/kodeploy/builder/internal/callback"
@@ -54,7 +55,13 @@ type Argo interface {
 	Wait(ctx context.Context, app, sha string, since time.Time, timeout time.Duration) (argo.Synced, error)
 }
 
-// Deps는 Manager가 쓰는 의존성 묶음이다.
+// AppPods는 앱 네임스페이스의 Pod 목록과 로그다 (apppods.KubeSource). Argo 대기 중 크래시 감지에 쓴다.
+type AppPods interface {
+	List(ctx context.Context, namespace string) ([]corev1.Pod, error)
+	Logs(ctx context.Context, namespace, pod, container string, previous bool, tail int64) (string, error)
+}
+
+// Deps는 Manager가 쓰는 의존성 묶음이다. AppPods가 nil이면 크래시 감지 없이 Argo 판정만 따른다.
 type Deps struct {
 	Cfg      *config.Config
 	Jobs     Jobs
@@ -62,6 +69,7 @@ type Deps struct {
 	Registry Registry
 	Git      Git
 	Argo     Argo
+	AppPods  AppPods
 	Events   *callback.Sender
 	Log      *slog.Logger
 }

@@ -40,8 +40,8 @@ func TestDefaults(t *testing.T) {
 	if !c.EarlyTrigger {
 		t.Error("early trigger should default to on")
 	}
-	if c.ArgoWaitTimeout != 8*time.Minute || c.LogBatchInterval != time.Second || c.MaxActiveBuilds != 3 {
-		t.Errorf("tuning defaults: %v %v %d", c.ArgoWaitTimeout, c.LogBatchInterval, c.MaxActiveBuilds)
+	if c.ArgoWaitTimeout != 8*time.Minute || c.AppCheckInterval != 5*time.Second || c.LogBatchInterval != time.Second || c.MaxActiveBuilds != 3 {
+		t.Errorf("tuning defaults: %v %v %v %d", c.ArgoWaitTimeout, c.AppCheckInterval, c.LogBatchInterval, c.MaxActiveBuilds)
 	}
 	if c.CoreURL != "http://kodeploy-core" {
 		t.Errorf("core url trailing slash not trimmed: %q", c.CoreURL)

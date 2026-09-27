@@ -14,6 +14,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
+	"github.com/kodeploy/kodeploy/builder/internal/apppods"
 	"github.com/kodeploy/kodeploy/builder/internal/argo"
 	"github.com/kodeploy/kodeploy/builder/internal/callback"
 	"github.com/kodeploy/kodeploy/builder/internal/contract"
@@ -460,6 +461,8 @@ func (r *run) commitMessage(tag string) string {
 }
 
 // waitArgo는 Application을 refresh하고 우리 커밋이 Synced·Healthy가 될 때까지 기다린다.
+// 기다리는 동안 앱 Pod도 본다(watchApp). 반복 크래시·이미지 받기 실패면 Argo 판정을 기다리지 않고 failed(health).
+// health·timeout으로 실패하면 앱 로그 끝을 last_lines로 붙인다.
 // 성공하면 synced 어노테이션과 deployed 이벤트, 실패하면 단계에 맞는 failed.
 func (r *run) waitArgo(image, sha string) bool {
 	cfg := r.m.d.Cfg
@@ -478,14 +481,24 @@ func (r *run) waitArgo(image, sha string) bool {
 		}
 		return false
 	}
-	s, err := r.m.d.Argo.Wait(r.ctx, r.req.Namespace, sha, since, time.Until(deadline))
+
+	var w *apppods.Watch
+	if r.m.d.AppPods != nil && image != "" {
+		// 재개로 들어온 대기는 since가 재시작 시각이라 그 전에 뜬 Pod은 보지 않는다 (Argo 판정·timeout만 남는다).
+		w = apppods.NewWatch(r.m.d.AppPods, apppods.Target{Namespace: r.req.Namespace, Image: image, Since: since})
+	}
+	wctx, stopWatch := context.WithCancelCause(r.ctx)
+	crashed := r.watchApp(wctx, stopWatch, w)
+	s, err := r.m.d.Argo.Wait(wctx, r.req.Namespace, sha, since, time.Until(deadline))
+	stopWatch(nil)
+	problem := <-crashed
 	if err != nil {
 		if r.stopped() {
 			return false
 		}
 		var f *argo.Failure
 		if errors.As(err, &f) {
-			r.fail(f.Stage, f.Reason, nil)
+			r.fail(f.Stage, f.Reason, r.appLogs(w, problem, f.Stage))
 		} else {
 			r.fail(contract.StageSync, err.Error(), nil)
 		}
@@ -497,6 +510,58 @@ func (r *run) waitArgo(image, sha string) bool {
 	r.emit(contract.Event{Type: contract.EventDeployed, Image: image, SyncedAt: &syncedAt, HealthyAt: &healthyAt})
 	r.log.Info("deployed", "image", image)
 	return true
+}
+
+// watchApp은 AppCheckInterval마다 앱 Pod을 판정한다. 문제를 찾으면 argo.Failure(health)를 원인으로 ctx를 끊어
+// Argo 대기를 끝내고, 그 Problem을 채널로 보낸다. 문제없이 ctx가 끝나면 nil을 보낸다. w가 nil이면 바로 nil.
+// Argo는 롤아웃이 끝난 뒤 크래시하는 앱을 Degraded가 아니라 Progressing으로 보여서, 이게 없으면 timeout까지 간다.
+func (r *run) watchApp(ctx context.Context, stop context.CancelCauseFunc, w *apppods.Watch) <-chan *apppods.Problem {
+	ch := make(chan *apppods.Problem, 1)
+	if w == nil {
+		ch <- nil
+		return ch
+	}
+	go func() {
+		warned := false
+		t := time.NewTicker(r.m.d.Cfg.AppCheckInterval)
+		defer t.Stop()
+		for {
+			p, err := w.Check(ctx)
+			switch {
+			case p != nil:
+				r.log.Warn("app is crashing", "pod", p.Pod, "reason", p.Reason)
+				stop(&argo.Failure{Stage: contract.StageHealth, Reason: p.Reason})
+				ch <- p
+				return
+			case err != nil && ctx.Err() == nil && !warned:
+				// 권한 없음(차트 RoleBinding 전) 등. 크래시 감지만 빠지고 Argo 판정은 그대로 간다.
+				warned = true
+				r.log.Warn("app pod check failed", "err", err)
+			}
+			select {
+			case <-ctx.Done():
+				ch <- nil
+				return
+			case <-t.C:
+			}
+		}
+	}()
+	return ch
+}
+
+// appLogs는 health·timeout 실패에 붙일 앱 로그 끝이다. 크래시로 멈췄으면 그 Pod, 아니면 가장 새 Pod.
+// 다른 단계거나 읽을 수 없으면 nil.
+func (r *run) appLogs(w *apppods.Watch, p *apppods.Problem, stage string) []string {
+	if w == nil || (stage != contract.StageHealth && stage != contract.StageTimeout) {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(r.ctx, apiTimeout)
+	defer cancel()
+	pod := ""
+	if p != nil {
+		pod = p.Pod
+	}
+	return w.Tail(ctx, pod)
 }
 
 // ---- set-image · config · delete (Job 없음, 진행 상태는 메모리) --------------------------------------

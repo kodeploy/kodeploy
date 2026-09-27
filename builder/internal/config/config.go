@@ -32,7 +32,9 @@ type Config struct {
 	// 원본 EARLY_TRIGGER 플래그. 끄면 push 마커를 무시하고 Job 종료 후 배포한다.
 	EarlyTrigger bool
 
-	ArgoWaitTimeout  time.Duration
+	ArgoWaitTimeout time.Duration
+	// Argo 대기 중 앱 Pod 상태를 읽는 간격 (크래시 조기 감지, 원본 rollout 대기와 같은 5초)
+	AppCheckInterval time.Duration
 	LogBatchInterval time.Duration
 	MaxActiveBuilds  int
 }
@@ -99,6 +101,7 @@ func Load(getenv func(string) string) (*Config, error) {
 		// 원본: EARLY_TRIGGER == "true"일 때만 켠다. 빌더는 라이브 설정(ON)을 기본으로 둔다.
 		EarlyTrigger:     strings.ToLower(str("EARLY_TRIGGER", "true")) == "true",
 		ArgoWaitTimeout:  duration("ARGO_WAIT_TIMEOUT", 8*time.Minute),
+		AppCheckInterval: duration("APP_CHECK_INTERVAL", 5*time.Second),
 		LogBatchInterval: duration("LOG_BATCH_INTERVAL", time.Second),
 		MaxActiveBuilds:  int(integer("MAX_ACTIVE_BUILDS", 3)),
 	}
