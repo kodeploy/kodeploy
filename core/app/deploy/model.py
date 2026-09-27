@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, Index, Integer, String, Text, Uuid
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, Integer, String, Text, Uuid
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -54,6 +54,8 @@ class Build(Base):
     # 프론트는 pending인 동안만 폴링을 이어 가 "분석 중" 자리를 진단으로 바꿔 끼운다.
     ai_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     logs: Mapped[str | None] = mapped_column(LONGTEXT, nullable=True)
+    # 빌더 콜백에서 마지막으로 처리한 seq. v1 빌드는 None, v2 빌드는 만들 때 0 (v2 표시 겸용).
+    last_event_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     # timezone-aware UTC 저장 — Pydantic이 응답 시 timezone offset 포함 ISO 출력 (B 컨벤션)
     created_at: Mapped[datetime] = mapped_column(
@@ -123,6 +125,9 @@ class BuildRecord(Base):
     job_ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     deploy_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     deploy_ready_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # v2(빌더) 단계 시각 — values 커밋(committed), Argo가 우리 커밋으로 Synced(deployed). v1은 None.
+    git_committed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    argo_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # triggered_early: early-trigger로 배포를 먼저 시작했나(True) / 폴백·플래그OFF(False). A/B 비교 축.
     triggered_early: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     # ── AI 진단 호출 계측 (deploy/build/diagnose.py의 CallResult가 채움) ──

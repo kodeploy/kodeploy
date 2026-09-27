@@ -51,6 +51,9 @@ class User(Base):
     # HTTPRoute hostnames reconcile 시 기본 서브도메인·커스텀 도메인과 함께 통째로 주입되므로
     # kubectl 수동 patch와 달리 다음 갱신에 사라지지 않는다.
     extra_hostnames: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 빌드·배포 경로: "v1"(core가 직접, 기본) | "v2"(Go 빌더 → kodeploy-apps 커밋 → Argo).
+    # 운영자가 DB에서 앱 하나씩 켠다. v2는 Dockerfile 서버 빌드만 받는다 (build/v2.py).
+    pipeline: Mapped[str] = mapped_column(String(2), default="v1", server_default="v1")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=_utcnow, onupdate=_utcnow
