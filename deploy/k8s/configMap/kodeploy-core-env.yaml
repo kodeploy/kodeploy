@@ -14,10 +14,10 @@ data:
   GITHUB_APP_ID: "3794809"                               # GitHub App 숫자 ID — installation token JWT 서명(iss)용. 공개값
   GITHUB_APP_SLUG: "kodeploy"                             # App 슬러그(github.com/apps/kodeploy) — private repo 연결 설치 페이지 링크용
   WEB_BASE_URL: "https://app.kodeploy.com"
-  # app.kodeploy.com ↔ api.kodeploy.com = same-site → Lax + Domain 공유
+  # 세션 쿠키는 api.kodeploy.com 전용 (Domain 없음). 웹(app.kodeploy.com)은 credentials: include로 API에 보낸다.
+  # SESSION_COOKIE_DOMAIN을 넣지 말 것 - .kodeploy.com이면 {앱}.kodeploy.com 유저 앱 서버에도 세션이 간다.
   SESSION_COOKIE_SECURE: "true"
   SESSION_COOKIE_SAMESITE: "lax"
-  SESSION_COOKIE_DOMAIN: ".kodeploy.com"
   # early-trigger — 이미지 push 마커("pushing manifest ... done")를 보면 Job 완료를 안 기다리고
   # 곧장 배포로 넘어간다. 이미지는 이미 레지스트리에 있으니 배포는 유효하고, 남은 cache export는
   # 뒤에서 돌다가 배포 판정 후 회수된다. 마커를 못 잡으면 Job 완료를 기다리는 기존 경로로 자동 폴백

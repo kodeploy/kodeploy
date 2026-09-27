@@ -6,6 +6,7 @@ GET  /auth/me              — 현재 user (401 if 미로그인)
 POST /auth/logout          — 세션 revoke + cookie 삭제
 """
 
+import logging
 import secrets
 
 import httpx
@@ -21,6 +22,7 @@ from app.auth.schemas import UserOut
 from app.shared.db import get_db
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+log = logging.getLogger(__name__)
 
 
 # 세션 cookie 설정 — 정책(secure/samesite/domain)은 config에서.
@@ -124,14 +126,21 @@ async def github_callback(
     try:
         access_token = await auth_service.exchange_code_for_token(code)
         gh_user = await auth_service.fetch_github_user(access_token)
+        # installation_id는 query라 누구나 바꿔 보낼 수 있다 — 이 유저가 접근 가능한 설치일 때만 받는다.
+        install_ok = installation_id is not None and await auth_service.user_can_access_installation(
+            access_token, installation_id
+        )
     except (httpx.HTTPError, ValueError) as e:
         raise HTTPException(status_code=502, detail=f"GitHub 인증 실패: {e}")
 
     user = auth_service.upsert_user(db, gh_user)
+    if installation_id is not None and not install_ok:
+        # 로그인은 그대로 하고 연결만 거절 (남의 설치 번호거나 GitHub 반영 지연 — 다시 연결하면 된다)
+        log.warning("installation %s is not accessible to github user %s; not saved", installation_id, gh_user.get("id"))
 
     # App 설치 경유면 installation_id 저장 — 빌드가 이 installation의 토큰으로 private repo를 clone.
     # 일반 로그인(installation_id 없음)에선 기존 값 보존 (덮어쓰지 않음).
-    if installation_id is not None:
+    if install_ok:
         user.github_installation_id = installation_id
         db.commit()
 
@@ -142,8 +151,9 @@ async def github_callback(
         ip=request.client.host if request.client else None,
     )
 
+    login = "ok&install=denied" if installation_id is not None and not install_ok else "ok"
     response = RedirectResponse(
-        url=f"{config.WEB_BASE_URL}/?login=ok", status_code=302
+        url=f"{config.WEB_BASE_URL}/?login={login}", status_code=302
     )
     _set_session_cookie(response, sess.id)
     response.delete_cookie(config.OAUTH_STATE_COOKIE_NAME, path="/")

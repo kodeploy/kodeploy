@@ -26,6 +26,8 @@ GITHUB_AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 GITHUB_TOKEN_URL = "https://github.com/login/oauth/access_token"
 GITHUB_USER_URL = "https://api.github.com/user"
 GITHUB_USER_EMAILS_URL = "https://api.github.com/user/emails"
+GITHUB_USER_INSTALLATIONS_URL = "https://api.github.com/user/installations"
+_INSTALLATIONS_MAX_PAGES = 10                     # 100개씩 — 한 유저가 접근하는 우리 App 설치 수로는 넉넉
 
 # GitHub API에서 요구하는 헤더 베이스. Authorization은 호출부에서 추가.
 _GITHUB_HEADERS = {
@@ -92,6 +94,28 @@ async def fetch_github_user(access_token: str) -> dict:
                     email = primary.get("email")
         user["_resolved_email"] = email
         return user
+
+
+# 로그인한 유저가 이 App 설치에 접근할 수 있는지 — 유저 토큰으로 GitHub에 직접 묻는다.
+# 콜백 query의 installation_id는 누구나 바꿔 보낼 수 있고, 서버는 App 자격증명으로 어느 설치든
+# 토큰을 발급받을 수 있다. 확인 없이 저장하면 남의 설치를 자기 계정에 붙여 그 private repo를 빌드할 수 있다.
+# /user/installations = 이 user 토큰이 접근 가능한 우리 App 설치 목록 (본인·소속 조직 설치 포함).
+async def user_can_access_installation(access_token: str, installation_id: int) -> bool:
+    headers = {**_GITHUB_HEADERS, "Authorization": f"Bearer {access_token}"}
+    async with httpx.AsyncClient(timeout=10) as client:
+        for page in range(1, _INSTALLATIONS_MAX_PAGES + 1):
+            r = await client.get(
+                GITHUB_USER_INSTALLATIONS_URL,
+                headers=headers,
+                params={"per_page": 100, "page": page},
+            )
+            r.raise_for_status()
+            items = r.json().get("installations") or []
+            if any(i.get("id") == installation_id for i in items):
+                return True
+            if len(items) < 100:
+                return False
+    return False
 
 
 # github_id 기준 upsert. login/email/avatar는 매번 갱신 (GitHub 측 변경 추적).

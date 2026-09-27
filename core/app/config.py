@@ -144,7 +144,8 @@ WEB_BASE_URL = os.getenv("WEB_BASE_URL", "http://localhost:5173")
 # --- Session cookie ---
 # 쿠키 이름은 고정. 정책(domain/secure/samesite)은 환경별 다름.
 # 로컬 dev: SameSite=Lax / Secure=False / Domain 미지정.
-# 운영(cross-site): SameSite=None / Secure=True / Domain=.kodeploy.com.
+# 운영: SameSite=Lax / Secure=True / Domain 미지정 (api.kodeploy.com 전용).
+#   Domain=.kodeploy.com이면 {앱}.kodeploy.com 유저 앱에도 세션이 가므로 쓰지 않는다.
 SESSION_COOKIE_NAME = "kd_session"
 SESSION_COOKIE_DOMAIN = os.getenv("SESSION_COOKIE_DOMAIN") or None
 SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"

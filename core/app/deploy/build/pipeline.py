@@ -23,6 +23,7 @@ from app.deploy.stack import env as env_module, manifests, r2
 from app.deploy.build import diagnose
 from app.deploy.build.github import _detect_build, _fetch_github_raw
 from app.deploy.build.naming import _normalize_repo_url, _resolve_app_name
+from app.deploy.build.source import validate_branch, validate_repo_path, validate_repo_url
 from app.deploy.build.validation import (
     _validate_static_env,
     _validate_static_fields,
@@ -392,7 +393,20 @@ async def start_deploy(
                 f"예약 키입니다. 환경변수에서 빼거나, 외부 서비스를 쓰려면 해당 의존성을 끄세요."
             )
 
+    # 빌드 소스 검증 — Job YAML·git 인자로 들어가는 값 (source.py). 저장 전에 막아 이유를 화면에 보여준다.
     repo_url = _normalize_repo_url(repo_url)
+    validate_repo_url(repo_url)
+    validate_branch(branch)
+    dockerfile_path = dockerfile_path.strip().removeprefix("./")
+    if has_server:
+        validate_repo_path(dockerfile_path, "Dockerfile 경로")
+        validate_repo_path(project_path.strip("/"), "프로젝트 경로")
+    if use_static:
+        if static_repo_url.strip():
+            validate_repo_url(_normalize_repo_url(static_repo_url))
+        if static_branch.strip():
+            validate_branch(static_branch.strip())
+        validate_repo_path(static_project_path.strip("/"), "정적 사이트 경로")
     app_name = _resolve_app_name(name, repo_url, user, db)
 
     # 슬롯 선언 저장 — 라우팅 규칙(_slot_hostnames)의 진실원.

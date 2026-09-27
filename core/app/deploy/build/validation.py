@@ -1,4 +1,4 @@
-"""배포 입력 검증 — static/volume 필드 · dep 시크릿 예약 env 키."""
+"""배포 입력 검증 — static/volume 필드 · dep 시크릿 예약 env 키. (빌드 소스 검증은 source.py)"""
 
 import re
 

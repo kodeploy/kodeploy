@@ -3,6 +3,7 @@
 import base64
 
 from app import config
+from app.deploy.build.source import validate_branch, validate_repo_path, validate_repo_url
 from app.deploy.stack.manifests._renderer import render, render_text
 
 
@@ -11,6 +12,15 @@ from app.deploy.stack.manifests._renderer import render, render_text
 # "이미 있네"로 스킵해 export를 싸게 만든다(존재확인은 repo 단위로 작동).
 def _cache_ref(image: str) -> str:
     return image.rsplit(":", 1)[0] + ":buildcache"
+
+
+# 렌더 직전 마지막 방어선 — 템플릿은 autoescape 없이 값을 YAML·셸에 그대로 넣는다.
+# start_deploy가 먼저 막지만, 감지 결과(detect)·옛 빌드 행도 여기를 지나므로 한 번 더 본다.
+def _check_source(repo_url: str, branch: str, *paths: tuple[str, str]) -> None:
+    validate_repo_url(repo_url)
+    validate_branch(branch)
+    for path, label in paths:
+        validate_repo_path(path, label)
 
 
 # 3개 빌더가 공유하는 캐시/deadline 컨텍스트. 캐시 플래그는 BUILD_REGISTRY_CACHE_ENABLED 게이트.
@@ -35,6 +45,9 @@ def buildkit_job(
     dockerfile_filename: str = "Dockerfile",
     git_auth_secret: str = "",            # private repo: GIT_AUTH_TOKEN 담은 빌드별 Secret 이름 (없으면 public clone)
 ) -> dict:
+    _check_source(repo_url, branch, (dockerfile_subdir, "Dockerfile 경로"), (dockerfile_filename, "Dockerfile 이름"))
+    if not dockerfile_filename:
+        raise ValueError("Dockerfile 이름이 비어 있습니다")
     return render(
         "buildkit_job.yaml.j2",
         build_id=build_id,
@@ -64,6 +77,7 @@ def nixpacks_buildkit_job(
     build_args: dict[str, str] | None = None,
     git_auth_secret: str = "",            # private repo: GIT_AUTH_TOKEN 담은 빌드별 Secret 이름
 ) -> dict:
+    _check_source(repo_url, branch, (project_path, "프로젝트 경로"))
     return render(
         "nixpacks_buildkit_job.yaml.j2",
         build_id=build_id,
@@ -117,6 +131,7 @@ def static_buildkit_job(
     project_path: str = "",
     git_auth_secret: str = "",            # private repo: GIT_AUTH_TOKEN 담은 빌드별 Secret 이름
 ) -> dict:
+    _check_source(repo_url, branch, (project_path, "정적 사이트 경로"))
     return render(
         "static_buildkit_job.yaml.j2",
         build_id=build_id,
