@@ -60,6 +60,12 @@ spec:
                 secretKeyRef:
                   name: mysql-secret
                   key: MYSQL_PASSWORD
+            - name: BUILDER_HMAC_SECRET                  # Go 빌더와 서명 키 공유 — 빌더 Secret을 그대로 읽는다 (값 복사 안 함)
+              valueFrom:
+                secretKeyRef:
+                  name: kodeploy-builder-secrets
+                  key: HMAC_SECRET
+                  optional: true                         # 없으면 v2(빌더) 제출·콜백만 막힌다 — v1은 그대로
           startupProbe:                                  # 부팅 단계 전용. 통과 전엔 liveness/readiness 멈춤
             httpGet:
               path: /healthz                             # main.py의 /healthz 엔드포인트
