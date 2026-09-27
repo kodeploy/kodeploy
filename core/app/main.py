@@ -13,6 +13,7 @@ from app.auth.router import router as auth_router
 from app.community.router import router as community_router
 from app.config import ALLOWED_ORIGINS
 from app.deploy.router import router as deploy_router
+from app.internal.router import router as internal_router
 
 
 @asynccontextmanager
@@ -36,6 +37,7 @@ app.include_router(auth_router)
 app.include_router(deploy_router)
 app.include_router(community_router)
 app.include_router(admin_router)
+app.include_router(internal_router)
 
 
 # K8s liveness/readiness probe 엔드포인트
