@@ -35,6 +35,13 @@ from app.shared.db import get_db
 router = APIRouter(prefix="/deploy", tags=["deploy"])
 
 
+# v2(빌더·Argo) 앱은 core가 리소스를 직접 바꾸면 Argo가 되돌리거나(env·route) 다시 만든다(삭제).
+# config·delete 요청이 빌더에 연결되기 전까지 막는다.
+def _reject_v2(user: User, what: str) -> None:
+    if user.pipeline == "v2":
+        raise HTTPException(status_code=501, detail=f"새 경로(v2)에서 아직 지원하지 않습니다: {what}")
+
+
 # Build ORM 객체 → StatusResponse 응답 DTO 변환.
 # timing: get_build_timings()가 준 {total/nixpacks/buildkit_seconds} (없으면 빈 dict).
 def _to_status(build: Build, timing: dict | None = None) -> StatusResponse:
@@ -143,6 +150,7 @@ async def env_put(
 ) -> EnvVarsResponse:
     if not user.app_name:
         raise HTTPException(status_code=400, detail="첫 배포 완료 후 환경변수 설정 가능")
+    _reject_v2(user, "환경변수 변경")
     tenant_id = f"tenant-{user.id.hex[:8]}"
     # 변경 전 현재 env (Secret) 조회 — set_env 전에 받아둬야 diff 계산 가능
     old_env = env.get_env(tenant_id, user.app_name)
@@ -514,6 +522,7 @@ def put_domain(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
+    _reject_v2(user, "도메인 변경")
     try:
         result = hostnames.set_custom_domain(db, user, req.domain)
     except ValueError as e:
@@ -528,6 +537,7 @@ def delete_domain(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
+    _reject_v2(user, "도메인 변경")
     hostnames.clear_custom_domain(db, user)
     return {"status": "cleared"}
 
@@ -539,6 +549,7 @@ def delete_app(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    _reject_v2(user, "앱 삭제")
     try:
         status.delete_app(db, user)
     except ValueError as e:
