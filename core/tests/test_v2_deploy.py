@@ -199,6 +199,18 @@ def test_run_stops_if_replaced_while_provisioning(runner):
     runner.db.refresh.side_effect = lambda b: setattr(b, "status", "cancelled")
     asyncio.run(v2.run_v2_build("3f9a2c1d"))
     assert "submit" not in runner.steps and runner.build.status == "cancelled"
+    assert runner.record.status == "cancelled" and runner.record.finished_at is not None
+
+
+def test_run_refusal_after_replacement_stays_cancelled(runner):
+    async def refuse(payload):
+        runner.build.status = "cancelled"          # 전송 도중 재배포가 대체
+        raise builder.BuilderError("conflict")
+
+    runner.monkeypatch.setattr(v2.builder, "submit", refuse)
+    asyncio.run(v2.run_v2_build("3f9a2c1d"))
+    assert runner.build.status == "cancelled" and runner.build.error is None
+    assert runner.record.status == "cancelled"
 
 
 def test_run_orchestration_error(runner):

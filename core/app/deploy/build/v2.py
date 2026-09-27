@@ -144,10 +144,15 @@ def close_record(record: BuildRecord, status: str, error: str | None = None) -> 
 def _fail(db, build: Build | None, record: BuildRecord | None, error: str) -> None:
     if build is None:
         return
-    build.status = "failed"
-    build.error = error
-    if record is not None:
-        close_record(record, "failed", error)
+    db.refresh(build)
+    if build.status == "cancelled":   # 그사이 재배포로 대체됐다 — 실패로 덮지 않는다
+        if record is not None:
+            close_record(record, "cancelled")
+    else:
+        build.status = "failed"
+        build.error = error
+        if record is not None:
+            close_record(record, "failed", error)
     db.commit()
 
 
@@ -175,6 +180,8 @@ async def run_v2_build(build_id: str, initial_env: dict[str, str] | None = None)
 
         db.refresh(build)
         if build.status == "cancelled":  # 준비 중에 재배포로 대체됨
+            close_record(record, "cancelled")
+            db.commit()
             return
         server_hosts, _ = _slot_hostnames(owner)
         build.status = "building"         # 이벤트가 먼저 와도 뒤로 돌리지 않게 전송 전에 바꾼다
