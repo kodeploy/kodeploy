@@ -1054,7 +1054,9 @@ def _rollout_problem(dep, app_name: str, namespace: str, crash_base: dict[str, i
 
 
 # 순수 판정 — 앱 Pod 목록 + 의존성 Pod 목록 → 실패 사유 또는 None. crash_base는 호출 사이에 이어 쓴다.
-def _crash_reason(pods, dep_pods, crash_base: dict[str, int]) -> str | None:
+# limit·message는 배포 뒤 감시(v2 postwatch)가 바꿔 쓴다 — 이미 Ready였던 앱은 재시작 1회부터 비정상.
+def _crash_reason(pods, dep_pods, crash_base: dict[str, int], limit: int = CRASH_RESTART_LIMIT,
+                  message=None) -> str | None:
     deps_ready = all(_pod_ready(p) for p in dep_pods)
     for pod in pods:
         if pod.metadata.deletion_timestamp:
@@ -1069,8 +1071,8 @@ def _crash_reason(pods, dep_pods, crash_base: dict[str, int]) -> str | None:
                 continue
             restarts = cs.restart_count or 0
             base = crash_base.setdefault(pod.metadata.name, restarts)
-            if restarts - base >= CRASH_RESTART_LIMIT:
-                return _crash_message(cs)
+            if restarts - base >= limit:
+                return (message or _crash_message)(cs)
     return None
 
 
@@ -1081,6 +1083,11 @@ def _pod_ready(pod) -> bool:
 
 
 def _crash_message(cs) -> str:
+    return f"{_crash_head(cs)} 재시작이 반복돼 배포를 멈췄어요. 로그 끝의 앱 로그를 확인하세요."
+
+
+# 마지막 종료 사유로 한 문장 (배포 중·배포 뒤 판정이 같이 쓴다)
+def _crash_head(cs) -> str:
     term = cs.last_state.terminated if cs.last_state else None
     if term and term.reason == "OOMKilled":
         head = "메모리가 부족해 앱이 강제 종료됐어요 (OOMKilled)."
@@ -1093,7 +1100,7 @@ def _crash_message(cs) -> str:
         head = f"앱이 시작 중에 종료됐어요 (종료 코드 {term.exit_code})."
     else:
         head = "앱이 계속 재시작되고 있어요."
-    return f"{head} 재시작이 반복돼 배포를 멈췄어요. 로그 끝의 앱 로그를 확인하세요."
+    return head
 
 
 # 실패한 앱의 런타임 로그 꼬리 — 빌드 로그 끝에 붙일 블록. 없으면 "".

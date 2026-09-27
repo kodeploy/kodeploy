@@ -10,7 +10,7 @@
 import logging
 from datetime import datetime, timezone
 
-from app.deploy.build import diagnose, pipeline
+from app.deploy.build import diagnose, pipeline, postwatch
 from app.deploy.build.v2 import close_record
 from app.deploy.model import Build, BuildRecord
 from app.shared.db import SessionLocal
@@ -105,6 +105,9 @@ def apply(build_id: str, ev: dict) -> str:
 
         if diagnosis and build.ai_status == "pending":
             pipeline.spawn_background(_diagnose, build_id, diagnosis)
+        if kind == "deployed" and build.status == "running":
+            # 성공은 바로 표시하고, 뒤에서 60초 동안 시작 직후 크래시를 본다 (postwatch)
+            pipeline.spawn_background(postwatch.watch_after_deploy, build_id)
         return kind
     finally:
         db.close()
