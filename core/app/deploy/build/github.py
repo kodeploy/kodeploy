@@ -33,6 +33,25 @@ def _fetch_github_raw(repo_url: str, branch: str, path: str) -> str | None:
     return None
 
 
+# 저장소가 public인지 — 토큰 없이 GitHub API로 본다 (v2 빌더는 아직 private clone을 못 한다).
+# True=public, False=private이거나 없음(토큰 없이는 404로 같다), None=확인 실패(네트워크·rate limit).
+def _repo_is_public(repo_url: str) -> "bool | None":
+    m = _GITHUB_REPO_PATTERN.match(repo_url.rstrip("/"))
+    if not m:
+        return False
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{m.group(1)}/{m.group(2)}",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "kodeploy"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.load(resp).get("private") is False
+    except urllib.error.HTTPError as e:
+        return False if e.code == 404 else None
+    except (urllib.error.URLError, TimeoutError, ValueError):
+        return None
+
+
 # 빌드 user의 installation id 조회 (private repo tree/clone 토큰 발급용). 없으면 None.
 def _installation_id_for(build: Build) -> "int | None":
     if build.user_id is None:

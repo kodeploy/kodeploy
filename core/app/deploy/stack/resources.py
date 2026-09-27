@@ -97,6 +97,29 @@ def _ensure_one_db(build: Build, db_type: str) -> None:
                 raise
 
 
+# v2(빌더·Argo) 앱의 의존성 Secret만 만든다. StatefulSet·Service·Deployment는 차트가 그리고,
+# 비밀번호가 든 Secret만 core가 만든다 (kodeploy-charts README "차트에 없는 것").
+# 이미 있으면 그대로 둔다 (비밀번호가 바뀌면 옛 PVC의 DB에 못 붙는다). 끈 dep의 정리는 하지 않는다.
+def ensure_dep_secrets(build: Build) -> None:
+    ns, uid = build.tenant_id, build.user_id_str
+    docs: list[dict] = []
+    if build.db_type == "mysql":
+        docs += manifests.mysql(tenant_id=ns, user_id=uid)
+    elif build.db_type == "postgres":
+        docs += manifests.postgres(tenant_id=ns, user_id=uid)
+    if build.use_redis:
+        docs += manifests.redis(tenant_id=ns, user_id=uid)
+    core = k8s.core_v1()
+    for doc in docs:
+        if doc["kind"] != "Secret":
+            continue
+        try:
+            core.create_namespaced_secret(namespace=ns, body=doc)
+        except ApiException as e:
+            if e.status != 409:
+                raise
+
+
 # 특정 db의 StatefulSet + Service만 삭제. PVC/Secret은 의도적으로 보존.
 # 다시 그 db로 토글하면 새 StatefulSet이 옛 PVC + 옛 Secret에 자동 바인딩 → 복원.
 # ns 기반 — 서버 슬롯 teardown(_teardown_server)에서도 Build 없이 호출 가능.

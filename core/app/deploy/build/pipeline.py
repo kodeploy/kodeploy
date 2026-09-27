@@ -20,7 +20,7 @@ from app.auth.model import User
 from app.deploy import crud
 from app.deploy.console import logs as runtime_logs, snapshots
 from app.deploy.stack import env as env_module, manifests, r2
-from app.deploy.build import diagnose
+from app.deploy.build import diagnose, v2
 from app.deploy.build.github import _detect_build, _fetch_github_raw
 from app.deploy.build.naming import _normalize_repo_url, _resolve_app_name
 from app.deploy.build.source import validate_branch, validate_repo_path, validate_repo_url
@@ -258,7 +258,10 @@ def _cancel_stale_builds(db: Session, user_id: uuid.UUID, slot: str) -> None:
         return
     for build in stale:
         build.status = "cancelled"
-        _cleanup_build_job(build.build_id, build.user_id_str)
+        if v2.is_v2_build(build):
+            spawn_background(v2.cancel_remote, build.build_id)  # Job은 빌더 것 — 빌더가 지우고 cancelled를 보낸다
+        else:
+            _cleanup_build_job(build.build_id, build.user_id_str)
     db.commit()
 
 
@@ -407,6 +410,16 @@ async def start_deploy(
         if static_branch.strip():
             validate_branch(static_branch.strip())
         validate_repo_path(static_project_path.strip("/"), "정적 사이트 경로")
+
+    # v2(빌더) 앱 — 조건이 안 맞으면 여기서 400 (아무것도 바꾸기 전). detect면 Dockerfile 경로를 확정한다.
+    use_v2 = v2.is_v2(user)
+    if use_v2:
+        dockerfile_path = await v2.check_submit(
+            user, runtime=runtime, repo_url=repo_url, branch=branch, build_mode=build_mode,
+            dockerfile_path=dockerfile_path, use_static=use_static, init_dump_token=init_dump_token,
+        )
+        validate_repo_path(dockerfile_path, "Dockerfile 경로")
+        build_mode = "dockerfile"
     app_name = _resolve_app_name(name, repo_url, user, db)
 
     # 슬롯 선언 저장 — 라우팅 규칙(_slot_hostnames)의 진실원.
@@ -439,9 +452,13 @@ async def start_deploy(
             build_mode=build_mode,
             dockerfile_path=dockerfile_path,
             project_path=project_path.strip("/"),  # 앞뒤 슬래시 정리 — manifest에서 ${PROJECT_PATH:+/$PROJECT_PATH}로 결합
+            last_event_seq=0 if use_v2 else None,  # v2 빌드 표시 겸 콜백 seq 시작점
         )
         builds.append(crud.create_build(db, server_build))
-        spawn_background(_run_build, build_id, env_vars or {}, init_dump_token)
+        if use_v2:
+            spawn_background(v2.run_v2_build, build_id, env_vars or {})
+        else:
+            spawn_background(_run_build, build_id, env_vars or {}, init_dump_token)
     else:
         # 서버 사용 안 함 — 기존 서버 리소스 + deps 정리 (PVC·버킷 보존). 매 제출마다
         # spawn이라 직전 실패도 다음 제출에서 재시도되는 self-healing.
@@ -474,7 +491,7 @@ async def start_deploy(
         )
         builds.append(crud.create_build(db, static_build))
         spawn_background(_run_build, build_id)
-    else:
+    elif not use_v2:  # v2 앱은 route를 Argo가 관리한다 — core가 reconcile하면 서로 되돌린다
         spawn_background(_teardown_static, user.id)
 
     return builds
