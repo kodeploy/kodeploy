@@ -260,3 +260,69 @@ def test_ensure_dep_secrets_creates_only_secrets(monkeypatch):
     ns = f"tenant-{UID.hex[:8]}"
     assert created == [(ns, "mysql-secret"), (ns, "redis-secret")]
     assert not core.create_namespaced_service.called and not apps.method_calls   # 워크로드는 차트가 그린다
+
+
+# --- 앱 삭제: 빌더에 맡기고 deleted를 기다린다 ---
+
+def _delete_flow(monkeypatch, events, *, app_name="demo"):
+    """request_delete를 돌린다. submit이 받아지면 events를 (build_id마다) 콜백처럼 흘려보낸다."""
+    sent = []
+
+    async def submit(payload):
+        sent.append(payload)
+        for ev in events:
+            v2.on_delete_event(payload["build_id"], ev)
+
+    monkeypatch.setattr(v2.builder, "submit", submit)
+    user = v2_user()
+    user.app_name = app_name
+    return user, sent
+
+
+def test_delete_payload_is_namespace_only():
+    p = v2.delete_payload(v2_user(), "aabbccdd")
+    assert p == {"build_id": "aabbccdd", "actor": "d6d8b759", "namespace": "tenant-d6d8b759", "kind": "delete"}
+
+
+def test_request_delete_returns_when_builder_reports_deleted(monkeypatch):
+    user, sent = _delete_flow(monkeypatch, [{"seq": 1, "type": "deleted"}])
+    asyncio.run(v2.request_delete(user))
+    assert len(sent) == 1 and sent[0]["kind"] == "delete"
+    assert v2._deleting == {}
+
+
+def test_request_delete_fails_when_builder_reports_failed(monkeypatch):
+    user, _ = _delete_flow(monkeypatch, [{"seq": 1, "type": "failed", "stage": "timeout", "reason": "still exists"}])
+    with pytest.raises(ValueError, match="timeout: still exists"):
+        asyncio.run(v2.request_delete(user))
+    assert v2._deleting == {}
+
+
+def test_request_delete_times_out(monkeypatch):
+    user, _ = _delete_flow(monkeypatch, [])
+    monkeypatch.setattr(v2, "DELETE_TIMEOUT", 0.01)
+    with pytest.raises(ValueError, match="다시 시도"):
+        asyncio.run(v2.request_delete(user))
+    assert v2._deleting == {}
+
+
+def test_request_delete_rejected_by_builder(monkeypatch):
+    user, _ = _delete_flow(monkeypatch, [])
+
+    async def refuse(payload):
+        raise builder.BuilderError("signature")
+
+    monkeypatch.setattr(v2.builder, "submit", refuse)
+    with pytest.raises(ValueError, match="받지 않았습니다"):
+        asyncio.run(v2.request_delete(user))
+
+
+def test_request_delete_without_app(monkeypatch):
+    user, sent = _delete_flow(monkeypatch, [], app_name=None)
+    with pytest.raises(ValueError, match="삭제할 앱이 없습니다"):
+        asyncio.run(v2.request_delete(user))
+    assert sent == []
+
+
+def test_other_build_events_are_not_delete_events():
+    assert v2.on_delete_event("3f9a2c1d", {"seq": 1, "type": "deleted"}) is False

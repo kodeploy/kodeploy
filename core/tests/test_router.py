@@ -155,20 +155,18 @@ def test_ws_rejects_missing_cookie_with_allowed_origin():
     assert exc.value.code == 4001              # Origin 통과 후 인증에서 거절
 
 
-# --- v2(빌더) 앱: config·delete가 빌더에 연결되기 전까지 501 ---
+# --- v2(빌더) 앱: config가 빌더에 연결되기 전까지 501 ---
 
 @pytest.mark.parametrize("method,path,body,target", [
     ("put", "/deploy/env", {"env": {"A": "1"}}, "set_env"),
     ("put", "/deploy/domain", {"domain": "www.example.com"}, "set_custom_domain"),
     ("delete", "/deploy/domain", None, "clear_custom_domain"),
-    ("delete", "/deploy/app", None, "delete_app"),
 ])
 def test_v2_app_changes_are_501(monkeypatch, method, path, body, target):
     called = []
     monkeypatch.setattr(deploy_router.env, "set_env", lambda *a: called.append("set_env"))
     monkeypatch.setattr(deploy_router.hostnames, "set_custom_domain", lambda *a: called.append("set_custom_domain"))
     monkeypatch.setattr(deploy_router.hostnames, "clear_custom_domain", lambda *a: called.append("clear_custom_domain"))
-    monkeypatch.setattr(status, "delete_app", lambda *a: called.append("delete_app"))
     user = make_user()
     user.pipeline = "v2"
     client = make_client(user)
@@ -183,3 +181,31 @@ def test_v1_app_delete_still_works(monkeypatch):
     user = make_user()
     user.pipeline = "v1"
     assert make_client(user).delete("/deploy/app").status_code == 200 and called == ["delete_app"]
+
+
+def test_v2_app_delete_waits_for_builder_then_deletes(monkeypatch):
+    order = []
+
+    async def request_delete(user):
+        order.append("builder")
+
+    monkeypatch.setattr(deploy_router.v2, "request_delete", request_delete)
+    monkeypatch.setattr(status, "delete_app", lambda *a: order.append("delete_app"))
+    user = make_user()
+    user.pipeline = "v2"
+    assert make_client(user).delete("/deploy/app").status_code == 200
+    assert order == ["builder", "delete_app"]          # Application이 사라진 뒤에야 ns를 지운다
+
+
+def test_v2_app_delete_keeps_app_when_builder_fails(monkeypatch):
+    async def request_delete(user):
+        raise ValueError("삭제하지 못했습니다 (timeout: still exists)")
+
+    called = []
+    monkeypatch.setattr(deploy_router.v2, "request_delete", request_delete)
+    monkeypatch.setattr(status, "delete_app", lambda *a: called.append("delete_app"))
+    user = make_user()
+    user.pipeline = "v2"
+    r = make_client(user).delete("/deploy/app")
+    assert r.status_code == 400 and "삭제하지 못했습니다" in r.json()["detail"]
+    assert called == []

@@ -11,6 +11,7 @@ v2가 아직 받지 않는 것 (빌더가 400으로 거부하거나, 한 앱이 
 import asyncio
 import logging
 import os.path
+import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import func
@@ -205,3 +206,59 @@ async def cancel_remote(build_id: str) -> None:
         await builder.cancel(build_id)
     except Exception as e:
         logger.warning("build %s: builder cancel failed — %s", build_id, e)
+
+
+# ---- 앱 삭제 ----------------------------------------------------------------------------------------
+# 앱 삭제는 요청 하나가 끝까지 기다리는 흐름이다: 빌더가 values 폴더를 지우고 Application이 사라지면 deleted를
+# 보낸다. 그 뒤에야 core가 네임스페이스를 지운다 — Application이 남은 채로 지우면 selfHeal이 다시 만든다.
+# 기다리는 쪽(request_delete)과 이벤트를 받는 쪽(on_delete_event)이 같은 이벤트 루프라 Future로 이어 준다.
+# core가 재시작돼 기다림이 끊기면 유저가 다시 누르면 된다 (빌더의 delete는 파일이 없어도 성공이다).
+
+DELETE_TIMEOUT = 90.0   # 초. Cloudflare 요청 상한(100초) 안쪽. 넘기면 유저가 다시 누른다
+
+_deleting: dict[str, asyncio.Future] = {}
+
+
+def delete_payload(user: User, delete_id: str) -> dict:
+    return {
+        "build_id": delete_id,
+        "actor": user.id.hex[:8],
+        "namespace": f"tenant-{user.id.hex[:8]}",
+        "kind": "delete",
+    }
+
+
+# 빌더에 삭제를 맡기고 deleted를 기다린다. 못 하면 ValueError(→ 400), 화면에 보여도 되는 이유.
+async def request_delete(user: User) -> None:
+    if not user.app_name:
+        raise ValueError("삭제할 앱이 없습니다")
+    delete_id = uuid.uuid4().hex[:8]
+    fut = asyncio.get_running_loop().create_future()
+    _deleting[delete_id] = fut
+    try:
+        await builder.submit(delete_payload(user, delete_id))   # 진행 중인 빌드가 있으면 409 → 취소 후 다시
+        await asyncio.wait_for(fut, DELETE_TIMEOUT)
+    except builder.BuilderError as e:
+        raise ValueError(f"빌더가 삭제를 받지 않았습니다: {e}")
+    except asyncio.TimeoutError:
+        raise ValueError("삭제가 아직 끝나지 않았습니다. 잠시 후 다시 시도하세요")
+    finally:
+        _deleting.pop(delete_id, None)
+
+
+# 삭제 요청의 콜백이면 기다리는 쪽에 알리고 True. 아니면 False (일반 빌드 이벤트).
+def on_delete_event(build_id: str, ev: dict) -> bool:
+    fut = _deleting.get(build_id)
+    if fut is None:
+        return False
+    kind = ev.get("type")
+    if fut.done() or kind not in ("deleted", "failed", "cancelled"):
+        return True
+    if kind == "deleted":
+        fut.set_result(None)
+    elif kind == "failed":
+        stage, reason = ev.get("stage") or "", ev.get("reason") or ""
+        fut.set_exception(ValueError(f"삭제하지 못했습니다 ({stage}: {reason})" if stage else f"삭제하지 못했습니다 ({reason})"))
+    else:
+        fut.set_exception(ValueError("삭제 요청이 취소되었습니다. 다시 시도하세요"))
+    return True

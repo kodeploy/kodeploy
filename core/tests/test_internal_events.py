@@ -193,3 +193,24 @@ def test_core_cancelled_build_ignores_late_events(env):
 def test_invalid_event_body(env):
     r = env.post({"type": "log"})
     assert r.status_code == 400
+
+
+def test_delete_request_events_skip_builds_table(env):
+    from app.deploy.build import v2
+
+    got = []
+
+    class Fut:
+        def done(self):
+            return False
+
+        def set_result(self, v):
+            got.append(v)
+
+    v2._deleting["dd44ee55"] = Fut()
+    try:
+        r = env.post({"seq": 1, "type": "deleted"}, build_id="dd44ee55")
+    finally:
+        v2._deleting.pop("dd44ee55", None)
+    assert r.status_code == 200 and r.json() == {"result": "delete"}
+    assert got == [None]

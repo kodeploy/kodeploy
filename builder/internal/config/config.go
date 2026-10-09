@@ -26,6 +26,7 @@ type Config struct {
 
 	BuildNamespace  string
 	ArgoCDNamespace string
+	ArgoAppSet      string // Application을 만드는 ApplicationSet 이름 (앱 삭제 때 refresh)
 
 	BuildKitImage              string
 	BuildActiveDeadlineSeconds int64
@@ -97,6 +98,7 @@ func Load(getenv func(string) string) (*Config, error) {
 		GHCRUser:        strings.ToLower(required("GHCR_USER")),
 		BuildNamespace:  str("BUILD_NAMESPACE", "kodeploy-build"),
 		ArgoCDNamespace: str("ARGOCD_NAMESPACE", "argocd"),
+		ArgoAppSet:      str("ARGO_APPSET", "kodeploy-apps"),
 		BuildKitImage:   str("BUILDKIT_IMAGE", DefaultBuildKitImage),
 		// 원본: EARLY_TRIGGER == "true"일 때만 켠다. 빌더는 라이브 설정(ON)을 기본으로 둔다.
 		EarlyTrigger:     strings.ToLower(str("EARLY_TRIGGER", "true")) == "true",

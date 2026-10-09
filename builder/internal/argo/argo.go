@@ -1,5 +1,5 @@
 // Package argo는 Argo CD Application에 refresh를 요청하고, 우리 커밋이 Synced + Healthy가 될 때까지 기다린다
-// (지시서 4-4). Argo 모듈은 쓰지 않고 dynamic client로 Application을 unstructured로 읽는다.
+// (지시서 4-4). 앱 삭제 때는 ApplicationSet을 refresh하고 Application이 사라질 때까지 기다린다. Argo 모듈은 쓰지 않고 dynamic client로 Application을 unstructured로 읽는다.
 package argo
 
 import (
@@ -22,7 +22,12 @@ import (
 
 var ApplicationGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
 
-const refreshAnnotation = "argocd.argoproj.io/refresh"
+var ApplicationSetGVR = schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applicationsets"}
+
+const (
+	refreshAnnotation       = "argocd.argoproj.io/refresh"
+	appSetRefreshAnnotation = "argocd.argoproj.io/application-set-refresh"
+)
 
 // Failure는 대기가 실패로 끝난 경우다. Stage는 contract.StageSync/Health/Timeout.
 type Failure struct {
@@ -46,14 +51,16 @@ type AncestorFunc func(ctx context.Context, base, head string) (bool, error)
 type Client struct {
 	dyn        dynamic.Interface
 	ns         string
+	appSet     string // Application을 만드는 ApplicationSet 이름
 	valuesRepo string // 값 source의 repoURL (정규화 비교)
 	ancestor   AncestorFunc
 	poll       time.Duration
 }
 
-// New는 Client를 만든다. valuesRepo는 values source의 repoURL, ancestor는 커밋 포함 여부 확인 함수다.
-func New(dyn dynamic.Interface, namespace, valuesRepo string, ancestor AncestorFunc) *Client {
-	return &Client{dyn: dyn, ns: namespace, valuesRepo: normRepo(valuesRepo), ancestor: ancestor, poll: 2 * time.Second}
+// New는 Client를 만든다. appSet은 Application을 만드는 ApplicationSet 이름, valuesRepo는 values source의
+// repoURL, ancestor는 커밋 포함 여부 확인 함수다.
+func New(dyn dynamic.Interface, namespace, appSet, valuesRepo string, ancestor AncestorFunc) *Client {
+	return &Client{dyn: dyn, ns: namespace, appSet: appSet, valuesRepo: normRepo(valuesRepo), ancestor: ancestor, poll: 2 * time.Second}
 }
 
 // normRepo는 repoURL 비교용 정규화다 (소문자, scheme·끝 슬래시·.git 제거).
@@ -83,6 +90,43 @@ func (c *Client) Refresh(ctx context.Context, app string) error {
 		}
 		if !sleep(ctx, c.poll) {
 			return context.Cause(ctx)
+		}
+	}
+}
+
+// RefreshAppSet은 ApplicationSet이 git generator를 바로 다시 평가하게 한다 (앱 삭제: values 폴더가 사라진
+// 것을 기본 주기(최대 3분)보다 빨리 알아채 Application을 지우게). 일시 오류면 poll 간격으로 다시 시도한다.
+func (c *Client) RefreshAppSet(ctx context.Context) error {
+	patch, _ := json.Marshal(map[string]any{"metadata": map[string]any{"annotations": map[string]string{appSetRefreshAnnotation: "true"}}})
+	for {
+		_, err := c.dyn.Resource(ApplicationSetGVR).Namespace(c.ns).Patch(ctx, c.appSet, types.MergePatchType, patch, metav1.PatchOptions{})
+		if err == nil {
+			return nil
+		}
+		if !isTransient(err) {
+			return err
+		}
+		if !sleep(ctx, c.poll) {
+			return context.Cause(ctx)
+		}
+	}
+}
+
+// WaitGone은 Application이 사라질 때까지 poll 간격으로 기다린다. 이미 없으면 바로 돌아온다.
+// timeout이 지나면 Failure(timeout), ctx 자체가 끝나면(취소·종료) ctx 원인을 돌려준다.
+func (c *Client) WaitGone(ctx context.Context, app string, timeout time.Duration) error {
+	wctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
+		_, err := c.apps().Get(wctx, app, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if !sleep(wctx, c.poll) {
+			if ctx.Err() != nil {
+				return context.Cause(ctx)
+			}
+			return &Failure{Stage: contract.StageTimeout, Reason: fmt.Sprintf("application %s still exists after %s", app, timeout)}
 		}
 	}
 }

@@ -52,6 +52,8 @@ type Git interface {
 // Argo는 Application refresh와 Synced·Healthy 대기다 (argo.Client).
 type Argo interface {
 	Refresh(ctx context.Context, app string) error
+	RefreshAppSet(ctx context.Context) error
+	WaitGone(ctx context.Context, app string, timeout time.Duration) error
 	Wait(ctx context.Context, app, sha string, since time.Time, timeout time.Duration) (argo.Synced, error)
 }
 

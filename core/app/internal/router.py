@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from app import config
 from app.builder import sign
+from app.deploy.build import v2
 from app.internal import events
 
 router = APIRouter(prefix="/internal", tags=["internal"], include_in_schema=False)
@@ -40,6 +41,8 @@ async def build_event(build_id: str, request: Request) -> dict:
         int(ev["seq"])
     except (ValueError, KeyError, TypeError):
         raise HTTPException(status_code=400, detail="invalid event")
+    if v2.on_delete_event(build_id, ev):   # 앱 삭제 요청은 builds 행이 없다 — 기다리는 쪽에 바로 알린다
+        return {"result": "delete"}
     # 동기 DB 호출이라 메인 루프를 막지 않게 스레드에서
     result = await asyncio.to_thread(events.apply, build_id, ev)
     return {"result": result}

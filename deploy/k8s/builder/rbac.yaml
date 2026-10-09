@@ -1,6 +1,6 @@
 # 빌더 권한 - 클러스터 전체에 걸리는 바인딩은 없다.
 #   kodeploy-build: 빌드 Job 생성·Watch·어노테이션·삭제, 빌드 Pod 로그
-#   argocd:         Application refresh 어노테이션·상태 조회
+#   argocd:         Application refresh 어노테이션·상태 조회, ApplicationSet refresh 어노테이션(앱 삭제)
 #   앱 네임스페이스: Pod·로그 읽기만 (배포 뒤 크래시 감지와 실패 로그). ClusterRole은 여기서 정의만 하고,
 #                   바인딩은 kodeploy-charts가 Argo 관리 앱의 네임스페이스마다 RoleBinding으로 그린다.
 # Secret·exec·쓰기 권한은 테넌트 네임스페이스에 없다 (배포는 kodeploy-apps 커밋 → Argo가 한다).
@@ -42,7 +42,10 @@ metadata:
 rules:
   - apiGroups: ["argoproj.io"]
     resources: ["applications"]
-    verbs: ["get", "list", "watch", "patch"]                       # patch = argocd.argoproj.io/refresh
+    verbs: ["get", "patch"]                                        # get = 상태 대기·사라짐 확인, patch = argocd.argoproj.io/refresh
+  - apiGroups: ["argoproj.io"]
+    resources: ["applicationsets"]
+    verbs: ["patch"]                                               # 앱 삭제: application-set-refresh로 Application 정리를 앞당긴다
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -67,7 +70,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]                                         # 앱 컨테이너 재시작 수·대기 사유, 의존성 Ready
+    verbs: ["list"]                                                # 앱 컨테이너 재시작 수·대기 사유, 의존성 Ready (get은 안 쓴다)
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]                                                 # 실패 때 앱 로그 끝 80줄

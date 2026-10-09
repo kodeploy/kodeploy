@@ -83,7 +83,7 @@ func serve(log *slog.Logger) error {
 		Logs:     logs.NewFollower(logs.NewKubeSource(cs, cfg.BuildNamespace)),
 		Registry: registry.New(cfg.GHCRUser, cfg.GHCRToken),
 		Git:      writer,
-		Argo:     argo.New(dyn, cfg.ArgoCDNamespace, "https://github.com/"+cfg.GitOpsRepo, gh.IsAncestor),
+		Argo:     argo.New(dyn, cfg.ArgoCDNamespace, cfg.ArgoAppSet, "https://github.com/"+cfg.GitOpsRepo, gh.IsAncestor),
 		AppPods:  apppods.NewKubeSource(cs),
 		Events:   callback.NewSender(cfg.CoreURL, cfg.HMACSecret, log),
 		Log:      log,

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, WebSock
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+import asyncio
 import json
 import re
 import uuid
@@ -11,7 +12,7 @@ from app.auth.deps import get_current_user
 from app.auth.model import User
 from app.auth import github_app, service as auth_service
 from app.deploy import crud, status
-from app.deploy.build import github, pipeline, validation
+from app.deploy.build import github, pipeline, v2, validation
 from app.deploy.console import dbquery, logs, metrics, snapshots, terminal
 from app.deploy.routing import hostnames
 from app.deploy.stack import env, resources
@@ -35,8 +36,8 @@ from app.shared.db import get_db
 router = APIRouter(prefix="/deploy", tags=["deploy"])
 
 
-# v2(빌더·Argo) 앱은 core가 리소스를 직접 바꾸면 Argo가 되돌리거나(env·route) 다시 만든다(삭제).
-# config·delete 요청이 빌더에 연결되기 전까지 막는다.
+# v2(빌더·Argo) 앱은 core가 리소스를 직접 바꾸면 Argo가 되돌린다(env·route).
+# config 요청이 빌더에 연결되기 전까지 막는다.
 def _reject_v2(user: User, what: str) -> None:
     if user.pipeline == "v2":
         raise HTTPException(status_code=501, detail=f"새 경로(v2)에서 아직 지원하지 않습니다: {what}")
@@ -543,15 +544,17 @@ def delete_domain(
 
 
 # 앱 완전 삭제 — K8s 리소스 + PVC + builds + user.app_name 리셋.
+# v2 앱은 먼저 빌더가 values를 지우고 Application이 사라지길 기다린다 (그 전에 ns를 지우면 Argo가 되살린다).
 # /{build_id} 핸들러보다 위에 등록해야 path param이 "app"을 잡지 않음.
 @router.delete("/app")
-def delete_app(
+async def delete_app(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    _reject_v2(user, "앱 삭제")
     try:
-        status.delete_app(db, user)
+        if v2.is_v2(user):
+            await v2.request_delete(user)
+        await asyncio.to_thread(status.delete_app, db, user)   # K8s·R2 호출이 동기라 메인 루프를 막지 않게
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "deleted"}

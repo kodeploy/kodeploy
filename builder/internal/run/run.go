@@ -588,12 +588,37 @@ func (r *run) config() {
 	r.waitArgo(image, res.CommitSHA)
 }
 
-// delete는 kind=delete 흐름이다. values 파일을 지우는 커밋을 하고 deleted를 보낸다 (Argo 대기 없음).
+// delete는 kind=delete 흐름이다. values 파일을 지우는 커밋을 하고, ApplicationSet을 refresh한 뒤
+// Application이 사라지면 deleted를 보낸다. core는 deleted를 받고서야 네임스페이스를 지운다
+// (Application이 남은 채로 지우면 selfHeal이 네임스페이스와 리소스를 다시 만든다).
 func (r *run) delete() {
 	res, err := r.m.d.Git.Commit(r.ctx, gitops.Change{Namespace: r.req.Namespace, Message: r.commitMessage(""), Delete: true})
 	if err != nil {
 		if !r.stopped() {
 			r.fail(contract.StageCommit, err.Error(), nil)
+		}
+		return
+	}
+
+	timeout := r.m.d.Cfg.ArgoWaitTimeout
+	rctx, cancel := context.WithTimeout(r.ctx, timeout)
+	err = r.m.d.Argo.RefreshAppSet(rctx)
+	cancel()
+	if err == nil {
+		err = r.m.d.Argo.WaitGone(r.ctx, r.req.Namespace, timeout)
+	}
+	if err != nil {
+		if r.stopped() {
+			return
+		}
+		var f *argo.Failure
+		switch {
+		case errors.As(err, &f):
+			r.fail(f.Stage, f.Reason, nil)
+		case errors.Is(err, context.DeadlineExceeded):
+			r.fail(contract.StageTimeout, "applicationset refresh did not finish within "+timeout.String(), nil)
+		default:
+			r.fail(contract.StageSync, "argo applicationset refresh: "+err.Error(), nil)
 		}
 		return
 	}

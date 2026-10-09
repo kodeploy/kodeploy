@@ -43,11 +43,11 @@ func application(valuesRev, sync, health string) *unstructured.Unstructured {
 func newClient(objs ...runtime.Object) (*Client, *dynfake.FakeDynamicClient) {
 	scheme := runtime.NewScheme()
 	dyn := dynfake.NewSimpleDynamicClientWithCustomListKinds(scheme,
-		map[schema.GroupVersionResource]string{ApplicationGVR: "ApplicationList"}, objs...)
+		map[schema.GroupVersionResource]string{ApplicationGVR: "ApplicationList", ApplicationSetGVR: "ApplicationSetList"}, objs...)
 	ancestor := func(_ context.Context, base, head string) (bool, error) {
 		return base == ourSHA && head == laterSHA, nil
 	}
-	c := New(dyn, "argocd", valuesURL+".git/", ancestor)
+	c := New(dyn, "argocd", "kodeploy-apps", valuesURL+".git/", ancestor)
 	c.poll = 5 * time.Millisecond
 	return c, dyn
 }
@@ -180,5 +180,51 @@ func TestSingleSourceRevision(t *testing.T) {
 	}}
 	if st := readStatus(u, normRepo(valuesURL)); st.revision != ourSHA {
 		t.Fatalf("got %+v", st)
+	}
+}
+
+func TestWaitGone(t *testing.T) {
+	c, dyn := newClient(application(ourSHA, "Synced", "Healthy"))
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		_ = dyn.Resource(ApplicationGVR).Namespace("argocd").Delete(context.Background(), app, metav1.DeleteOptions{})
+	}()
+	if err := c.WaitGone(context.Background(), app, time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitGoneAlreadyGone(t *testing.T) {
+	c, _ := newClient()
+	if err := c.WaitGone(context.Background(), app, time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWaitGoneTimesOut(t *testing.T) {
+	c, _ := newClient(application(ourSHA, "Synced", "Healthy"))
+	err := c.WaitGone(context.Background(), app, 30*time.Millisecond)
+	var f *Failure
+	if !errors.As(err, &f) || f.Stage != contract.StageTimeout {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestRefreshAppSet(t *testing.T) {
+	set := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "ApplicationSet",
+		"metadata":   map[string]any{"name": "kodeploy-apps", "namespace": "argocd"},
+	}}
+	c, dyn := newClient(set)
+	if err := c.RefreshAppSet(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got, err := dyn.Resource(ApplicationSetGVR).Namespace("argocd").Get(context.Background(), "kodeploy-apps", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetAnnotations()[appSetRefreshAnnotation] != "true" {
+		t.Fatalf("annotations %v", got.GetAnnotations())
 	}
 }

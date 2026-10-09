@@ -170,7 +170,7 @@ POST {CORE_URL}/internal/builds/{build_id}/events
 8. **폴백**: 마커 없이 Job이 성공하면 `image_repo:image_tag`의 digest를 레지스트리에서 조회해 같은 배포 경로로 간다.
 
 ### 4-3. `set-image`, `config`, `delete`
-Job 없음. `set-image`는 4-1의 이미지 검증 + 레지스트리 HEAD → 커밋 → refresh → 대기 → `committed`, `deployed` 또는 `failed`. `config`는 커밋 → refresh → 대기. `delete`는 파일 삭제 커밋 → 콜백 `deleted`(commit_sha 포함). Argo 대기는 하지 않는다(Application이 사라지는 쪽이라). 진행 상태는 메모리로 충분하다. 빌더가 재시작되어 끊기면 core가 같은 요청을 다시 보내고, 같은 내용이면 커밋은 건너뛴다.
+Job 없음. `set-image`는 4-1의 이미지 검증 + 레지스트리 HEAD → 커밋 → refresh → 대기 → `committed`, `deployed` 또는 `failed`. `config`는 커밋 → refresh → 대기. `delete`는 파일 삭제 커밋 → ApplicationSet refresh(`application-set-refresh`) → Application이 사라질 때까지 대기(`ARGO_WAIT_TIMEOUT`) → 콜백 `deleted`(commit_sha 포함). 못 사라지면 `failed(timeout)`이라 core가 네임스페이스를 지우지 않는다. 진행 상태는 메모리로 충분하다. 빌더가 재시작되어 끊기면 core가 같은 요청을 다시 보내고, 같은 내용이면 커밋은 건너뛴다.
 
 ### 4-4. Argo refresh와 대기
 - refresh: argocd 네임스페이스의 Application `<namespace>`에 어노테이션 `argocd.argoproj.io/refresh: normal`을 patch.
@@ -220,7 +220,7 @@ Job 없음. `set-image`는 4-1의 이미지 검증 + 레지스트리 HEAD → �
   - `deployment.yaml`: replicas 1, 요청 50m/64Mi, 상한 메모리 512Mi, worker2 선호(강제 아님), restricted 보안 설정, SA 토큰 마운트 필요.
   - `service.yaml`: ClusterIP 8080.
   - `serviceaccount.yaml`: `kodeploy-builder`.
-  - `rbac.yaml`: Role(kodeploy-build): jobs `create get list watch delete patch`, pods `get list watch`, pods/log `get`. Role(argocd): applications.argoproj.io `get list watch patch`. RoleBinding 둘. **ClusterRole 없음.**
+  - `rbac.yaml`: Role(kodeploy-build): jobs `create get list watch delete patch`, pods `get list watch`, pods/log `get`. Role(argocd): applications.argoproj.io `get list watch patch`, applicationsets.argoproj.io `patch`. RoleBinding 둘. **ClusterRole 없음.**
   - `networkpolicy.yaml`: ingress는 core Pod에서만(8080). egress는 제한하지 않는다(API 서버, GitHub, GHCR 필요).
 
 ---
@@ -266,7 +266,7 @@ core 쪽 연결이다. 빌더 계약은 이 내용과 맞아야 한다.
 - `/deploy`: v2 앱이면 values(core 소유 키만)와 `unit`을 만들어 서명해서 빌더에 POST. `spawn_background(_run_build)`는 부르지 않는다.
 - 콜백 엔드포인트: 서명 검증, `(build_id, seq)` 중복 무시, `builds` 갱신, `failed`면 기존 AI 진단 호출.
 - 기존 앱 넘겨받기: core가 그 앱 리소스의 `managedFields`를 비우고, 지금 떠 있는 이미지(digest)와 runtime·port로 `set-image`를 보낸다. `deployed`가 오면 `pipeline = v2`.
-- v2 앱의 env·도메인·취소는 `config`가 붙기 전까지 501. 삭제는 `delete` → Application이 사라진 것을 확인 → core가 네임스페이스 삭제(시크릿·PVC 포함) → R2·Cloudflare 정리 순서로 만든다. 순서가 바뀌면 Argo가 네임스페이스를 다시 만든다.
+- v2 앱의 env·도메인 변경은 `config`가 붙기 전까지 501. 삭제는 (구현됨: `DELETE /deploy/app`이 `deleted`를 기다린 뒤 이어간다) `delete` → Application이 사라진 것을 확인 → core가 네임스페이스 삭제(시크릿·PVC 포함) → R2·Cloudflare 정리 순서로 만든다. 순서가 바뀌면 Argo가 네임스페이스를 다시 만든다.
 - 다중앱 전환 때 새 앱의 이미지 경로는 `ghcr.io/<GHCR_USER>/<app hex8>/<app>`로 만든다. 그래야 빌더의 "네임스페이스 hex8 = 이미지 경로 hex8" 검사가 `app-<hex8>` 네임스페이스에서도 통한다.
 - 앱 소유권 이전 기능을 붙일 때는 차트에서 `userId` 라벨을 Pod 템플릿에서 빼고 Deployment에만 남긴다. 안 그러면 소유자가 바뀔 때 앱이 재시작된다.
 - 데모 앱 `tenant-d6d8b759`는 4부 전까지 KoDeploy 화면에서 재배포하지 않는다.

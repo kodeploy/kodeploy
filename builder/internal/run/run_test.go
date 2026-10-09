@@ -164,9 +164,27 @@ type fakeArgo struct {
 	waitErr error
 	block   chan struct{}
 	waited  []string
+
+	goneErr    error // WaitGone이 돌려줄 오류
+	goneCalls  []string
+	appSetHits int
 }
 
 func (f *fakeArgo) Refresh(context.Context, string) error { return nil }
+
+func (f *fakeArgo) RefreshAppSet(context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.appSetHits++
+	return nil
+}
+
+func (f *fakeArgo) WaitGone(_ context.Context, app string, _ time.Duration) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.goneCalls = append(f.goneCalls, app)
+	return f.goneErr
+}
 
 func (f *fakeArgo) Wait(ctx context.Context, _, sha string, _ time.Time, _ time.Duration) (argo.Synced, error) {
 	f.mu.Lock()
@@ -804,6 +822,28 @@ func TestSetImageConfigDelete(t *testing.T) {
 	}
 	if evs[2].Image != si.Image {
 		t.Fatalf("config committed image %q", evs[2].Image)
+	}
+	if h.argo.appSetHits != 2 || strings.Join(h.argo.goneCalls, ",") != ns+","+ns {
+		t.Fatalf("applicationset refresh %d, wait gone %v", h.argo.appSetHits, h.argo.goneCalls)
+	}
+}
+
+// Application이 안 사라지면 deleted를 보내지 않는다 (core가 네임스페이스를 지우면 안 된다).
+func TestDeleteFailsWhenApplicationStays(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t, nil)
+	defer h.close()
+	h.argo.goneErr = &argo.Failure{Stage: contract.StageTimeout, Reason: "application still exists"}
+
+	_ = h.m.Submit(&contract.DeployRequest{BuildID: "cc33dd44", Namespace: ns, Kind: contract.KindDelete})
+	h.idle()
+
+	evs := h.core.list()
+	if got := strings.Join(types(evs), ","); got != "failed" {
+		t.Fatalf("events %s", got)
+	}
+	if evs[0].Stage != contract.StageTimeout {
+		t.Fatalf("stage %q", evs[0].Stage)
 	}
 }
 
