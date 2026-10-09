@@ -19,6 +19,9 @@ RUNTIME_RESOURCES: dict[str, dict[str, int]] = {
     # javascript = Node.js 서버(Express/Nest/Next SSR 등). 단일 이벤트루프 + V8 힙 —
     #   python과 유사하되 힙 여유로 mem lim만 640. 정적 프론트(Next export 등)는 static 슬롯으로.
     "javascript": {"req_cpu": 50, "lim_cpu": 300, "req_mem": 200, "lim_mem": 640, "req_eph": 100, "lim_eph": 1024},
+    # go = 정적 링크 바이너리 하나. 런타임 오버헤드가 작아 python보다 메모리를 낮게 잡는다.
+    #   소규모 앱 가정 (GC가 limit 근처까지 힙을 키우지 않도록 lim 256).
+    "go":       {"req_cpu": 50,  "lim_cpu": 300, "req_mem": 64,  "lim_mem": 256,  "req_eph": 100, "lim_eph": 1024},
     # static = nginx-unprivileged가 빌드 산출물(정적 파일)을 서빙. 유저 코드 실행 없음 —
     # idle nginx 실측 한 자릿수 MB라 요청값 최소. eph는 nginx temp 파일 방어용 소량.
     "static":   {"req_cpu": 10,  "lim_cpu": 50,  "req_mem": 16,  "lim_mem": 64,   "req_eph": 50,  "lim_eph": 256},
@@ -28,7 +31,7 @@ RUNTIME_RESOURCES: dict[str, dict[str, int]] = {
 }
 
 # 사용자가 선택 가능한 런타임 목록 (UI dropdown 등). mysql 같은 의존성은 제외.
-SELECTABLE_RUNTIMES = ("python", "java", "php", "javascript", "static")
+SELECTABLE_RUNTIMES = ("python", "java", "php", "javascript", "go", "static")
 
 
 def get_resources(component: str) -> dict[str, int]:

@@ -15,7 +15,7 @@ EXTERNAL_API_KEY=your-api-key`}</CodeBlock>
         <Bullet>이름은 영문 대문자 또는 밑줄로 시작하고, 이후에는 대문자·숫자·밑줄을 쓸 수 있어요. 예: <Code>API_KEY</Code>, <Code>APP_ENV</Code>.</Bullet>
         <Bullet>최대 50개, 값 하나당 최대 4,096자입니다. 화면에서 행을 삭제하고 저장하면 해당 변수도 삭제돼요.</Bullet>
         <Bullet><Code>PYTHONUNBUFFERED</Code>와 <Code>JAVA_TOOL_OPTIONS</Code>는 플랫폼 예약값입니다. DB·Redis·객체 스토리지를 켰다면 화면의 자동 주입 변수 목록을 확인하고 같은 이름을 직접 추가하지 마세요.</Bullet>
-        <Bullet>JavaScript 서버의 <Code>PORT</Code>는 배포 설정의 포트로 주입돼요. 포트를 바꾸려면 재배포 화면에서 변경하세요.</Bullet>
+        <Bullet>JavaScript·Go 서버의 <Code>PORT</Code>는 배포 설정의 포트로 주입돼요. 포트를 바꾸려면 재배포 화면에서 변경하세요.</Bullet>
       </Section>
 
       <Section title="정적 사이트의 빌드 환경변수">

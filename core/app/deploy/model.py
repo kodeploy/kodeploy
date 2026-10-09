@@ -21,7 +21,7 @@ class Build(Base):
     image: Mapped[str] = mapped_column(String(500))
     app_name: Mapped[str] = mapped_column(String(50))
     port: Mapped[int] = mapped_column(Integer)
-    runtime: Mapped[str] = mapped_column(String(20))     # 유저가 선택한 런타임 (python/java/php/javascript) — 스키마가 검증
+    runtime: Mapped[str] = mapped_column(String(20))     # 유저가 선택한 런타임 (python/java/php/javascript/go) — 스키마가 검증
     db_type: Mapped[str] = mapped_column(String(20), default="none")  # "none" | "mysql" | "postgres"
     use_redis: Mapped[bool] = mapped_column(Boolean, default=False)
     use_storage: Mapped[bool] = mapped_column(Boolean, default=False)  # R2 오브젝트 스토리지(앱당 버킷) 토글 — 영속저장소 "object" 모드

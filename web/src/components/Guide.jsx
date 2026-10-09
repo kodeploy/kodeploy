@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { Search } from "lucide-react";
 import Basics from "./guide/Basics.jsx";
+import Go from "./guide/Go.jsx";
 import Java from "./guide/Java.jsx";
 import JavaScript from "./guide/JavaScript.jsx";
 import Php from "./guide/Php.jsx";
@@ -47,6 +48,7 @@ const GUIDES = [
       { id: "java", label: "Java", path: "/guide/java", Component: Java },
       { id: "php", label: "PHP", path: "/guide/php", Component: Php },
       { id: "javascript", label: "JavaScript", path: "/guide/javascript", Component: JavaScript },
+      { id: "go", label: "Go", path: "/guide/go", Component: Go },
     ],
   },
   {

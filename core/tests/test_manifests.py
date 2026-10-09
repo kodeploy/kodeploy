@@ -140,3 +140,16 @@ def test_dockerfile_env_value_escaping():
     assert _dockerfile_env_value('q"x') == '"q\\"x"'
     assert _dockerfile_env_value("a$b") == '"a\\$b"'
     assert _dockerfile_env_value("b\\s") == '"b\\\\s"'
+
+
+def test_go_runtime_deployment_binds_port_env():
+    from app.deploy.stack import manifests
+
+    dep = manifests.deployment(
+        runtime="go", app_name="demo", tenant_id="tenant-d6d8b759", user_id="d6d8b759" * 4,
+        image="ghcr.io/x/y/demo:1", port=8080,
+    )
+    c = dep["spec"]["template"]["spec"]["containers"][0]
+    assert dep["metadata"]["labels"]["runtime"] == "go"
+    assert {"name": "PORT", "value": "8080"} in c["env"]
+    assert c["resources"]["limits"]["memory"] == "256Mi"

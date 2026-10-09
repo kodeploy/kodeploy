@@ -481,7 +481,7 @@ function TenantDetail({ detail }) {
   // 선택 스택 → chips. db "none"/redis off/storage off는 표시 안 함.
   const chips = [];
   if (cfg) {
-    chips.push({ label: { python: "Python", java: "Java", php: "PHP", javascript: "JavaScript" }[cfg.runtime] || cfg.runtime, color: "var(--brand-fg)" });
+    chips.push({ label: { python: "Python", java: "Java", php: "PHP", javascript: "JavaScript", go: "Go" }[cfg.runtime] || cfg.runtime, color: "var(--brand-fg)" });
     if (cfg.db_type && cfg.db_type !== "none")
       chips.push({ label: cfg.db_type === "mysql" ? "MySQL" : "PostgreSQL", color: "var(--info-fg)" });
     if (cfg.use_redis) chips.push({ label: "Redis", color: "var(--err-fg)" });

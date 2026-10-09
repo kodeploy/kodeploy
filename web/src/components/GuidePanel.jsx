@@ -4,6 +4,7 @@
 // 동일 가이드 컨텐츠가 /guide 페이지에서도 재사용됨.
 import { X } from "lucide-react";
 import CustomDomain from "./guide/CustomDomain.jsx";
+import Go from "./guide/Go.jsx";
 import Java from "./guide/Java.jsx";
 import JavaScript from "./guide/JavaScript.jsx";
 import Php from "./guide/Php.jsx";
@@ -16,6 +17,7 @@ const GUIDES = {
   java: { title: "Java 가이드", Component: Java },
   php: { title: "PHP 가이드", Component: Php },
   javascript: { title: "JavaScript 가이드", Component: JavaScript },
+  go: { title: "Go 가이드", Component: Go },
   static: { title: "정적 사이트 가이드", Component: Static },
   storage: { title: "저장소 가이드", Component: Storage },
   "custom-domain": { title: "커스텀 도메인 가이드", Component: CustomDomain },

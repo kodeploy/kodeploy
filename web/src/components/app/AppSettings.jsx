@@ -53,6 +53,7 @@ const RUNTIME_LABEL = {
   java: "Java",
   php: "PHP",
   javascript: "JavaScript",
+  go: "Go",
   static: "정적 사이트",
 };
 const BUILD_MODE_LABEL = { dockerfile: "Dockerfile", auto: "자동 빌드 · Nixpacks" };

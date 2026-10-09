@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ app_name }}                                   # 유저 앱 이름 (repo에서 파생)
+  namespace: {{ tenant_id }}                             # 테넌트 ns가 격리 단위
+  labels:
+    app: {{ app_name }}
+    runtime: go                                  # 런타임 라벨 — 셀렉터로 종류별 일괄 조회 가능
+    tenant: {{ tenant_id }}                              # 테넌트 라벨 (kubectl ... -l tenant=xxx 일괄 조회용)
+    user: "{{ user_id }}"                                # 유저 라벨
+    managed-by: kodeploy
+spec:
+  replicas: {{ replicas | default(1) }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ app_name }}
+  template:
+    metadata:
+      labels:
+        app: {{ app_name }}
+        runtime: go
+        tenant: {{ tenant_id }}                          # Pod에도 라벨 박아야 셀렉터 일괄 조회 가능
+        user: "{{ user_id }}"
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: app
+          image: {{ image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: {{ port | default(8080) }}
+          envFrom:
+            # dep 시크릿 먼저, 유저 env를 맨 뒤 — envFrom은 뒤 소스가 이기므로 충돌 키는 유저 값이 우선.
+            - secretRef:
+                name: mysql-secret                       # db_type=mysql일 때 자동 주입 (DB_HOST/PORT/NAME/USER/PASSWORD)
+                optional: true                           # db_type≠mysql이면 Secret 없음 — optional이라 안전
+            - secretRef:
+                name: postgres-secret                    # db_type=postgres일 때 자동 주입 (mysql과 동일 키, DB_HOST만 다름)
+                optional: true                           # 둘 다 있으면 envFrom 순서상 postgres가 우선 (한 번에 하나 정책)
+            - secretRef:
+                name: r2-secret                          # use_storage=true일 때 자동 주입 (S3_*/AWS_* 자격증명)
+                optional: true                           # storage 미사용이면 Secret 없음 — optional이라 안전
+            - secretRef:
+                name: redis-secret                       # use_redis=true일 때 자동 주입 (REDIS_*/SPRING_DATA_REDIS_*)
+                optional: true                           # redis 미사용이면 Secret 없음 — optional이라 안전
+            - secretRef:
+                name: {{ app_name }}-env                 # 유저 env — 맨 뒤라 dep 시크릿과 충돌 시 사용자 값이 이김 (외부 DB 등 override 허용)
+                optional: true                           # Secret 없어도 Pod 시작 가능 (첫 배포 시 자연스러움)
+          env:                                           # 플랫폼 주입값 — envFrom과 충돌 시 이쪽이 이김
+            - name: PORT
+              value: "{{ port | default(8080) }}"        # Go 관례 — 앱이 os.Getenv("PORT")로 바인딩. containerPort와 일치 보장
+          resources:
+            requests:
+              cpu: {{ req_cpu }}m                        # 스케줄러 보장값
+              memory: {{ req_mem }}Mi
+              ephemeral-storage: {{ req_eph }}Mi         # 노드 로컬 임시 디스크 보장값
+            limits:
+              cpu: {{ lim_cpu }}m                        # 런타임 상한 (초과 시 throttle / OOMKill)
+              memory: {{ lim_mem }}Mi
+              ephemeral-storage: {{ lim_eph }}Mi         # 초과 시 이 Pod만 evict — 노드/타 테넌트 보호
+          startupProbe:                                  # 부팅 단계 전용. 통과 전엔 liveness/readiness 멈춤
+            tcpSocket:
+              port: {{ port | default(8080) }}
+            failureThreshold: 12                         # 실패 N회까지 허용
+            periodSeconds: 5                             # N초마다 체크 → 최대 60초까지 부팅 허용
+          livenessProbe:                                 # 프로세스 살아있나 — 실패 시 컨테이너 재시작
+            tcpSocket:
+              port: {{ port | default(8080) }}
+            periodSeconds: 10
+            failureThreshold: 3                          # 연속 N회 실패 시 재시작 (30초)
+          readinessProbe:                                # 트래픽 받을 준비 됐나 — 실패 시 endpoint에서만 제외
+            tcpSocket:
+              port: {{ port | default(8080) }}
+            periodSeconds: 5
+            failureThreshold: 3                          # 연속 N회 실패 시 endpoint 제외 (15초)
+{% if volume_mount_path %}
+          volumeMounts:                                  # 영속저장소 "local" — 앱당 PVC를 mount_path에 추가 마운트 (ephemeral은 그대로)
+            - name: data
+              mountPath: {{ volume_mount_path }}
+{% endif %}
+      imagePullSecrets:
+        - name: {{ ghcr_auth_secret }}                   # private GHCR 이미지 pull용
+{% if volume_mount_path %}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ pvc_name }}                     # {app}-data — 토글 off/재배포에도 보존, 삭제는 ns 삭제에 위임
+{% endif %}

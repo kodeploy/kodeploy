@@ -382,7 +382,7 @@ export default function DeployWizard({ onRequestGuide }) {
         name: isFirstDeploy ? name.trim() || undefined : undefined,
         branch: (serverNone ? staticBranch.trim() : branch.trim()) || "main",
         port: Number(port) || 80,
-        runtime, // "python" | "java" | "php" | "javascript" | "none"
+        runtime, // "python" | "java" | "php" | "javascript" | "go" | "none"
         dbType: effectiveDbType,
         useRedis: serverNone ? false : useRedis,
         storage: serverNone ? "none" : storage,

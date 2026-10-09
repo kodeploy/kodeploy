@@ -52,6 +52,7 @@ java -jar app.jar                              # Spring은 기본 0.0.0.0`}</Cod
 Java         1Gi
 PHP          768Mi
 JavaScript   640Mi
+Go           256Mi
 정적          64Mi (nginx)`}</CodeBlock>
         </div>
         <Bullet>

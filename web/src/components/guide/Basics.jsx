@@ -14,14 +14,14 @@ export default function Basics() {
         <Bullet>
           빌드를 직접 제어하고 싶을 때만 Dockerfile을 두세요. repo 루트가 아니면 배포 폼의{" "}
           <Code>Dockerfile 경로</Code>에 위치를 입력하면 됩니다 - 런타임별 권장 양식은
-          런타임별 문서(Python · Java · PHP · JavaScript)에서 확인하세요.
+          런타임별 문서(Python · Java · PHP · JavaScript · Go)에서 확인하세요.
         </Bullet>
       </Section>
 
       <Section title="딱 2가지만 챙기면 끝">
         <Bullet>
           <strong style={{ color: "var(--fg-1)", fontWeight: 600 }}>앱이 열어둘 포트</strong> - 폼이 런타임 선택 시
-          기본값을 채워줘요 (FastAPI 8000, Spring·PHP 8080, JavaScript 3000). 앱이 다른 포트면 수정.
+          기본값을 채워줘요 (FastAPI 8000, Spring·PHP·Go 8080, JavaScript 3000). 앱이 다른 포트면 수정.
         </Bullet>
         <Bullet>
           <strong style={{ color: "var(--fg-1)", fontWeight: 600 }}>0.0.0.0 바인딩</strong> - localhost(127.0.0.1)에서만

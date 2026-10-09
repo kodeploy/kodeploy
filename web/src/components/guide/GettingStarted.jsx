@@ -6,7 +6,7 @@ export default function GettingStarted() {
     <>
       <Section title="배포할 프로젝트 준비하기">
         <Bullet>KoDeploy는 GitHub 저장소를 빌드해 웹 주소를 제공해요. 계정 하나에 앱 하나를 만들고, 서버와 정적 사이트를 함께 운영할 수 있습니다.</Bullet>
-        <Bullet>서버는 Python · Java · PHP · JavaScript를 지원해요. 실행에 필요한 의존성과 시작 명령을 저장소에 포함하세요. Dockerfile이 없어도 자동 빌드를 사용할 수 있어요.</Bullet>
+        <Bullet>서버는 Python · Java · PHP · JavaScript · Go를 지원해요. 실행에 필요한 의존성과 시작 명령을 저장소에 포함하세요. Dockerfile이 없어도 자동 빌드를 사용할 수 있어요.</Bullet>
         <Bullet>React · Vue · HTML처럼 빌드한 파일만 제공하는 프로젝트는 <Link to="/guide/static">정적 사이트 배포</Link>를 따라가세요. Next.js에서 서버 렌더링을 사용한다면 JavaScript 서버로 배포합니다.</Bullet>
       </Section>
 
@@ -21,7 +21,7 @@ export default function GettingStarted() {
       <Section title="2. 실행 환경 선택">
         <Bullet><Code>앱 이름</Code>은 주소에 사용되고 첫 배포에서 정해져요. 비우면 자동으로 만들어집니다.</Bullet>
         <Bullet><Code>자동 감지</Code>는 Dockerfile을 먼저 찾고, 없으면 프로젝트 파일을 바탕으로 빌드해요. 런타임 선택값도 실제 프로젝트와 맞는지 확인하세요.</Bullet>
-        <Bullet><Code>포트</Code>를 앱의 실제 실행 포트와 맞추고, 앱이 <Code>0.0.0.0</Code>에서 연결을 받게 하세요. 기본값은 Python 8000, Java·PHP 8080, JavaScript 3000입니다.</Bullet>
+        <Bullet><Code>포트</Code>를 앱의 실제 실행 포트와 맞추고, 앱이 <Code>0.0.0.0</Code>에서 연결을 받게 하세요. 기본값은 Python 8000, Java·PHP·Go 8080, JavaScript 3000입니다.</Bullet>
         <Bullet>필요한 데이터베이스, Redis, 스토리지와 환경변수를 선택하세요. DB와 저장소를 켜면 연결 정보가 서버 환경변수에 자동으로 들어갑니다.</Bullet>
       </Section>
 

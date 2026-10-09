@@ -22,7 +22,7 @@ async function request(path, options = {}) {
 
 // 서버 슬롯 런타임 (백엔드 schemas.ServerRuntime의 "none" 제외분과 sync).
 // 정적 사이트는 런타임이 아니라 별도 슬롯(use_static 토글).
-export const RUNTIMES = ["python", "java", "php", "javascript"];
+export const RUNTIMES = ["python", "java", "php", "javascript", "go"];
 // 백엔드 schemas.BuildMode와 sync ("dockerfile"=유저 Dockerfile / "auto"=nixpacks 자동)
 export const BUILD_MODES = ["dockerfile", "auto"];
 // 백엔드 schemas.DbType과 sync — 한 앱에 한 DB만

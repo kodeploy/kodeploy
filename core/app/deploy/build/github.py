@@ -72,13 +72,13 @@ _RUNTIME_MARKERS = {
     "java": frozenset({"pom.xml", "build.gradle", "build.gradle.kts"}),
     "php": frozenset({"composer.json"}),
     "javascript": frozenset({"package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml"}),
+    "go": frozenset({"go.mod"}),
 }
 _NIXPACKS_MARKERS = frozenset().union(*_RUNTIME_MARKERS.values())
 
 # 아직 지원하지 않는 런타임의 마커 — 런타임 추정에서 "지원 안 함"을 알려주는 데만 쓴다.
 # 지원을 추가하면 _RUNTIME_MARKERS로 옮긴다.
 _UNSUPPORTED_MARKERS = {
-    "go": frozenset({"go.mod"}),
     "ruby": frozenset({"Gemfile"}),
     "rust": frozenset({"Cargo.toml"}),
     "elixir": frozenset({"mix.exs"}),

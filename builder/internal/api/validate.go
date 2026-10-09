@@ -44,7 +44,7 @@ var (
 )
 
 var (
-	serverRuntimes = map[string]bool{"python": true, "java": true, "php": true, "javascript": true}
+	serverRuntimes = map[string]bool{"python": true, "java": true, "php": true, "javascript": true, "go": true}
 	dbTypes        = map[string]bool{"none": true, "mysql": true, "postgres": true}
 )
 
@@ -227,13 +227,13 @@ func (v Validator) validateImageRepo(repo, nsHex, field string) error {
 	return nil
 }
 
-// validateUnit은 서버 slot의 runtime(python·java·php·javascript)과 port(1~65535)를 본다.
+// validateUnit은 서버 slot의 runtime(python·java·php·javascript·go)과 port(1~65535)를 본다.
 func validateUnit(u *contract.Unit) error {
 	if u == nil {
 		return invalid("unit is required for the server slot")
 	}
 	if !serverRuntimes[u.Runtime] {
-		return invalid("unit.runtime must be python, java, php or javascript")
+		return invalid("unit.runtime must be python, java, php, javascript or go")
 	}
 	if u.Port < 1 || u.Port > 65535 {
 		return invalid("unit.port must be 1..65535")

@@ -11,6 +11,7 @@ _RUNTIME_TEMPLATES = {
     "java": "runtimes/java.yaml.j2",
     "php": "runtimes/php.yaml.j2",
     "javascript": "runtimes/javascript.yaml.j2",
+    "go": "runtimes/go.yaml.j2",
     "static": "runtimes/static.yaml.j2",
 }
 

@@ -8,7 +8,7 @@ from pydantic import BaseModel, HttpUrl
 
 # 서버 슬롯 런타임 — "none"이면 서버 없음 (정적 사이트 단독).
 # static은 별도 슬롯(use_static)으로 분리 — 런타임 선택지가 아님.
-ServerRuntime = Literal["python", "java", "php", "javascript", "none"]
+ServerRuntime = Literal["python", "java", "php", "javascript", "go", "none"]
 BuildMode = Literal["detect", "dockerfile", "auto"]      # detect=Dockerfile 자동감지(기본) / auto=nixpacks 자동생성
 DbType = Literal["none", "mysql", "postgres"]            # 한 앱에 한 DB만 — 동시 사용 X
 # 영속 저장소 — 런타임 무관 공통 옵션. 단일 셀렉터로 상호배타.

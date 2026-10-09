@@ -69,6 +69,7 @@ func TestValidate(t *testing.T) {
 			r.Build.Ref = "release/v1.2.0"
 			return r
 		}, ""},
+		{"build ok go runtime", func() *contract.DeployRequest { r := validBuild(); r.Unit.Runtime = "go"; return r }, ""},
 		{"set-image ok", validSetImage, ""},
 		{"set-image static ok", func() *contract.DeployRequest {
 			r := validSetImage()
@@ -157,6 +158,7 @@ func TestValidate(t *testing.T) {
 		{"build missing", func() *contract.DeployRequest { r := validBuild(); r.Build = nil; return r }, "build is required"},
 		{"build with image", func() *contract.DeployRequest { r := validBuild(); r.Image = validSetImage().Image; return r }, "image is not allowed"},
 		{"unit missing", func() *contract.DeployRequest { r := validBuild(); r.Unit = nil; return r }, "unit"},
+		{"unit runtime ruby", func() *contract.DeployRequest { r := validBuild(); r.Unit.Runtime = "ruby"; return r }, "unit.runtime"},
 		{"unit runtime none", func() *contract.DeployRequest { r := validBuild(); r.Unit.Runtime = "none"; return r }, "unit.runtime"},
 		{"unit port 0", func() *contract.DeployRequest { r := validBuild(); r.Unit.Port = 0; return r }, "unit.port"},
 		{"unit port big", func() *contract.DeployRequest { r := validBuild(); r.Unit.Port = 70000; return r }, "unit.port"},

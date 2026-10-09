@@ -7,12 +7,12 @@ export const RUNTIME_META = {
   java: { name: "Java", tag: "Spring Boot · JDK 17+" },
   php: { name: "PHP", tag: "Apache · PHP 8" },
   javascript: { name: "JavaScript", tag: "Node.js · Express/Next" },
+  go: { name: "Go", tag: "net/http · Gin · Echo" },
   none: { name: "사용 안 함", tag: "정적 사이트 단독" },
 };
 
 // 런타임 추정이 알려주는 "아직 지원하지 않는" 런타임 표기 (백엔드 _UNSUPPORTED_MARKERS와 같은 키).
 export const UNSUPPORTED_RUNTIME_NAMES = {
-  go: "Go",
   ruby: "Ruby",
   rust: "Rust",
   elixir: "Elixir",
@@ -24,6 +24,7 @@ export const DEFAULT_PORTS = {
   java: 8080,
   php: 8080,
   javascript: 3000,
+  go: 8080,
 };
 
 export const DB_OPTIONS = [

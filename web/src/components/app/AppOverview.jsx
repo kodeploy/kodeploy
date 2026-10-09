@@ -29,6 +29,7 @@ const RUNTIME_LABEL = {
   java: "Java",
   php: "PHP",
   javascript: "JavaScript",
+  go: "Go",
 };
 
 // 빌드 결과 → 아이콘. 성공/실패만 색을 쓰고 진행 중은 잉크 회색(모노크롬 원칙).

@@ -57,12 +57,12 @@ def test_closer_marker_wins_over_order():
 
 # --- 지원 안 하는 런타임 ---
 
-def test_go_is_unsupported():
-    assert _rt(_tree("go.mod", "main.go")) == (None, "go.mod", "go")
+def test_go_is_supported():
+    assert _rt(_tree("go.mod", "main.go")) == ("go", "go.mod", None)
 
 
 def test_go_root_beats_nested_package_json():
-    assert _rt(_tree("go.mod", "web/package.json")) == (None, "go.mod", "go")
+    assert _rt(_tree("go.mod", "web/package.json")) == ("go", "go.mod", None)
 
 
 def test_rails_is_ruby_not_js():
@@ -70,7 +70,7 @@ def test_rails_is_ruby_not_js():
 
 
 def test_supported_root_beats_nested_unsupported():
-    assert _rt(_tree("pom.xml", "tools/go.mod"))[0] == "java"
+    assert _rt(_tree("pom.xml", "tools/Cargo.toml"))[0] == "java"
 
 
 # --- 경계 ---

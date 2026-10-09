@@ -593,7 +593,7 @@ def github_branches(repo: str, user: User = Depends(get_current_user)) -> list[d
 
 
 # 저장소 런타임 추정 — 배포 폼 2단계 런타임 미리 채우기용. ?repo=<github url>&branch=&path=
-# 마커 파일 기반. 지원 안 하는 런타임(go 등)이면 unsupported, 조회 실패면 checked=False.
+# 마커 파일 기반. 지원 안 하는 런타임(ruby 등)이면 unsupported, 조회 실패면 checked=False.
 # /{build_id} GET보다 위에 등록해야 "github"가 build_id로 안 잡힘.
 @router.get("/github/detect")
 def github_detect(
