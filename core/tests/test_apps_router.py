@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.apps import service
-from app.apps.model import App, Tier
+from app.apps.model import App, AppInvite, AppMember, Tier
 from app.apps.router import router as apps_router
 from app.auth.deps import get_current_user_optional
 from app.auth.model import User
@@ -25,8 +25,8 @@ from app.shared.db import get_db
 @pytest.fixture
 def db():
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
-    App.__table__.create(engine)
-    Tier.__table__.create(engine)
+    for t in (App, Tier, AppMember, AppInvite, User):
+        t.__table__.create(engine)
     session = sessionmaker(bind=engine)()
     session.add_all([Tier(name="basic", max_apps=1), Tier(name="standard", max_apps=3), Tier(name="master", max_apps=None)])
     session.commit()

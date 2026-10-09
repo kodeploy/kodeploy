@@ -57,6 +57,37 @@ export function createApp(name, repoUrl = "") {
   return request("/apps", { method: "POST", body: JSON.stringify({ name: name || null, repo_url: repoUrl }) });
 }
 
+// --- 공유 (앱 주인이 다른 유저에게 보기·편집 권한을 준다) ---------------------------------------
+// 내가 받은 초대 — 응답: [{ id, app_name, owner_login, role, created_at }]
+export function listInvites() {
+  return request("/invites");
+}
+export function acceptInvite(id) {
+  return request(`/invites/${id}/accept`, { method: "POST" });
+}
+export function declineInvite(id) {
+  return request(`/invites/${id}/decline`, { method: "POST" });
+}
+
+// (앱 주인) 멤버와 대기 초대 — 응답: { members: [{ user_id, login, avatar_url, role }], invites: [{ id, email, github_login, role }] }
+export function getMembers(appId) {
+  return request(`/apps/${appId}/members`);
+}
+// target: 이메일 또는 GitHub 아이디 ("@"가 들어 있으면 이메일). role: "viewer" | "editor"
+export function inviteToApp(appId, target, role) {
+  return request(`/apps/${appId}/invites`, { method: "POST", body: JSON.stringify({ target, role }) });
+}
+export function cancelInvite(appId, inviteId) {
+  return request(`/apps/${appId}/invites/${inviteId}`, { method: "DELETE" });
+}
+export function setMemberRole(appId, userId, role) {
+  return request(`/apps/${appId}/members/${userId}`, { method: "PATCH", body: JSON.stringify({ role }) });
+}
+// 주인이 내보내거나, 멤버가 자기 id로 불러 스스로 나간다
+export function removeMember(appId, userId) {
+  return request(`/apps/${appId}/members/${userId}`, { method: "DELETE" });
+}
+
 export function createDeploy({
   repoUrl,
   branch = "main",

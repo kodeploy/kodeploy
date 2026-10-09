@@ -48,3 +48,28 @@ class App(Base):
     pipeline: Mapped[str] = mapped_column(String(2), default="v1", server_default="v1")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+
+# 공유 — 앱 주인 말고 이 앱을 쓰는 유저. role은 "viewer"(보기) | "editor"(배포·환경변수까지).
+# 주인은 여기 넣지 않고 apps.owner_id로만 표현한다. FK는 걸지 않는다 (다른 테이블과 같은 방침).
+class AppMember(Base):
+    __tablename__ = "app_members"
+
+    app_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, index=True)
+    role: Mapped[str] = mapped_column(String(10))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+# 받는 사람이 수락하기 전의 초대. 이메일(GitHub 로그인에서 받은 primary 이메일) 또는 GitHub 아이디로 가리킨다 —
+# 둘 중 하나만 채우고, 상대가 아직 가입 전이어도 그 이메일·아이디로 로그인하면 보인다. 수락·거절·취소하면 행이 지워진다.
+class AppInvite(Base):
+    __tablename__ = "app_invites"
+
+    id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+    app_id: Mapped[uuid.UUID] = mapped_column(Uuid, index=True)
+    role: Mapped[str] = mapped_column(String(10))
+    invited_by: Mapped[uuid.UUID] = mapped_column(Uuid)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)          # 소문자
+    github_login: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)   # 소문자
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)

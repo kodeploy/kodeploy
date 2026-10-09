@@ -5,6 +5,7 @@ import uuid
 from kubernetes.client.exceptions import ApiException
 from sqlalchemy.orm import Session
 
+from app.apps import sharing
 from app.apps.model import App
 from app.deploy import crud
 from app.deploy.routing import domains
@@ -154,5 +155,6 @@ def delete_app(db: Session, app: App) -> None:
     # DB 콘솔의 저장된 쿼리도 같이 — 앱이 사라지면 그 앱/DB 스코프는 다시 안 온다.
     # 남겨두면 아무도 못 읽는 orphan row만 쌓인다.
     db.query(SavedQuery).filter(SavedQuery.app_id == app.id).delete()
+    sharing.purge(db, app.id)          # 공유 멤버·대기 초대도 같이
     db.delete(app)
     db.commit()

@@ -8,7 +8,8 @@
 // 검증 규칙(빈 키·중복·예약 키 충돌·대문자 키·개수/길이 상한)과 .env 직렬화는
 // CommitListPanel의 EnvBody / DeployForm의 reservedConflicts에서 그대로 가져왔다.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { Navigate, useOutletContext } from "react-router-dom";
+import { can } from "../../lib/roles.js";
 import {
   ChevronRight,
   Copy,
@@ -129,7 +130,14 @@ const sameEnv = (a, b) => {
   return ka.length === kb.length && ka.every((k, i) => kb[i] === k && a[k] === b[k]);
 };
 
+// 이 화면은 editor 이상만 — 공유받은 앱에서 URL로 들어와도 개요로 돌려보낸다 (서버도 막는다).
 export default function AppEnv() {
+  const { app, base } = useOutletContext();
+  if (!can(app, "editor")) return <Navigate to={base} replace />;
+  return <AppEnvBody />;
+}
+
+function AppEnvBody() {
   const { serverBuild, envVars } = useOutletContext();
 
   const [rows, setRows] = useState(null); // null = 아직 초기 로드 전

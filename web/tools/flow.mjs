@@ -97,7 +97,7 @@ for (const sc of scenarios) {
     const req = route.request();
     const url = new URL(req.url());
     // /apps/<id>/deploy/... 는 옛 /deploy/... 와 같은 스텁으로 응답한다 (앱 id만 다르다)
-    const p = url.pathname.replace(/^\/apps\/[^/]+(?=\/deploy)/, "");
+    const p = url.pathname.replace(/^\/apps\/[^/]+(?=\/(deploy|members|invites))/, "");
     const appPath = url.pathname;
     if (req.method() !== "GET") {
       let body = null;

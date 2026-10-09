@@ -9,6 +9,7 @@ import uuid
 from datetime import datetime, timezone
 
 from app.apps import service as apps_service
+from app.apps import sharing
 from app.apps.model import App
 from app.auth.deps import get_current_user
 from app.auth.model import User
@@ -38,26 +39,61 @@ from app.shared.db import get_db
 router = APIRouter(prefix="/deploy", tags=["deploy"])
 
 
-# 요청이 가리키는 앱. /apps/{app_id}/deploy/... 로 들어오면 그 앱(내 앱이 아니면 404 — 존재 여부를 알리지 않는다),
-# 옛 경로 /deploy/... 는 app_id가 없어서 유저의 첫 앱이다 (없으면 None).
+# 요청이 가리키는 앱과 그 앱에서 요구하는 단계.
+# /apps/{app_id}/deploy/... 로 들어오면 그 앱 — 접근 권한이 없으면 404(존재 여부를 알리지 않는다), 있어도 단계가
+# 모자라면 403. 옛 경로 /deploy/... 는 app_id가 없어서 내(주인) 첫 앱이다 (없으면 None).
 # 이 라우터는 두 경로에 모두 붙는다 (main.py).
+#
+# 단계는 owner > editor > viewer (apps/sharing.py). 기본 의존성(current_app*)은 owner를 요구해서, 아래 두 개
+# (viewer_app*, editor_app*)를 명시한 라우트만 멤버에게 열린다 — 새 라우트는 기본이 "주인만"이다.
+def _app_at(app_id: uuid.UUID | None, db: Session, user: User, need: str) -> App | None:
+    if app_id is None:
+        return apps_service.get_user_app(db, user.id)
+    found = sharing.access(db, user.id, app_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="app not found")
+    app, role = found
+    if sharing.RANK[role] < sharing.RANK[need]:
+        raise HTTPException(status_code=403, detail="이 앱에서 할 수 없는 동작입니다 — 권한이 부족해요")
+    return app
+
+
 def current_app_or_none(
     app_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> App | None:
-    if app_id is None:
-        return apps_service.get_user_app(db, user.id)
-    app = apps_service.get_owned_app(db, user.id, app_id)
+    return _app_at(app_id, db, user, "owner")
+
+
+def editor_app_or_none(
+    app_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> App | None:
+    return _app_at(app_id, db, user, "editor")
+
+
+def viewer_app_or_none(
+    app_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> App | None:
+    return _app_at(app_id, db, user, "viewer")
+
+
+def _required(app: App | None) -> App:
     if app is None:
-        raise HTTPException(status_code=404, detail="app not found")
+        raise HTTPException(status_code=400, detail="배포된 앱이 없습니다")
     return app
 
 
 def current_app(app: App | None = Depends(current_app_or_none)) -> App:
-    if app is None:
-        raise HTTPException(status_code=400, detail="배포된 앱이 없습니다")
-    return app
+    return _required(app)
+
+
+def viewer_app(app: App | None = Depends(viewer_app_or_none)) -> App:
+    return _required(app)
 
 
 # v2(빌더·Argo) 앱은 core가 리소스를 직접 바꾸면 Argo가 되돌린다(env·route).
@@ -115,7 +151,7 @@ async def create_deploy(
     req: DeployRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-    app: App | None = Depends(current_app_or_none),
+    app: App | None = Depends(editor_app_or_none),
 ) -> DeployResponse:
     try:
         builds = await pipeline.start_deploy(
@@ -162,7 +198,7 @@ async def create_deploy(
 # 사용자 앱의 환경변수 조회. 첫 배포 전이거나 한 번도 설정 안 했으면 빈 dict.
 # /{build_id} GET 핸들러보다 위에 등록해야 "env"가 build_id로 잡히지 않음.
 @router.get("/env", response_model=EnvVarsResponse)
-def env_get(app: App | None = Depends(current_app_or_none)) -> EnvVarsResponse:
+def env_get(app: App | None = Depends(editor_app_or_none)) -> EnvVarsResponse:
     if app is None:
         return EnvVarsResponse(env={})
     return EnvVarsResponse(env=env.get_env(app.namespace, app.name))
@@ -175,7 +211,7 @@ async def env_put(
     req: EnvVarsRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
-    app: App | None = Depends(current_app_or_none),
+    app: App | None = Depends(editor_app_or_none),
 ) -> EnvVarsResponse:
     if app is None:
         raise HTTPException(status_code=400, detail="첫 배포 완료 후 환경변수 설정 가능")
@@ -246,20 +282,20 @@ async def env_put(
 # 현재 user 앱의 Pod 상태 — 빌드와 독립. 프론트가 폴링.
 # 응답: {"status": "running" | "pending" | "crashing" | "missing"}
 @router.get("/app/status")
-def app_status(app: App | None = Depends(current_app_or_none)) -> dict:
+def app_status(app: App | None = Depends(viewer_app_or_none)) -> dict:
     return status.get_app_status(app)
 
 
 # 런타임 로그 스냅샷 — 현재 + 이전 인스턴스 로그 JSON. 프론트 30초 폴링.
 @router.get("/app/logs")
-def app_logs(app: App = Depends(current_app)):
+def app_logs(app: App = Depends(viewer_app)):
     return logs.fetch_app_logs(app.namespace, app.name)
 
 
 @router.get("/app/metrics")
 def app_metrics(
     range: str = "1h",
-    app: App = Depends(current_app),
+    app: App = Depends(viewer_app),
 ):
     return metrics.fetch_app_metrics(app.namespace, app.name, range)
 
@@ -540,7 +576,7 @@ def storage_delete(
 @router.get("/domain")
 def get_domain(
     db: Session = Depends(get_db),
-    app: App | None = Depends(current_app_or_none),
+    app: App | None = Depends(viewer_app_or_none),
 ) -> dict:
     if app is None:   # 앱 전엔 연결된 도메인이 없다
         result = {"domain": None, "status": None, "ssl_status": None}
@@ -607,7 +643,7 @@ async def delete_app(
 @router.get("/commits")
 def list_recent_commits(
     db: Session = Depends(get_db),
-    app: App | None = Depends(current_app_or_none),
+    app: App | None = Depends(viewer_app_or_none),
 ) -> list[dict]:
     if app is None:
         return []
@@ -716,7 +752,7 @@ def reserved_keys(user: User = Depends(get_current_user)) -> dict:
 def get_status(
     build_id: str,
     db: Session = Depends(get_db),
-    app: App | None = Depends(current_app_or_none),
+    app: App | None = Depends(viewer_app_or_none),
 ) -> StatusResponse:
     build = status.get_state(db, build_id, app_id=app.id) if app else None
     if not build:
@@ -729,7 +765,7 @@ def get_status(
 @router.get("", response_model=list[StatusResponse])
 def list_builds(
     db: Session = Depends(get_db),
-    app: App | None = Depends(current_app_or_none),
+    app: App | None = Depends(viewer_app_or_none),
 ) -> list[StatusResponse]:
     builds = status.list_builds(db, app_id=app.id) if app else []
     timings = pipeline.get_build_timings(db, [b.build_id for b in builds])

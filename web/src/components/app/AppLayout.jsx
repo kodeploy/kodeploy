@@ -11,6 +11,7 @@ import { getAppStatus, getEnvVars, listBuilds } from "../../api/deploy.js";
 import { useAppShell } from "../../contexts/AppShellContext.jsx";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import AppInfoDrawer from "./AppInfoDrawer.jsx";
+import { can } from "../../lib/roles.js";
 import { useCurrentApp } from "./AppScope.jsx";
 
 const ACTIVE = new Set(["queued", "building", "built", "deploying"]);
@@ -18,13 +19,14 @@ const ACTIVE = new Set(["queued", "building", "built", "deploying"]);
 // 앱 상세 메뉴. 화면 안에 제목을 다시 적지 않으므로, 지금 어디인지는 이 메뉴가 알려 준다.
 // 가이드(문서)는 같은 셸 안에서 열려 작업 화면을 벗어나지 않아서 같은 묶음에 둔다.
 // 블로그·피드백·관리자는 앱을 다루는 화면이 아니라 여기서 뺐다(랜딩 상단바에 그대로 있다).
-// to는 앱 주소(/apps/:id) 뒤에 붙는 부분이다.
+// to는 앱 주소(/apps/:id) 뒤에 붙는 부분이다. need는 이 메뉴를 보려면 필요한 내 단계(없으면 누구나) —
+// 공유받은 앱에서 못 하는 화면은 메뉴에서 뺀다 (서버가 같은 규칙으로 막는다).
 const TABS = [
   { label: "개요", to: "", end: true },
   { label: "작업 공간", to: "/workspace" },
   { label: "배포 이력", to: "/history" },
-  { label: "환경변수", to: "/env" },
-  { label: "설정", to: "/settings" },
+  { label: "환경변수", to: "/env", need: "editor" },
+  { label: "설정", to: "/settings", need: "owner" },
   { label: "가이드", to: "/guide" },
 ];
 
@@ -38,6 +40,7 @@ export default function AppLayout() {
   const { user, loading: authLoading, openLogin } = useAuth();
   const { setPodStatus } = useAppShell();
   const { app, base } = useCurrentApp();
+  const tabs = TABS.filter((t) => !t.need || can(app, t.need));
 
   const [builds, setBuilds] = useState([]);
   const [slotStatus, setSlotStatus] = useState(null);
@@ -118,9 +121,9 @@ export default function AppLayout() {
   // 셸을 벗어나면(랜딩·관리자 등) 상태 표시도 같이 걷는다
   useEffect(() => () => setPodStatus(null), [setPodStatus]);
 
-  // 환경변수 — 개수만 쓰므로 한 번만 (값은 마스킹된 채로 온다)
+  // 환경변수 — 개수만 쓰므로 한 번만 (값은 마스킹된 채로 온다). 값은 비밀이라 편집 권한부터 읽는다.
   useEffect(() => {
-    if (authLoading || !app) return;
+    if (authLoading || !app || !can(app, "editor")) return;
     let cancelled = false;
     getEnvVars()
       .then((res) => !cancelled && setEnvVars(res.env || {}))
@@ -160,7 +163,7 @@ export default function AppLayout() {
       앱 정보
     </button>
   );
-  const actionRedeploy = (
+  const actionRedeploy = can(app, "editor") && (
     <Link
       to={`${base}/deploy`}
       className="kd-btn-primary kd-btn-md w-full inline-flex items-center justify-center no-underline"
@@ -206,7 +209,7 @@ export default function AppLayout() {
         }}
       >
         <nav className="flex flex-col">
-          {TABS.map((t) => (
+          {tabs.map((t) => (
             <SideLink key={t.label} to={base + t.to} active={isActive(t)}>
               {t.label}
             </SideLink>
@@ -222,7 +225,7 @@ export default function AppLayout() {
           />
           <div style={SIDE_ROW}>{actionOpen}</div>
           <div style={SIDE_ROW}>{actionInfo}</div>
-          <div style={{ paddingInline: 24, paddingTop: 8 }}>{actionRedeploy}</div>
+          {actionRedeploy && <div style={{ paddingInline: 24, paddingTop: 8 }}>{actionRedeploy}</div>}
         </div>
 
       </aside>
@@ -236,7 +239,7 @@ export default function AppLayout() {
           >
             {/* 메뉴만 옆으로 밀리고 액션은 오른쪽에 고정된다 — 재배포가 스크롤 밖으로 나가면 안 된다 */}
             <nav className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto scroll-thin">
-            {TABS.map((t) => {
+            {tabs.map((t) => {
               const on = isActive(t);
               return (
                 <Link

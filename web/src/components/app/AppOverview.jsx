@@ -7,6 +7,7 @@
 // 빌드 레코드에 커밋 정보가 없어(Build 모델에 sha/message 컬럼 없음) 넣지 않았다 —
 // 자리 대신 빌드 식별자(build_id)와 브랜치를 쓴다.
 import { Link, useOutletContext } from "react-router-dom";
+import { can } from "../../lib/roles.js";
 import {
   ArrowUpRight,
   BarChart3,
@@ -42,7 +43,9 @@ function resultIcon(status, size = 21) {
 }
 
 export default function AppOverview() {
-  const { builds, serverBuild, envVars, base } = useOutletContext();
+  const { builds, serverBuild, envVars, base, app } = useOutletContext();
+  const isOwner = can(app, "owner");
+  const canEnv = can(app, "editor");
 
   // 빌드 번호(#N) — env_change는 번호를 안 매긴다(위젯과 같은 규칙).
   const numbered = new Map();
@@ -103,6 +106,7 @@ export default function AppOverview() {
                     name: "영구 저장소",
                     kind: serverBuild.volume_mount_path,
                   });
+                if (!isOwner) rows.forEach((r) => delete r.panel);   // 그 패널(DB·스토리지)은 주인만 연다
                 if (!rows.length) return <Empty>연결된 리소스가 없어요.</Empty>;
                 // 시안은 행 끝에 chevron이 있다 — 실제로 눌러 갈 곳이 있는 행만 링크로 만든다.
                 return rows.map((r, i) => {
@@ -195,9 +199,10 @@ export default function AppOverview() {
             <SideHeading>바로 작업하기</SideHeading>
             {/* 시안 그대로 — 작업 공간의 뷰 4개와 1:1로 맞춘다(터미널·로그는 한 행) */}
             {[
-              { icon: SquareChevronRight, label: "터미널·로그", panel: "terminal" },
-              { icon: Database, label: "데이터베이스", panel: "db" },
-              ...(serverBuild?.use_storage
+              // 터미널·DB·스토리지는 주인만 — 공유받은 앱은 로그와 모니터링만 본다
+              { icon: SquareChevronRight, label: isOwner ? "터미널·로그" : "로그", panel: "terminal" },
+              ...(isOwner ? [{ icon: Database, label: "데이터베이스", panel: "db" }] : []),
+              ...(isOwner && serverBuild?.use_storage
                 ? [{ icon: Folder, label: "스토리지", panel: "storage" }]
                 : []),
               { icon: BarChart3, label: "모니터링", panel: "monitoring" },
@@ -242,19 +247,25 @@ export default function AppOverview() {
                 : "—"}
             </InfoRow>
             <InfoRow label="환경변수" last>
-              <Link
-                to={`${base}/env`}
-                className="inline-flex items-center gap-1 text-fg-1 no-underline hover:underline"
-              >
-                {envVars ? `${Object.keys(envVars).length}개` : "—"}
-              </Link>
+              {canEnv ? (
+                <Link
+                  to={`${base}/env`}
+                  className="inline-flex items-center gap-1 text-fg-1 no-underline hover:underline"
+                >
+                  {envVars ? `${Object.keys(envVars).length}개` : "—"}
+                </Link>
+              ) : (
+                "—"
+              )}
             </InfoRow>
 
-            <div style={{ marginTop: 16 }}>
-              <Link to={`${base}/settings`} className="kd-t-caption text-fg-1 underline underline-offset-4">
-                설정 보기
-              </Link>
-            </div>
+            {isOwner && (
+              <div style={{ marginTop: 16 }}>
+                <Link to={`${base}/settings`} className="kd-t-caption text-fg-1 underline underline-offset-4">
+                  설정 보기
+                </Link>
+              </div>
+            )}
           </aside>
         </div>
       </div>

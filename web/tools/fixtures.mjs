@@ -216,8 +216,22 @@ export const ADMIN_PODS = [
 
 // path 접두 → 응답. 위에서부터 먼저 매칭되는 항목이 이기므로 구체적인 경로를 앞에 둔다.
 // 경로는 web/src/api/*.js의 실제 호출과 1:1로 맞춘다 (listBuilds는 GET /deploy 이다).
+// 공유 — 받은 초대, 그리고 앱 주인이 보는 멤버·대기 초대
+export const INVITES = [
+  { id: "eeeeeeee-5555-4555-8555-eeeeeeeeeeee", app_name: "side-project", owner_login: "park-dev", role: "editor", created_at: "2026-10-10T00:00:00+00:00" },
+];
+export const MEMBERS = {
+  members: [
+    { user_id: "11111111-2222-4333-8444-555555555555", login: "kim-dev", avatar_url: null, role: "viewer" },
+    { user_id: "66666666-2222-4333-8444-555555555555", login: "lee-dev", avatar_url: null, role: "editor" },
+  ],
+  invites: [{ id: "ffffffff-6666-4666-8666-ffffffffffff", email: "new@example.com", github_login: null, role: "viewer" }],
+};
+
 export const ROUTES = [
   ["/auth/me", () => ME],
+  ["/members", () => MEMBERS],
+  ["/invites", () => INVITES],
   ["/apps", () => APPS],
   ["/deploy/app/status", () => APP_STATUS],
   ["/deploy/app/logs", () => LOGS],

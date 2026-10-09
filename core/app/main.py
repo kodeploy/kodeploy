@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 
 from app.admin.router import router as admin_router
-from app.apps.router import router as apps_router
+from app.apps.router import invites_router, router as apps_router
 from app.auth.router import router as auth_router
 from app.community.router import router as community_router
 from app.config import ALLOWED_ORIGINS
@@ -39,6 +39,7 @@ app.include_router(deploy_router)
 # 같은 deploy 라우터를 앱 경로에도 붙인다: /apps/{app_id}/deploy/... (옛 /deploy/... 는 유저의 첫 앱)
 app.include_router(deploy_router, prefix="/apps/{app_id}")
 app.include_router(apps_router)
+app.include_router(invites_router)
 app.include_router(community_router)
 app.include_router(admin_router)
 app.include_router(internal_router)

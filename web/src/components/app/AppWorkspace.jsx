@@ -85,6 +85,7 @@ import StatusBadge from "../StatusBadge.jsx";
 import DbTerminalPanel from "../panels/DbTerminalPanel.jsx";
 import MetricsView from "./MetricsView.jsx";
 import { useCurrentApp } from "./AppScope.jsx";
+import { can } from "../../lib/roles.js";
 
 const ACTIVE = new Set(["queued", "building", "built", "deploying"]);
 const DB_LABEL = { mysql: "MySQL", postgres: "PostgreSQL" };
@@ -185,8 +186,10 @@ function Divider({ axis, onMouseDown }) {
 // 화면 본체
 // ────────────────────────────────────────────────────────────────────────────
 export default function AppWorkspace() {
-  const { builds, serverBuild, slotStatus } = useOutletContext();
+  const { builds, serverBuild, slotStatus, app } = useOutletContext();
   const [searchParams] = useSearchParams();
+  // 터미널·DB·스토리지는 주인만 — 공유받은 앱은 로그와 모니터링만 본다 (서버도 같은 규칙으로 막는다)
+  const isOwner = can(app, "owner");
 
   // 빌드 선택 — ?build=<id> 우선, 없으면 자동 선택 (기존 동작 유지)
   const pinned = searchParams.get("build");
@@ -199,16 +202,17 @@ export default function AppWorkspace() {
 
   const views = useMemo(
     () => [
-      { id: "console", label: "터미널·로그" },
-      { id: "db", label: "데이터베이스" },
-      ...(storageEnabled ? [{ id: "storage", label: "스토리지" }] : []),
+      { id: "console", label: isOwner ? "터미널·로그" : "로그" },
+      ...(isOwner ? [{ id: "db", label: "데이터베이스" }] : []),
+      ...(isOwner && storageEnabled ? [{ id: "storage", label: "스토리지" }] : []),
       { id: "metrics", label: "모니터링" },
     ],
-    [storageEnabled],
+    [storageEnabled, isOwner],
   );
 
-  const seed = PANEL_TO_VIEW[searchParams.get("panel")] || "console";
-  const [view, setView] = useState(seed === "storage" && !storageEnabled ? "console" : seed);
+  const wanted = PANEL_TO_VIEW[searchParams.get("panel")] || "console";
+  const seed = views.some((v) => v.id === wanted) ? wanted : "console";
+  const [view, setView] = useState(seed);
   // 한 번이라도 연 뷰만 마운트해 둔다 (이후로는 display로만 감춘다).
   const [opened, setOpened] = useState(() => new Set([view]));
   const openView = (id) => {
@@ -270,7 +274,7 @@ export default function AppWorkspace() {
                   style={{ display: view === v.id ? "flex" : "none" }}
                 >
                   {v.id === "console" && (
-                    <ConsoleView build={build} dbType={dbType} redisEnabled={redisEnabled} />
+                    <ConsoleView build={build} dbType={dbType} redisEnabled={redisEnabled} logsOnly={!isOwner} />
                   )}
                   {v.id === "db" && <DatabaseView dbType={dbType} />}
                   {v.id === "storage" && <StorageView />}
@@ -475,7 +479,7 @@ function Centered({ children }) {
 // ────────────────────────────────────────────────────────────────────────────
 // 1) 터미널·로그
 // ────────────────────────────────────────────────────────────────────────────
-function ConsoleView({ build, dbType, redisEnabled }) {
+function ConsoleView({ build, dbType, redisEnabled, logsOnly }) {
   const { ratio, containerRef, startDrag } = useDragRatio(55);
   const [zoom, setZoom] = useState(null); // null | "term" | "log" — 한쪽만 크게
 
@@ -487,6 +491,17 @@ function ConsoleView({ build, dbType, redisEnabled }) {
       ? { width: `${ratio}%`, flexShrink: 0, display: "flex" }
       : { flex: 1, display: "flex" };
   };
+
+  // 공유받은 앱 — 터미널 없이 로그만 넓게
+  if (logsOnly) {
+    return (
+      <div className="flex-1 min-h-0 flex">
+        <div className="min-h-0 min-w-0 flex-col flex-1" style={{ display: "flex" }}>
+          <LogSide build={build} zoomed={false} onZoom={() => {}} />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div ref={containerRef} className="flex-1 min-h-0 flex">

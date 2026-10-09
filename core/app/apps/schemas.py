@@ -14,8 +14,26 @@ class AppOut(BaseModel):
     site_enabled: bool = False
     custom_domain: str | None = None
     created_at: datetime
-    # 유저와 앱의 관계. 지금은 소유자뿐이고, 공유가 생기면 "viewer" | "editor"가 더해진다.
+    # 유저와 앱의 관계: "owner" | "editor" | "viewer"
     role: str = "owner"
+    owner_login: str | None = None   # 공유받은 앱이면 주인의 GitHub 아이디
+
+
+class InviteCreate(BaseModel):
+    target: str          # 이메일 또는 GitHub 아이디 — "@"가 들어 있으면 이메일
+    role: str = "viewer"
+
+
+class RoleUpdate(BaseModel):
+    role: str
+
+
+class InviteOut(BaseModel):
+    id: uuid.UUID
+    app_name: str
+    owner_login: str | None = None
+    role: str
+    created_at: datetime
 
 
 class AppCreate(BaseModel):

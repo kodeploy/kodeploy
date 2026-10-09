@@ -27,11 +27,12 @@ import {
   MoreHorizontal,
   SquareTerminal,
 } from "lucide-react";
-import { getAppStatus, listApps, listBuilds } from "../../api/deploy.js";
+import { acceptInvite, declineInvite, getAppStatus, listApps, listBuilds, listInvites } from "../../api/deploy.js";
 import { APP_STATUS_STYLES } from "../AppStatusBadge.jsx";
 import { STYLES_BUILD, STYLES_ENV } from "../StatusBadge.jsx";
 import DeleteAppModal from "../DeleteAppModal.jsx";
 import { useAuth } from "../../contexts/AuthContext.jsx";
+import { ROLE_LABEL, can } from "../../lib/roles.js";
 import { formatFull, parseDate } from "../../lib/format.js";
 
 // 진행 중인 빌드 — 폴링 주기 단축 + Pod이 아직 없는 슬롯의 "빌드 중" 판정에 쓴다.
@@ -125,6 +126,9 @@ export default function AppsList() {
   // 앱 id → { builds, status } — 앱마다 한 tick에서 같이 받는다
   const [byApp, setByApp] = useState({});
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [invites, setInvites] = useState([]);          // 내가 받은 초대 (수락 전)
+  const [reload, setReload] = useState(0);             // 수락하면 목록을 바로 다시 읽는다
+  const [inviteBusy, setInviteBusy] = useState(false);
 
   // 앱 목록 + 앱별 빌드/상태 한 tick 폴링. 진행 중 빌드가 있으면 2.5s, 없으면 10s.
   useEffect(() => {
@@ -138,7 +142,8 @@ export default function AppsList() {
     const tick = async () => {
       let active = false;
       try {
-        const list = (await listApps()) || [];
+        const [list, inv] = await Promise.all([listApps().then((r) => r || []), listInvites().catch(() => [])]);
+        if (!cancelled) setInvites(inv || []);
         const pairs = await Promise.all(
           list.map(async (a) => {
             const [builds, status] = await Promise.all([
@@ -163,7 +168,21 @@ export default function AppsList() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [loading, user?.id]);
+  }, [loading, user?.id, reload]);
+
+  // 초대 수락·거절 — 끝나면 앱 목록을 바로 다시 읽는다 (수락한 앱이 아래 행으로 나타난다)
+  const answer = async (inv, accept) => {
+    if (inviteBusy) return;
+    setInviteBusy(true);
+    try {
+      await (accept ? acceptInvite(inv.id) : declineInvite(inv.id));
+    } catch {
+      // 이미 취소된 초대 등 — 목록을 다시 읽으면 사라진다
+    } finally {
+      setInviteBusy(false);
+      setReload((n) => n + 1);
+    }
+  };
 
   const views = useMemo(
     () => apps.map((a) => viewOf(a, byApp[a.id]?.builds || [], byApp[a.id]?.status || null)),
@@ -186,6 +205,41 @@ export default function AppsList() {
         배포한 앱과 프론트엔드를 관리하세요.
       </p>
 
+      {/* ── 받은 초대 — 다른 사람이 공유해 준 앱. 수락해야 아래 목록에 나타난다 ── */}
+      {user && invites.length > 0 && (
+        <Section title="받은 초대" first>
+          {invites.map((inv) => (
+            <div
+              key={inv.id}
+              className="flex items-center gap-4 flex-wrap"
+              style={{ paddingBlock: 21, paddingLeft: 14, borderBottom: "1px solid var(--kd-border)" }}
+            >
+              <span className="kd-t-title text-fg-1">{inv.app_name}</span>
+              <span className="kd-t-body text-fg-2">
+                {inv.owner_login ? `${inv.owner_login} 님이 ` : ""}
+                {ROLE_LABEL[inv.role] || inv.role} 권한으로 초대했어요
+              </span>
+              <div className="ml-auto flex items-center gap-2.5 shrink-0">
+                <button
+                  className="kd-btn-primary kd-btn-md"
+                  disabled={inviteBusy}
+                  onClick={() => answer(inv, true)}
+                >
+                  수락
+                </button>
+                <button
+                  className="kd-btn-secondary kd-btn-md"
+                  disabled={inviteBusy}
+                  onClick={() => answer(inv, false)}
+                >
+                  거절
+                </button>
+              </div>
+            </div>
+          ))}
+        </Section>
+      )}
+
       {!user || views.length === 0 ? (
         <FirstDeploy loggedIn={Boolean(user)} onLogin={openLogin} />
       ) : (
@@ -193,7 +247,7 @@ export default function AppsList() {
           {/* ── 앱 서버 (시안 제목 y285 · 괘선 y327 · 행 y360-422 · 마감 괘선 y453) ── */}
           <Section
             title="앱 서버"
-            first
+            first={invites.length === 0}
             aside={<NewAppAction canCreate={canCreate} user={user} />}
           >
             {serverViews.length > 0 ? (
@@ -220,6 +274,7 @@ export default function AppsList() {
                       </Link>
                       <AppMenu
                         base={`/apps/${v.app.id}`}
+                        app={v.app}
                         onDelete={!v.app.role || v.app.role === "owner" ? () => setDeleteTarget(v.app) : null}
                       />
                     </>
@@ -502,7 +557,7 @@ function EmptyRow({ icon: Icon, title, desc, to, cta }) {
 }
 
 // 앱 단위 동작 묶음 — 시안의 "…" 사각 버튼. 새 화면을 만들지 않고 기존 라우트/모달로만 보낸다.
-function AppMenu({ base, onDelete }) {
+function AppMenu({ base, app, onDelete }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -537,8 +592,12 @@ function AppMenu({ base, onDelete }) {
         >
           <MenuLink to={base} label="앱 개요" onDone={() => setOpen(false)} />
           <MenuLink to={`${base}/history`} label="배포 이력" onDone={() => setOpen(false)} />
-          <MenuLink to={`${base}/env`} label="환경변수" onDone={() => setOpen(false)} />
-          <MenuLink to={`${base}/settings`} label="설정" onDone={() => setOpen(false)} />
+          {can(app, "editor") && (
+            <MenuLink to={`${base}/env`} label="환경변수" onDone={() => setOpen(false)} />
+          )}
+          {can(app, "owner") && (
+            <MenuLink to={`${base}/settings`} label="설정" onDone={() => setOpen(false)} />
+          )}
           {onDelete && (
             <button
               onClick={() => {

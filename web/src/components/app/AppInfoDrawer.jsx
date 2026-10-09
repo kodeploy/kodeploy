@@ -14,6 +14,7 @@ import { Link } from "react-router-dom";
 import { ArrowRight, ArrowUpRight, Check, CircleCheck, CircleX, Copy, X } from "lucide-react";
 import { APP_STATUS_STYLES } from "../AppStatusBadge.jsx";
 import { relativeTime, repoSlug } from "../../lib/format.js";
+import { ROLE_LABEL, can } from "../../lib/roles.js";
 
 // 표시용 라벨 — 백엔드 enum 값(schemas.py)을 사람이 읽는 이름으로.
 const DB_LABEL = { mysql: "MySQL", postgres: "PostgreSQL" };
@@ -109,6 +110,12 @@ export default function AppInfoDrawer({ ctx, onClose }) {
             <PodStatus status={podStatus} />
           </div>
 
+          {app?.role && app.role !== "owner" && (
+            <div className="kd-t-body-s text-fg-2" style={{ marginTop: 4 }}>
+              공유받음{app.owner_login ? ` · ${app.owner_login}` : ""} · {ROLE_LABEL[app.role] || app.role} 권한
+            </div>
+          )}
+
           {appHost && (
             <a
               href={`https://${appHost}`}
@@ -193,10 +200,14 @@ export default function AppInfoDrawer({ ctx, onClose }) {
             <FooterLink to={`${base}/history`} onClose={onClose}>
               배포 이력 보기
             </FooterLink>
-            <span style={{ width: 1, height: 23, background: "var(--kd-border)" }} />
-            <FooterLink to={`${base}/settings`} onClose={onClose}>
-              설정 열기
-            </FooterLink>
+            {can(app, "owner") && (
+              <>
+                <span style={{ width: 1, height: 23, background: "var(--kd-border)" }} />
+                <FooterLink to={`${base}/settings`} onClose={onClose}>
+                  설정 열기
+                </FooterLink>
+              </>
+            )}
           </div>
         </div>
       </div>
