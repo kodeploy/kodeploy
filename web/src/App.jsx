@@ -19,6 +19,8 @@ import Community from "./components/Community.jsx";
 import Guide from "./components/Guide.jsx";
 import GuidePanel from "./components/GuidePanel.jsx";
 import Home from "./components/Home.jsx";
+import Privacy from "./components/legal/Privacy.jsx";
+import Terms from "./components/legal/Terms.jsx";
 import LoginModal from "./components/LoginModal.jsx";
 import TopBar from "./components/TopBar.jsx";
 import { AppShellProvider } from "./contexts/AppShellContext.jsx";
@@ -110,6 +112,8 @@ export default function App() {
               <Route path="/dashboard/*" element={<LegacyDashboard />} />
               <Route path="/admin" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><Admin /></div>} />
               <Route path="/community" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><Community /></div>} />
+              <Route path="/terms" element={<Terms />} />
+              <Route path="/privacy" element={<Privacy />} />
               <Route path="/guide" element={<GuideView />} />
               <Route path="/guide/:section" element={<GuideView />} />
               {/* 옛 빌드 단위 URL → dashboard로 흡수 (북마크/공유 호환) */}

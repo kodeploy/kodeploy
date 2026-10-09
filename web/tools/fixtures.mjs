@@ -8,7 +8,7 @@ export const ME = {
   id: "11111111-1111-1111-1111-111111111111",
   login: "yuntyu01",
   avatar_url: null,
-  role: "root",
+  role: process.env.ME_ROLE ?? "root",
   app_name: "my-api",
   site_enabled: true,
   github_connected: true,

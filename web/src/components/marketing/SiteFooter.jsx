@@ -27,6 +27,12 @@ export default function SiteFooter() {
             <Link to="/community" className={LINK}>
               피드백
             </Link>
+            <Link to="/terms" className={LINK}>
+              이용약관
+            </Link>
+            <Link to="/privacy" className={LINK}>
+              개인정보처리방침
+            </Link>
           </div>
         </footer>
       </div>

@@ -45,6 +45,11 @@ export async function getMe() {
   }
 }
 
+// 회원 탈퇴 — 소유한 앱과 개인 데이터를 모두 지우고 계정을 없앤다. confirm에 내 GitHub 아이디를 그대로 보낸다.
+export function deleteAccount(confirm) {
+  return jsonRequest("/auth/me", { method: "DELETE", body: JSON.stringify({ confirm }) });
+}
+
 export function logout() {
   return jsonRequest("/auth/logout", { method: "POST" });
 }

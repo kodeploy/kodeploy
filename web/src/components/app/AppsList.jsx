@@ -385,6 +385,20 @@ export default function AppsList() {
         >
           피드백
         </Link>
+        <span className="kd-t-body-s text-fg-4">|</span>
+        <Link
+          to="/terms"
+          className="kd-t-body-s text-fg-2 hover:text-fg-1 transition-colors no-underline"
+        >
+          이용약관
+        </Link>
+        <span className="kd-t-body-s text-fg-4">|</span>
+        <Link
+          to="/privacy"
+          className="kd-t-body-s text-fg-2 hover:text-fg-1 transition-colors no-underline"
+        >
+          개인정보처리방침
+        </Link>
       </div>
 
       {deleteTarget && (

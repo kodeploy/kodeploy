@@ -10,13 +10,14 @@ import logging
 import secrets
 
 import httpx
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session as SASession
 
 from app import config
 from app.apps import service as apps_service
-from app.auth import service as auth_service
+from app.auth import account, service as auth_service
 from app.auth.deps import get_current_user
 from app.auth.model import User
 from app.auth.schemas import UserOut
@@ -171,6 +172,28 @@ def me(user: User = Depends(get_current_user), db: SASession = Depends(get_db)) 
         "max_apps": apps_service.app_limit(db, user),
         "app_count": len(apps_service.list_user_apps(db, user.id)),
     })
+
+
+class DeleteAccountRequest(BaseModel):
+    confirm: str    # 내 GitHub 아이디를 그대로 — 실수로 탈퇴하지 않게
+
+
+# 회원 탈퇴 — 소유한 앱(K8s·DB·저장소·도메인)과 개인 데이터를 모두 지우고 계정을 없앤다. 되돌릴 수 없다.
+@router.delete("/me")
+async def delete_me(
+    req: DeleteAccountRequest,
+    response: Response,
+    db: SASession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    if req.confirm != user.login:
+        raise HTTPException(status_code=400, detail="GitHub 아이디가 일치하지 않습니다")
+    try:
+        await account.delete_account(db, user)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    _clear_session_cookie(response)
+    return {"status": "deleted"}
 
 
 @router.post("/logout")

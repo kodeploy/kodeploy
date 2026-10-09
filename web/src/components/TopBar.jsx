@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { LogOut, Menu, X } from "lucide-react";
+import { LogOut, Menu, UserX, X } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { APP_STATUS_STYLES } from "./AppStatusBadge.jsx";
 import Brand from "./Brand.jsx";
+import DeleteAccountModal from "./DeleteAccountModal.jsx";
 import { useAppShell } from "../contexts/AppShellContext.jsx";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { useTheme } from "../contexts/ThemeContext.jsx";
@@ -294,6 +295,7 @@ function Breadcrumb() {
 function UserMenu() {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
+  const [leaving, setLeaving] = useState(false);   // 회원 탈퇴 확인 모달
   const ref = useRef(null);
 
   useEffect(() => {
@@ -366,8 +368,20 @@ function UserMenu() {
             <LogOut size={13} strokeWidth={1.8} className="text-fg-3" />
             로그아웃
           </button>
+          <button
+            onClick={() => {
+              setOpen(false);
+              setLeaving(true);
+            }}
+            className="kd-hoverable kd-t-caption w-full flex items-center gap-2 px-3 py-2 text-fg-2 hover:text-fg-1 transition-colors"
+            style={{ borderTop: "1px solid var(--line-2)" }}
+          >
+            <UserX size={13} strokeWidth={1.8} className="text-fg-3" />
+            회원 탈퇴
+          </button>
         </div>
       )}
+      {leaving && <DeleteAccountModal onClose={() => setLeaving(false)} />}
     </div>
   );
 }

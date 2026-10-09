@@ -88,6 +88,17 @@ export default function LoginModal({ onClose }) {
         <p className="kd-t-caption mt-4 text-center text-fg-3">
           GitHub 계정으로 로그인합니다.
         </p>
+        <p className="kd-t-caption mt-1.5 text-center text-fg-3">
+          계속하면{" "}
+          <Link to="/terms" onClick={onClose} className="underline hover:text-fg-1" style={{ textUnderlineOffset: 3 }}>
+            이용약관
+          </Link>
+          과{" "}
+          <Link to="/privacy" onClick={onClose} className="underline hover:text-fg-1" style={{ textUnderlineOffset: 3 }}>
+            개인정보처리방침
+          </Link>
+          에 동의한 것으로 봅니다.
+        </p>
 
         <div className="mt-3 text-center">
           <Link
