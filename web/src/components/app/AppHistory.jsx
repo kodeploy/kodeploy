@@ -10,6 +10,7 @@
 // Build 모델에 없어서(시안의 "a81c92f" 자리) 빌드 ID로 대체했다 — 없는 값은 만들지 않는다.
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
+import { can } from "../../lib/roles.js";
 import { ArrowUpRight } from "lucide-react";
 import { listRecentCommits } from "../../api/deploy.js";
 import { formatDuration, formatFull, parseDate, relativeTime } from "../../lib/format.js";
@@ -32,7 +33,7 @@ function dayTime(iso) {
 }
 
 export default function AppHistory() {
-  const { builds } = useOutletContext();
+  const { builds, app, base } = useOutletContext();
   const [searchParams, setSearchParams] = useSearchParams();
   const pinnedBuildId = searchParams.get("build");
 
@@ -43,6 +44,11 @@ export default function AppHistory() {
     for (const b of builds) if ((b.kind || "build") !== "env_change") m.set(b.build_id, n--);
     return m;
   }, [builds]);
+
+  // 롤백할 수 있는 배포 — v2 앱이고 편집 권한 이상일 때, 지금 올라가 있는 배포(성공한 것 중 최신)만 빼고.
+  // 서버가 build.rollbackable로 digest가 남은 성공 배포를 가려 준다.
+  const currentId = builds.find((b) => b.rollbackable)?.build_id;
+  const canRollback = app?.pipeline === "v2" && can(app, "editor");
 
   // 쿼리가 가리키는 빌드가 목록에 없으면(삭제·다른 앱) 조용히 최신으로 떨어진다.
   const selected = builds.find((b) => b.build_id === pinnedBuildId) || builds[0] || null;
@@ -87,6 +93,8 @@ export default function AppHistory() {
                 key={selected.build_id}
                 build={selected}
                 number={numbered.get(selected.build_id)}
+                base={base}
+                canRollback={canRollback && selected.rollbackable && selected.build_id !== currentId}
               />
             )}
           </div>
@@ -142,7 +150,7 @@ function BuildRow({ build, number, selected, onSelect }) {
           >
             {isEnv
               ? build.env_change_summary || "(상세 없음)"
-              : `${build.branch || "—"} · ${build.build_id}`}
+              : `${build.branch || "—"} · ${build.build_id}${build.rollback_of ? " · 롤백" : ""}`}
           </span>
         </span>
 

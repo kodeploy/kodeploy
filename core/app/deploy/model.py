@@ -57,6 +57,8 @@ class Build(Base):
     # 빌더 콜백에서 마지막으로 처리한 seq. v1 빌드는 None, v2 빌드는 만들 때 0 (v2 표시 겸용).
     last_event_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    # 롤백 배포면 되돌아간 원본 배포의 build_id. 일반 배포는 NULL. (v2만 — 이미지 digest로 되돌린다)
+    rollback_of: Mapped[str | None] = mapped_column(String(8), nullable=True)
     # 이 빌드가 돈 K8s ns (apps.namespace의 사본). NULL인 옛 행은 tenant-<user hex8>이다 (tenant_id 참고).
     namespace: Mapped[str | None] = mapped_column(String(63), nullable=True)
     # 이 빌드가 속한 앱 (apps.id). 1단계에서 칸만 추가했고 아직 쓰지 않는다 — NULL이면 백필 전·삭제된 앱의 기록.

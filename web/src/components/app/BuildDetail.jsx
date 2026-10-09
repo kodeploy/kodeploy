@@ -21,7 +21,8 @@ import {
   Maximize2,
   Minimize2,
 } from "lucide-react";
-import { getBuild } from "../../api/deploy.js";
+import { useNavigate } from "react-router-dom";
+import { getBuild, rollbackBuild } from "../../api/deploy.js";
 import AiDiagnosis, { isDiagnosing } from "./AiDiagnosis.jsx";
 import { STYLES_BUILD, STYLES_ENV } from "../StatusBadge.jsx";
 import { formatDuration, formatFull, repoSlug } from "../../lib/format.js";
@@ -70,7 +71,7 @@ const BUILD_MODE_LABEL = {
 // 바로 아래 "Build failed"는 보통 글자색이다(실패 단어를 전부 칠하면 면이 붉어진다).
 const ERROR_LINE = /\b(ERROR|FATAL|Traceback)\b|\berror:/i;
 
-export default function BuildDetail({ build: initialBuild, number }) {
+export default function BuildDetail({ build: initialBuild, number, base, canRollback = false }) {
   const [build, setBuild] = useState(initialBuild);
   const [tab, setTab] = useState(() => defaultTab(initialBuild));
   const [expanded, setExpanded] = useState(false);
@@ -163,6 +164,12 @@ export default function BuildDetail({ build: initialBuild, number }) {
             <Meta icon={GitBranch}>{build.branch || "—"}</Meta>
             <MetaDivider />
             <Meta icon={Diamond}>{build.build_id}</Meta>
+            {build.rollback_of && (
+              <>
+                <MetaDivider />
+                <Meta icon={Clock}>롤백 · {build.rollback_of}</Meta>
+              </>
+            )}
             {durationText && (
               <>
                 <MetaDivider />
@@ -200,6 +207,8 @@ export default function BuildDetail({ build: initialBuild, number }) {
 
       {active === "summary" && <SummaryBody build={build} isEnv={isEnv} />}
 
+      {canRollback && active === "summary" && <RollbackAction build={build} base={base} />}
+
       {active === "logs" && (
         <InkFace
           boxRef={logBoxRef}
@@ -227,6 +236,57 @@ export default function BuildDetail({ build: initialBuild, number }) {
           onShowLogs={active === "logs" ? null : () => setTab("logs")}
           style={{ marginTop: 28 }}
         />
+      )}
+    </div>
+  );
+}
+
+// "이 버전으로 되돌리기" — 그 배포가 올라갔던 이미지(digest)로 다시 배포한다. 다시 빌드하지 않고,
+// DB·도메인 같은 지금 설정은 그대로다. 누르면 한 번 더 확인을 받고, 끝나면 새 롤백 배포의 진행 화면으로 간다.
+function RollbackAction({ build, base }) {
+  const navigate = useNavigate();
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await rollbackBuild(build.build_id);
+      navigate(`${base}/deploy/progress?build=${res.build_id}`);
+    } catch (e) {
+      setError(e.message?.replace(/^\d+ /, "") || "되돌리지 못했어요");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid var(--kd-border)" }}>
+      {!confirming ? (
+        <button className="kd-btn-secondary kd-btn-md" onClick={() => setConfirming(true)}>
+          이 버전으로 되돌리기
+        </button>
+      ) : (
+        <>
+          <p className="kd-t-body-s text-fg-2" style={{ maxWidth: 480 }}>
+            배포 {build.build_id}의 이미지로 다시 배포해요. 새로 빌드하지 않고, 데이터베이스·도메인 같은 지금 설정은
+            그대로예요.
+          </p>
+          <div className="flex items-center gap-2" style={{ marginTop: 12 }}>
+            <button className="kd-btn-primary kd-btn-md" disabled={busy} onClick={run}>
+              {busy ? "요청 중…" : "되돌리기"}
+            </button>
+            <button className="kd-btn-secondary kd-btn-md" disabled={busy} onClick={() => setConfirming(false)}>
+              취소
+            </button>
+          </div>
+        </>
+      )}
+      {error && (
+        <p className="kd-t-caption" style={{ marginTop: 10, color: "var(--err-fg)" }}>
+          {error}
+        </p>
       )}
     </div>
   );

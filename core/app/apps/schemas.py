@@ -17,6 +17,7 @@ class AppOut(BaseModel):
     # 유저와 앱의 관계: "owner" | "editor" | "viewer"
     role: str = "owner"
     owner_login: str | None = None   # 공유받은 앱이면 주인의 GitHub 아이디
+    pipeline: str = "v1"             # "v1" | "v2" — 화면이 v2에만 있는 기능(롤백)을 보일지 정한다
 
 
 class InviteCreate(BaseModel):

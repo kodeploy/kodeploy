@@ -264,3 +264,76 @@ def on_delete_event(build_id: str, ev: dict) -> bool:
     else:
         fut.set_exception(ValueError("삭제 요청이 취소되었습니다. 다시 시도하세요"))
     return True
+
+
+# ---- 롤백 ----------------------------------------------------------------------------------------
+# 이력의 한 배포로 되돌린다. 이미지를 다시 빌드하지 않고, 그 배포가 올라갔던 digest(repo:tag@sha256:…)를
+# 빌더에 set-image로 보내 git values의 이미지 칸만 바꾼다 — Argo가 그 이미지로 롤아웃한다.
+# 포트·런타임은 그 배포 것으로 돌아가고, DB·Redis·볼륨·호스트 같은 core 소유 설정은 지금 값을 그대로 둔다.
+# v1 앱은 대상이 아니다.
+
+# 되돌릴 수 있는 배포 — 서버 슬롯의 v2 빌드가 성공했고(running) digest가 남아 있는 것.
+def is_rollbackable(build: Build) -> bool:
+    return (
+        (build.kind or "build") == "build"
+        and build.runtime != "static"
+        and build.status == "running"
+        and is_v2_build(build)
+        and "@sha256:" in (build.image or "")
+    )
+
+
+# 롤백할 수 있는지 검사한다. 못 하면 ValueError(화면에 보여도 되는 이유).
+def check_rollback_target(app: App, target: Build | None) -> None:
+    if not is_v2(app):
+        raise ValueError("새 경로(v2) 앱만 되돌릴 수 있습니다")
+    if target is None or target.app_id != app.id:
+        raise LookupError("배포를 찾을 수 없습니다")
+    if not is_rollbackable(target):
+        raise ValueError("이 배포로는 되돌릴 수 없습니다 — 성공한 새 경로(v2) 서버 배포만 되돌릴 수 있어요")
+
+
+# 롤백 요청 본문 (계약 3-1 kind=set-image). values는 보내지 않는다 — 지금 설정이 그대로 남는다.
+def rollback_payload(build: Build, actor: User) -> dict:
+    return {
+        "build_id": build.build_id,
+        "actor": actor.id.hex[:8],
+        "namespace": build.tenant_id,
+        "slot": "server",
+        "kind": "set-image",
+        "unit": {"runtime": build.runtime, "port": build.port},
+        "image": build.image,
+    }
+
+
+# spawn_background로 도는 롤백 제출. 이후 상태(committed → deployed 또는 failed)는 콜백이 바꾼다.
+async def run_v2_rollback(build_id: str) -> None:
+    db = SessionLocal()
+    record = None
+    build = None
+    try:
+        build = crud.get_build(db, build_id)
+        if not build or build.status == "cancelled":
+            return
+        record = _new_record(db, build)
+        actor = db.query(User).filter_by(id=build.user_id).first()
+        if not actor:
+            return
+        db.refresh(build)
+        if build.status == "cancelled":   # 제출 전에 다른 배포가 대체했다
+            close_record(record, "cancelled")
+            db.commit()
+            return
+        build.status = "deploying"        # 이벤트가 먼저 와도 뒤로 돌리지 않게 전송 전에 바꾼다
+        db.commit()
+        await builder.submit(rollback_payload(build, actor))
+        logger.info("rollback %s (of %s) submitted to builder", build_id, build.rollback_of)
+    except builder.BuilderError as e:
+        db.rollback()
+        _fail(db, build, record, f"빌더가 받지 않았습니다: {e}")
+    except Exception as e:
+        db.rollback()
+        if build is not None:
+            _fail(db, build, record, f"오케스트레이션 에러: {e}")
+    finally:
+        db.close()

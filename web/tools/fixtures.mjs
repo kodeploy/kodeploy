@@ -20,7 +20,7 @@ export const ME = {
 // GET /apps — 내 앱 둘 + 남이 공유해 준 앱 하나 (role이 owner가 아니면 "공유받음" 표시)
 export const APP_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
 export const APPS = [
-  { id: APP_ID, name: "my-api", site_enabled: true, custom_domain: null, created_at: "2026-09-01T00:00:00+00:00", role: "owner" },
+  { id: APP_ID, name: "my-api", site_enabled: true, custom_domain: null, created_at: "2026-09-01T00:00:00+00:00", role: "owner", pipeline: "v2" },
   { id: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", name: "blog-server", site_enabled: false, custom_domain: null, created_at: "2026-09-10T00:00:00+00:00", role: "owner" },
   { id: "cccccccc-3333-4333-8333-cccccccccccc", name: "team-shop", site_enabled: false, custom_domain: null, created_at: "2026-09-12T00:00:00+00:00", role: "viewer", owner_login: "kim-dev" },
   { id: "99999999-7777-4777-8777-999999999999", name: "partner-api", site_enabled: false, custom_domain: null, created_at: "2026-09-13T00:00:00+00:00", role: "editor", owner_login: "lee-dev" },
@@ -55,7 +55,7 @@ const baseBuild = {
 };
 
 export const BUILDS = [
-  { ...baseBuild, build_id: "a81c92f0", status: "running", created_at: AGO(20), updated_at: AGO(19) },
+  { ...baseBuild, build_id: "a81c92f0", status: "running", rollbackable: true, created_at: AGO(20), updated_at: AGO(19) },
   {
     ...baseBuild,
     build_id: "e3b1c7d9",
@@ -77,7 +77,7 @@ export const BUILDS = [
     created_at: AGO(200),
     updated_at: AGO(199),
   },
-  { ...baseBuild, build_id: "4bd381aa", status: "running", created_at: AGO(1400), updated_at: AGO(1399), total_seconds: 39.2 },
+  { ...baseBuild, build_id: "4bd381aa", status: "running", rollbackable: true, created_at: AGO(1400), updated_at: AGO(1399), total_seconds: 39.2 },
   {
     ...baseBuild,
     build_id: "9f0e12bc",

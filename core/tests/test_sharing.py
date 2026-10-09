@@ -5,6 +5,7 @@ crud를 대신 세우면 정작 고정하려는 성질이 사라진다. K8s·빌
 """
 
 import importlib.util
+from types import SimpleNamespace
 import io
 import uuid
 from pathlib import Path
@@ -406,3 +407,39 @@ def test_build_clones_with_the_app_owners_installation(db, monkeypatch):
     build = Build(build_id="b1", repo_url="r", branch="main", image="i", app_name="shop", port=1, runtime="python",
                   user_id=editor.id, app_id=app.id)          # 배포한 사람은 editor, 앱 주인은 owner
     assert gh._installation_id_for(build) == 111
+
+
+# --- 롤백 API 권한 (편집 권한 이상, v2 앱) ---
+
+def test_rollback_endpoint_requires_editor_and_maps_errors(db, roles, monkeypatch):
+    a = roles.app.id
+    started = []
+
+    async def fake_rollback(db_, user, app, build_id):
+        started.append((user.id, app.id, build_id))
+        return SimpleNamespace(build_id="new12345", runtime="python", status="deploying")
+
+    monkeypatch.setattr(pipeline, "start_rollback", fake_rollback)
+    path = f"/apps/{a}/deploy/aa11bb22/rollback"
+    assert code(db, roles.viewer, "post", path) == 403
+    assert code(db, roles.stranger, "post", path) == 404
+    res = client(db, roles.editor).post(path)
+    assert res.status_code == 200 and res.json() == {"build_id": "new12345", "runtime": "python", "status": "deploying"}
+    assert started == [(roles.editor.id, a, "aa11bb22")]
+    assert code(db, roles.owner, "post", path) == 200
+
+    async def missing(*args):
+        raise LookupError("배포를 찾을 수 없습니다")
+
+    async def refused(*args):
+        raise ValueError("새 경로(v2) 앱만 되돌릴 수 있습니다")
+
+    monkeypatch.setattr(pipeline, "start_rollback", missing)
+    assert code(db, roles.owner, "post", path) == 404
+    monkeypatch.setattr(pipeline, "start_rollback", refused)
+    res = client(db, roles.owner).post(path)
+    assert res.status_code == 400 and "v2" in res.json()["detail"]
+
+
+def test_rollback_endpoint_without_an_app_is_404(db, roles):
+    assert code(db, roles.stranger, "post", "/deploy/aa11bb22/rollback") == 404       # 옛 경로: 내 앱이 없다

@@ -24,7 +24,7 @@ invites_router = APIRouter(prefix="/invites", tags=["apps"])
 def _out(app: App, role: str, owner_login: str | None) -> AppOut:
     return AppOut(
         id=app.id, name=app.name, site_enabled=app.site_enabled, custom_domain=app.custom_domain,
-        created_at=app.created_at, role=role, owner_login=owner_login,
+        created_at=app.created_at, role=role, owner_login=owner_login, pipeline=app.pipeline,
     )
 
 

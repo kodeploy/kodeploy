@@ -88,6 +88,12 @@ export function removeMember(appId, userId) {
   return request(`/apps/${appId}/members/${userId}`, { method: "DELETE" });
 }
 
+// 이력의 한 배포로 되돌린다 (v2 앱, 편집 권한 이상). 이미지를 다시 빌드하지 않고 그 배포의 digest로 배포한다.
+// 응답: { build_id, runtime, status } — 새로 생긴 롤백 배포. 진행은 그 build_id로 따라간다.
+export function rollbackBuild(buildId) {
+  return request(`/deploy/${buildId}/rollback`, { method: "POST" });
+}
+
 export function createDeploy({
   repoUrl,
   branch = "main",

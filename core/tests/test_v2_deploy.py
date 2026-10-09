@@ -330,3 +330,107 @@ def test_request_delete_rejected_by_builder(monkeypatch, fake_apps):  # noqa: F8
 
 def test_other_build_events_are_not_delete_events():
     assert v2.on_delete_event("3f9a2c1d", {"seq": 1, "type": "deleted"}) is False
+
+
+# --- 롤백 (이력의 digest로 되돌린다, v2만) ---
+
+DIGEST_IMAGE = f"ghcr.io/yuntyu01/{UID.hex[:8]}/demo:3f9a2c1d@sha256:" + "a" * 64
+
+
+def rb_build(**kw):
+    fields = dict(build_id="aa11bb22", status="running", image=DIGEST_IMAGE)
+    fields.update(kw)                                       # 기본값을 테스트가 바꾼 값으로 덮는다
+    return make_build(**fields)
+
+
+def v2_app():
+    return App(id=APP_ID, owner_id=UID, name="demo", namespace=f"tenant-{UID.hex[:8]}", pipeline="v2")
+
+
+@pytest.mark.parametrize("change,ok", [
+    ({}, True),
+    ({"status": "failed"}, False),                          # 실패한 배포로는 못 돌아간다
+    ({"status": "cancelled"}, False),
+    ({"kind": "env_change"}, False),
+    ({"runtime": "static"}, False),                         # 정적 슬롯은 v2 대상이 아니다
+    ({"image": "ghcr.io/u/h/demo:3f9a2c1d"}, False),        # digest가 없는 이미지 (v1 빌드)
+    ({"last_event_seq": None}, False),                      # v1 빌드
+])
+def test_which_builds_can_be_rolled_back_to(change, ok):
+    assert v2.is_rollbackable(rb_build(**change)) is ok
+
+
+def test_rollback_check_errors():
+    app = v2_app()
+    v2.check_rollback_target(app, rb_build())               # 통과
+    v1 = v2_app()
+    v1.pipeline = "v1"
+    with pytest.raises(ValueError, match="v2"):
+        v2.check_rollback_target(v1, rb_build())
+    with pytest.raises(LookupError):
+        v2.check_rollback_target(app, None)
+    with pytest.raises(LookupError):
+        v2.check_rollback_target(app, rb_build(app_id=uuid.uuid4()))   # 다른 앱의 배포는 없는 것처럼
+    with pytest.raises(ValueError, match="되돌릴 수 없"):
+        v2.check_rollback_target(app, rb_build(status="failed"))
+
+
+def test_rollback_payload_is_a_set_image_without_values():
+    p = v2.rollback_payload(Build(build_id="cc33dd44", image=DIGEST_IMAGE, runtime="java", port=8080, user_id=UID,
+                                  namespace="app-9abcdef0"), User(id=UID))
+    assert p == {
+        "build_id": "cc33dd44", "actor": UID.hex[:8], "namespace": "app-9abcdef0", "slot": "server",
+        "kind": "set-image", "unit": {"runtime": "java", "port": 8080}, "image": DIGEST_IMAGE,
+    }
+    assert "values" not in p and "build" not in p                # 지금 설정(DB·도메인 등)은 그대로 둔다
+
+
+def test_start_rollback_records_a_new_deploy_and_submits(monkeypatch):
+    import asyncio
+
+    app = v2_app()
+    target = rb_build(branch="release", port=9000)
+    calls, created = [], []
+    monkeypatch.setattr(pipeline, "spawn_background", lambda fn, *a: calls.append((fn, a)))
+    monkeypatch.setattr(pipeline, "_cancel_stale_builds", lambda db, app_id, slot: calls.append(("cancel", slot)))
+    monkeypatch.setattr(pipeline.crud, "get_build", lambda db, bid, app_id=None: target)
+    monkeypatch.setattr(pipeline.crud, "create_build", lambda db, b: created.append(b) or b)
+
+    new = asyncio.run(pipeline.start_rollback(MagicMock(), User(id=UID), app, "aa11bb22"))
+
+    assert created == [new]
+    assert (new.rollback_of, new.image, new.port, new.branch) == ("aa11bb22", DIGEST_IMAGE, 9000, "release")
+    assert (new.status, new.last_event_seq, new.app_id, new.namespace) == ("deploying", 0, APP_ID, app.namespace)
+    assert new.build_id != "aa11bb22" and new.kind == "build"
+    assert calls == [("cancel", "server"), (v2.run_v2_rollback, (new.build_id,))]    # 진행 중이던 서버 배포는 대체된다
+
+
+def test_start_rollback_rejects_without_touching_anything(monkeypatch):
+    import asyncio
+
+    calls = []
+    monkeypatch.setattr(pipeline, "spawn_background", lambda fn, *a: calls.append(fn))
+    monkeypatch.setattr(pipeline, "_cancel_stale_builds", lambda *a: calls.append("cancel"))
+    monkeypatch.setattr(pipeline.crud, "get_build", lambda db, bid, app_id=None: rb_build(status="failed"))
+    with pytest.raises(ValueError):
+        asyncio.run(pipeline.start_rollback(MagicMock(), User(id=UID), v2_app(), "aa11bb22"))
+    assert calls == []                                       # 거절이면 취소도 제출도 없다
+
+
+def test_run_rollback_submits_set_image(runner):
+    runner.build.rollback_of = "aa11bb22"
+    runner.build.image = DIGEST_IMAGE
+    asyncio.run(v2.run_v2_rollback("3f9a2c1d"))
+    payload, status_at_send = runner.sent[0]
+    assert payload["kind"] == "set-image" and payload["image"] == DIGEST_IMAGE
+    assert status_at_send == "deploying"
+    assert "_ensure_tenant_ns" not in runner.steps and "_apply_volume" not in runner.steps   # 준비 단계는 건너뛴다
+
+
+def test_run_rollback_marks_failed_when_builder_refuses(runner):
+    async def refuse(payload):
+        raise builder.BuilderError("image must be <repo>:<tag>@sha256:<64hex>")
+
+    runner.monkeypatch.setattr(v2.builder, "submit", refuse)
+    asyncio.run(v2.run_v2_rollback("3f9a2c1d"))
+    assert runner.build.status == "failed" and "빌더가 받지 않았습니다" in runner.build.error

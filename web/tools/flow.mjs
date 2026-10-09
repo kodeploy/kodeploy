@@ -19,7 +19,8 @@
 import { chromium } from "playwright-core";
 import fs from "node:fs";
 import path from "node:path";
-import { ROUTES } from "./fixtures.mjs";
+import { ME, ROUTES } from "./fixtures.mjs";
+import { PATCH_NOTES } from "../src/lib/patchNotes.js";
 
 const args = process.argv.slice(2);
 const scenarioFile = args[0];
@@ -54,6 +55,14 @@ for (const sc of scenarios) {
       } catch {}
       document.documentElement.dataset.theme = t;
     }, THEME);
+  // 새 기능 안내 팝업은 다른 화면을 가리므로 기본으로 "다시 보지 않기"를 누른 상태로 시작한다.
+  // 팝업 자체를 확인하는 시나리오는 { whatsnew: true }를 준다.
+  if (!sc.whatsnew)
+    await page.addInitScript(([k, v]) => {
+      try {
+        localStorage.setItem(k, v);
+      } catch {}
+    }, [`kd-whatsnew:${ME.id}`, PATCH_NOTES.version]);
   const errors = [];
   const steps = [];
 
@@ -104,6 +113,10 @@ for (const sc of scenarios) {
       let body = null;
       try { body = req.postDataJSON(); } catch {}
       writes.push({ method: req.method(), path: appPath, body });
+      // 롤백 — 새로 생긴 롤백 배포를 돌려준다 (이어서 그 build_id의 진행 화면으로 간다)
+      if (req.method() === "POST" && /\/rollback$/.test(p))
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          build_id: "newroll01", runtime: "python", status: "deploying" }) });
       // 새 앱 만들기 — 만들어진 앱을 돌려준다 (이어서 그 앱의 /apps/<id>/deploy 로 배포가 간다)
       if (req.method() === "POST" && p === "/apps")
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({

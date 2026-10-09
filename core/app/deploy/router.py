@@ -137,6 +137,8 @@ def _to_status(build: Build, timing: dict | None = None) -> StatusResponse:
         dockerfile_content=build.dockerfile_content,
         error=build.error,
         env_change_summary=build.env_change_summary,
+        rollback_of=build.rollback_of,
+        rollbackable=v2.is_rollbackable(build),
         ai_analysis=build.ai_analysis,
         ai_status=build.ai_status,
         logs=build.logs,
@@ -650,6 +652,26 @@ async def delete_app(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "deleted"}
+
+
+# 이력의 한 배포로 되돌린다 (v2 앱, 편집 권한 이상) — 이미지를 다시 빌드하지 않고 그 배포의 digest로 배포한다.
+# 새 배포 행이 이력에 남고 진행은 그 build_id로 따라간다. /{build_id} 핸들러와 경로가 달라 순서 제약은 없다.
+@router.post("/{build_id}/rollback", response_model=DeployBuildRef)
+async def rollback_build(
+    build_id: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    app: App | None = Depends(editor_app_or_none),
+) -> DeployBuildRef:
+    if app is None:
+        raise HTTPException(status_code=404, detail="build not found")
+    try:
+        build = await pipeline.start_rollback(db, user, app, build_id)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return DeployBuildRef(build_id=build.build_id, runtime=build.runtime, status=build.status)
 
 
 # 사용자의 최신 build의 repo+branch에서 GitHub 최근 커밋 N개 조회.

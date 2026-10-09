@@ -132,6 +132,8 @@ class StatusResponse(BaseModel):
     dockerfile_content: str | None = None                # 실제 빌드에 쓰인 Dockerfile. UI에서 코드 블록으로 표시.
     error: str | None = None
     env_change_summary: str | None = None            # kind="env_change" 전용 — 바뀐 키 목록
+    rollback_of: str | None = None                   # 롤백 배포면 되돌아간 원본 배포의 build_id
+    rollbackable: bool = False                       # 이 배포 버전으로 되돌릴 수 있나 (v2: digest 있는 성공 배포)
     ai_analysis: str | None = None                   # 실패 진단 JSON (실패 + 기능 ON일 때만)
     ai_status: str | None = None                     # 진단 진행 상태: None | "pending" | "done" (model.Build.ai_status)
     logs: str | None = None

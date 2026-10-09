@@ -527,6 +527,44 @@ async def start_deploy(
     return builds
 
 
+# 이력의 한 배포로 되돌린다 (v2 앱만). 새 배포 행을 만들어 이력에 남기고, 빌더에 set-image를 맡긴다.
+# 진행 중이던 서버 배포는 대체된다 (재배포와 같은 규칙). 못 하면 ValueError, 대상이 없으면 LookupError.
+async def start_rollback(db: Session, user: User, app: App, build_id: str) -> Build:
+    target = crud.get_build(db, build_id, app_id=app.id)
+    v2.check_rollback_target(app, target)
+
+    _cancel_stale_builds(db, app.id, slot="server")
+    new_id = uuid.uuid4().hex[:8]
+    rollback = Build(
+        build_id=new_id,
+        repo_url=target.repo_url,
+        branch=target.branch,
+        image=target.image,                       # repo:tag@sha256:… — 그 배포가 올라갔던 그대로
+        app_name=target.app_name,
+        port=target.port,
+        runtime=target.runtime,
+        user_id=user.id,
+        app_id=app.id,
+        namespace=app.namespace,
+        db_type=target.db_type,
+        use_redis=target.use_redis,
+        use_storage=target.use_storage,
+        volume_mount_path=target.volume_mount_path,
+        volume_storage_class=target.volume_storage_class,
+        volume_size=target.volume_size,
+        build_mode=target.build_mode,
+        dockerfile_path=target.dockerfile_path,
+        project_path=target.project_path,
+        kind="build",
+        status="deploying",
+        rollback_of=target.build_id,
+        last_event_seq=0,                         # v2 빌드 표시 겸 콜백 seq 시작점
+    )
+    crud.create_build(db, rollback)
+    spawn_background(v2.run_v2_rollback, new_id)
+    return rollback
+
+
 # 서버 슬롯 teardown — Deployment/Service/Route 쌍 + deps(mysql/postgres/redis/r2) 정리.
 # PVC·버킷·Secret은 보존 (DB 토글 off와 동일 철학 — 다시 켜면 데이터 복원).
 # best-effort: 실패는 삼킴 — 슬롯 off인 제출마다 다시 spawn되므로 다음 기회에 재시도.
