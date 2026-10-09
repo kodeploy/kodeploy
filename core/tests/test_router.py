@@ -174,23 +174,99 @@ def test_ws_rejects_missing_cookie_with_allowed_origin():
     assert exc.value.code == 4001              # Origin 통과 후 인증에서 거절
 
 
-# --- v2(빌더) 앱: config가 빌더에 연결되기 전까지 501 ---
+# --- v2(빌더) 앱: 환경변수·도메인 변경은 빌더(config)로 반영한다 ---
 
-@pytest.mark.parametrize("method,path,body,target", [
-    ("put", "/deploy/env", {"env": {"A": "1"}}, "set_env"),
-    ("put", "/deploy/domain", {"domain": "www.example.com"}, "set_custom_domain"),
-    ("delete", "/deploy/domain", None, "clear_custom_domain"),
-])
-def test_v2_app_changes_are_501(monkeypatch, method, path, body, target):
-    called = []
-    monkeypatch.setattr(deploy_router.env, "set_env", lambda *a: called.append("set_env"))
-    monkeypatch.setattr(deploy_router.hostnames, "set_custom_domain", lambda *a: called.append("set_custom_domain"))
-    monkeypatch.setattr(deploy_router.hostnames, "clear_custom_domain", lambda *a: called.append("clear_custom_domain"))
-    user = make_user(pipeline="v2")
-    client = make_client(user)
-    r = getattr(client, method)(path, json=body) if body else getattr(client, method)(path)
-    assert r.status_code == 501 and "새 경로(v2)" in r.json()["detail"]
-    assert called == []
+@pytest.fixture
+def cfg(monkeypatch):
+    """환경변수·도메인 변경 경로의 바깥 호출을 가짜로 — 기록만 한다."""
+    rec = SimpleNamespace(set_env=[], submitted=[], hostnames=[], domain=[], cleared=[], spawned=[], busy=False, builder_down=False)
+
+    monkeypatch.setattr(deploy_router.env, "get_env", lambda ns, name: {"OLD": "1"})
+    monkeypatch.setattr(deploy_router.env, "set_env", lambda ns, name, e, restart=True: rec.set_env.append(restart))
+    monkeypatch.setattr(pipeline, "spawn_background", lambda fn, *a: rec.spawned.append(fn))
+
+    def ensure_idle(db, app):
+        if rec.busy:
+            raise ValueError("배포가 진행 중이에요. 끝난 뒤에 다시 시도해 주세요")
+
+    async def submit_env(event, actor):
+        if rec.builder_down:
+            raise deploy_router.builder.BuilderError("connection refused")
+        rec.submitted.append(event)
+
+    async def apply_hostnames(app, actor):
+        if rec.builder_down:
+            raise deploy_router.builder.BuilderError("connection refused")
+        rec.hostnames.append(app.name)
+
+    monkeypatch.setattr(deploy_router.v2, "ensure_idle", ensure_idle)
+    monkeypatch.setattr(deploy_router.v2, "submit_env_revision", submit_env)
+    monkeypatch.setattr(deploy_router.v2, "apply_hostnames", apply_hostnames)
+    monkeypatch.setattr(deploy_router.hostnames, "set_custom_domain",
+                        lambda db, app, d, reconcile=True: rec.domain.append(reconcile) or {"domain": d, "status": "pending"})
+    monkeypatch.setattr(deploy_router.hostnames, "clear_custom_domain",
+                        lambda db, app, reconcile=True: rec.cleared.append(reconcile))
+    return rec
+
+
+def test_v2_env_change_writes_the_secret_then_asks_the_builder(cfg):
+    client = make_client(make_user(pipeline="v2"))
+    r = client.put("/deploy/env", json={"env": {"A": "1"}})
+    assert r.status_code == 200
+    assert cfg.set_env == [False]                                 # Deployment은 건드리지 않는다 (Argo가 다시 띄운다)
+    assert len(cfg.submitted) == 1
+    ev = cfg.submitted[0]
+    assert (ev.kind, ev.status, ev.last_event_seq) == ("env_change", "applied", 0)
+    assert cfg.spawned == []                                      # v1의 롤아웃 감시 스레드는 안 뜬다
+
+
+def test_v1_env_change_is_unchanged(cfg):
+    r = make_client(make_user(pipeline="v1")).put("/deploy/env", json={"env": {"A": "1"}})
+    assert r.status_code == 200
+    assert cfg.set_env == [True] and cfg.submitted == [] and len(cfg.spawned) == 1
+
+
+def test_v2_env_change_waits_while_a_deploy_is_running(cfg):
+    cfg.busy = True
+    r = make_client(make_user(pipeline="v2")).put("/deploy/env", json={"env": {"A": "1"}})
+    assert r.status_code == 409 and "배포가 진행 중" in r.json()["detail"]
+    assert cfg.set_env == [] and cfg.submitted == []              # Secret도 건드리지 않았다
+
+
+def test_v2_env_change_reports_a_builder_failure(cfg):
+    cfg.builder_down = True
+    r = make_client(make_user(pipeline="v2")).put("/deploy/env", json={"env": {"A": "1"}})
+    assert r.status_code == 502 and "저장했지만" in r.json()["detail"]
+    assert cfg.set_env == [False]                                 # Secret은 이미 저장됐다
+
+
+def test_v2_domain_goes_through_the_builder(cfg):
+    client = make_client(make_user(pipeline="v2"))
+    assert client.put("/deploy/domain", json={"domain": "www.example.com"}).status_code == 200
+    assert cfg.domain == [False] and len(cfg.hostnames) == 1      # route를 직접 안 고치고 빌더로 반영한다
+    assert client.delete("/deploy/domain").json() == {"status": "cleared"}
+    assert cfg.cleared == [False] and len(cfg.hostnames) == 2
+
+
+def test_v1_domain_is_unchanged(cfg):
+    client = make_client(make_user(pipeline="v1"))
+    assert client.put("/deploy/domain", json={"domain": "www.example.com"}).status_code == 200
+    client.delete("/deploy/domain")
+    assert cfg.domain == [True] and cfg.cleared == [True] and cfg.hostnames == []
+
+
+def test_v2_domain_waits_while_a_deploy_is_running(cfg):
+    cfg.busy = True
+    client = make_client(make_user(pipeline="v2"))
+    assert client.put("/deploy/domain", json={"domain": "www.example.com"}).status_code == 400
+    assert client.delete("/deploy/domain").status_code == 409
+    assert cfg.domain == [] and cfg.cleared == []
+
+
+def test_v2_domain_reports_a_builder_failure(cfg):
+    cfg.builder_down = True
+    r = make_client(make_user(pipeline="v2")).put("/deploy/domain", json={"domain": "www.example.com"})
+    assert r.status_code == 502 and "저장했지만" in r.json()["detail"]
 
 
 def test_v1_app_delete_still_works(monkeypatch):

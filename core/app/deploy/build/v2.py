@@ -11,6 +11,7 @@ v2가 아직 받지 않는 것 (빌더가 400으로 거부하거나, 한 앱이 
 import asyncio
 import logging
 import os.path
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -337,3 +338,52 @@ async def run_v2_rollback(build_id: str) -> None:
             _fail(db, build, record, f"오케스트레이션 에러: {e}")
     finally:
         db.close()
+
+
+# ---- 설정 변경 (환경변수·도메인) -------------------------------------------------------------------
+# v2 앱의 Deployment·HTTPRoute는 Argo가 git values로 그린다. core가 직접 고치면 Argo가 되돌리므로,
+# 값만 바꾸는 요청(kind=config)을 빌더에 보내 values를 커밋하게 한다 — Argo가 적용한다.
+#   환경변수: Secret({app}-env)은 core가 쓰고(Argo가 안 건드린다), envRevision을 올려 Pod을 다시 띄운다.
+#   도메인: hostnames 목록(슬롯 규칙으로 계산)을 values에 싣는다.
+# 서버 배포가 도는 중에는 보내지 않는다 — 같은 ns의 요청이 겹치면 빌더가 먼저 온 쪽을 취소하게 되어 배포가 죽는다.
+
+_ACTIVE = ("queued", "building", "built", "deploying")
+
+
+def ensure_idle(db, app: App) -> None:
+    busy = (
+        db.query(Build)
+        .filter(Build.app_id == app.id, Build.runtime != "static", Build.status.in_(_ACTIVE))
+        .first()
+    )
+    if busy is not None:
+        raise ValueError("배포가 진행 중이에요. 끝난 뒤에 다시 시도해 주세요")
+
+
+def config_payload(build_id: str, actor: User, namespace: str, values: dict) -> dict:
+    return {
+        "build_id": build_id,
+        "actor": actor.id.hex[:8],
+        "namespace": namespace,
+        "slot": "server",
+        "kind": "config",
+        "values": values,
+    }
+
+
+# 환경변수를 바꿨다 — Secret은 이미 썼고, envRevision을 올려 Pod을 다시 띄우게 한다.
+# 시각(초)을 쓴다: 늘 커지고, 직전 값과 같을 일이 없어서 카운터를 따로 저장하지 않아도 된다.
+# 결과(committed → deployed 또는 failed)는 콜백이 이 환경변수 변경 행(event)에 반영한다.
+async def submit_env_revision(event: Build, actor: User) -> None:
+    await builder.submit(
+        config_payload(event.build_id, actor, event.tenant_id, {"envRevision": int(time.time())})
+    )
+
+
+# 도메인이 바뀌었다 — 슬롯 규칙으로 계산한 hostnames를 values에 싣는다 (새 목록이 route를 통째로 대체한다).
+# 이 요청은 이력 행이 없다(도메인 변경은 이력에 안 남는다) — 콜백은 모르는 build_id라 무시된다.
+async def apply_hostnames(app: App, actor: User) -> None:
+    server_hosts, _ = _slot_hostnames(app)
+    await builder.submit(
+        config_payload(uuid.uuid4().hex[:8], actor, app.namespace, {"hostnames": server_hosts})
+    )

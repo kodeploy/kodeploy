@@ -15,6 +15,7 @@ from app.auth.deps import get_current_user
 from app.auth.model import User
 from app.auth import github_app, service as auth_service
 from app.deploy import crud, status
+from app.builder import client as builder
 from app.deploy.build import github, pipeline, v2, validation
 from app.deploy.build.naming import repo_key
 from app.deploy.console import dbquery, logs, metrics, snapshots, terminal
@@ -95,13 +96,6 @@ def current_app(app: App | None = Depends(current_app_or_none)) -> App:
 
 def viewer_app(app: App | None = Depends(viewer_app_or_none)) -> App:
     return _required(app)
-
-
-# v2(빌더·Argo) 앱은 core가 리소스를 직접 바꾸면 Argo가 되돌린다(env·route).
-# config 요청이 빌더에 연결되기 전까지 막는다.
-def _reject_v2(app: App, what: str) -> None:
-    if v2.is_v2(app):
-        raise HTTPException(status_code=501, detail=f"새 경로(v2)에서 아직 지원하지 않습니다: {what}")
 
 
 # Build ORM 객체 → StatusResponse 응답 DTO 변환.
@@ -232,12 +226,17 @@ async def env_put(
 ) -> EnvVarsResponse:
     if app is None:
         raise HTTPException(status_code=400, detail="첫 배포 완료 후 환경변수 설정 가능")
-    _reject_v2(app, "환경변수 변경")
     tenant_id = app.namespace
+    is_v2 = v2.is_v2(app)
+    if is_v2:   # v2는 Pod 재시작을 Argo가 한다 — 서버 배포가 도는 중이면 요청이 겹쳐 배포가 죽으니 먼저 막는다
+        try:
+            v2.ensure_idle(db, app)
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
     # 변경 전 현재 env (Secret) 조회 — set_env 전에 받아둬야 diff 계산 가능
     old_env = env.get_env(tenant_id, app.name)
     try:
-        env.set_env(tenant_id, app.name, req.env)
+        env.set_env(tenant_id, app.name, req.env, restart=not is_v2)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -283,9 +282,24 @@ async def env_put(
         kind="env_change",
         status="applied",
         env_change_summary=", ".join(entries),  # "KEY (추가), KEY2 (수정), KEY3 (삭제)"
+        last_event_seq=0 if is_v2 else None,   # v2 표시 겸 빌더 콜백 seq 시작점
     )
     db.add(event)
     db.commit()
+
+    if is_v2:
+        # Secret은 이미 썼다. envRevision을 올리는 커밋을 빌더에 맡기면 Argo가 Pod을 다시 띄우고,
+        # 결과(deployed 또는 failed)는 콜백이 이 행에 반영한다.
+        try:
+            await v2.submit_env_revision(event, user)
+        except builder.BuilderError as e:
+            event.status, event.error = "failed", f"빌더가 받지 않았습니다: {e}"
+            db.commit()
+            raise HTTPException(
+                status_code=502,
+                detail=f"환경변수는 저장했지만 적용 요청이 실패했어요 ({e}). 다음 배포 때 반영돼요",
+            )
+        return EnvVarsResponse(env=req.env)
 
     # Pod이 새 env로 부팅했는지 백그라운드 폴링 → 이 event row의 status를 running/failed로 갱신.
     # 동기 K8s 클라이언트를 쓰므로 메인 루프 대신 전용 스레드에서 (pipeline.spawn_background).
@@ -605,33 +619,58 @@ def get_domain(
 
 # 커스텀 도메인 연결/변경 — CF custom hostname 생성 + 앱 HTTPRoute에 hostname 주입.
 @router.put("/domain")
-def put_domain(
+async def put_domain(
     req: DomainRequest,
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     app: App | None = Depends(current_app_or_none),
 ) -> dict:
     if app is None:
         raise HTTPException(status_code=400, detail="먼저 앱을 배포한 후 커스텀 도메인을 연결할 수 있습니다")
-    _reject_v2(app, "도메인 변경")
+    is_v2 = v2.is_v2(app)
     try:
-        result = hostnames.set_custom_domain(db, app, req.domain)
+        if is_v2:
+            v2.ensure_idle(db, app)   # 서버 배포가 도는 중이면 빌더 요청이 겹쳐 배포가 죽는다
+        # CF·K8s 호출이 동기라 메인 루프를 막지 않게 스레드에서. v2는 route를 Argo가 그리므로 직접 안 고친다.
+        result = await asyncio.to_thread(hostnames.set_custom_domain, db, app, req.domain, not is_v2)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    if is_v2:
+        await _apply_hostnames_or_502(app, user)
     result["cname_target"] = config.CUSTOM_DOMAIN_CNAME_TARGET
     return result
 
 
 # 커스텀 도메인 해제 — CF custom hostname 삭제 + route에서 hostname 제거.
 @router.delete("/domain")
-def delete_domain(
+async def delete_domain(
     db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
     app: App | None = Depends(current_app_or_none),
 ) -> dict:
     if app is None:
         return {"status": "cleared"}
-    _reject_v2(app, "도메인 변경")
-    hostnames.clear_custom_domain(db, app)
+    is_v2 = v2.is_v2(app)
+    if is_v2:
+        try:
+            v2.ensure_idle(db, app)
+        except ValueError as e:
+            raise HTTPException(status_code=409, detail=str(e))
+    await asyncio.to_thread(hostnames.clear_custom_domain, db, app, not is_v2)
+    if is_v2:
+        await _apply_hostnames_or_502(app, user)
     return {"status": "cleared"}
+
+
+# v2: 바뀐 hostnames를 빌더로 보낸다. 도메인 자체(CF·DB)는 이미 바뀐 뒤라, 요청이 실패하면 그 사실을 알려 다시 시도하게 한다.
+async def _apply_hostnames_or_502(app: App, user: User) -> None:
+    try:
+        await v2.apply_hostnames(app, user)
+    except builder.BuilderError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"도메인은 저장했지만 주소 반영 요청이 실패했어요 ({e}). 같은 도메인을 다시 저장해 보세요",
+        )
 
 
 # 앱 완전 삭제 — K8s 리소스 + PVC + builds + 앱 행 삭제.

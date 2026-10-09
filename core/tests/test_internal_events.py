@@ -214,3 +214,39 @@ def test_delete_request_events_skip_builds_table(env):
         v2._deleting.pop("dd44ee55", None)
     assert r.status_code == 200 and r.json() == {"result": "delete"}
     assert got == [None]
+
+
+# --- 환경변수 변경 행 (v2: config 요청의 결과) ---
+
+def _add_env_change(status="applied", bid="e1e1e1e1"):
+    with events.SessionLocal() as s:
+        s.add(Build(build_id=bid, repo_url="r", branch="main", image="i", app_name="demo", port=8080, runtime="java",
+                    kind="env_change", status=status, user_id=UID, last_event_seq=0))
+        s.commit()
+
+
+def _status(bid):
+    with events.SessionLocal() as s:
+        return s.get(Build, bid).status
+
+
+def test_env_change_stays_applied_until_deployed(env):
+    _add_env_change()
+    assert env.post({"seq": 1, "type": "committed", "image": "i"}, build_id="e1e1e1e1").json() == {"result": "committed"}
+    assert _status("e1e1e1e1") == "applied"                    # 환경변수 상태 문구에 "deploying"이 없다
+    env.post({"seq": 2, "type": "deployed"}, build_id="e1e1e1e1")
+    assert _status("e1e1e1e1") == "running"
+    assert env.spawned == []                                   # 크래시 감시(postwatch)는 빌드에만 붙인다
+
+
+def test_env_change_failure_is_marked_failed(env):
+    _add_env_change()
+    env.post({"seq": 1, "type": "failed", "stage": "sync", "reason": "boom"}, build_id="e1e1e1e1")
+    assert _status("e1e1e1e1") == "failed"
+
+
+def test_regular_build_still_goes_deploying_then_watched(env):
+    env.post({"seq": 1, "type": "committed", "image": "ghcr.io/u/x/demo:3f9a2c1d@sha256:" + "a" * 64})
+    assert env.row()[0].status == "deploying"
+    env.post({"seq": 2, "type": "deployed"})
+    assert env.row()[0].status == "running" and len(env.spawned) == 1

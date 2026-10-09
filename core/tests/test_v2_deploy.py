@@ -434,3 +434,55 @@ def test_run_rollback_marks_failed_when_builder_refuses(runner):
     runner.monkeypatch.setattr(v2.builder, "submit", refuse)
     asyncio.run(v2.run_v2_rollback("3f9a2c1d"))
     assert runner.build.status == "failed" and "빌더가 받지 않았습니다" in runner.build.error
+
+
+# --- 설정 변경 (환경변수·도메인) ---
+
+def test_config_payload_has_values_only():
+    p = v2.config_payload("aabbccdd", User(id=UID), "tenant-d6d8b759", {"envRevision": 5})
+    assert p == {
+        "build_id": "aabbccdd", "actor": UID.hex[:8], "namespace": "tenant-d6d8b759",
+        "slot": "server", "kind": "config", "values": {"envRevision": 5},
+    }
+    assert not {"unit", "build", "image"} & set(p)               # 값만 바꾼다 — 이미지·빌드는 그대로
+
+
+def test_ensure_idle():
+    db = MagicMock()
+    db.query.return_value.filter.return_value.first.return_value = None
+    v2.ensure_idle(db, v2_app())                                  # 진행 중인 서버 배포가 없다
+    db.query.return_value.filter.return_value.first.return_value = Build(build_id="x", status="building")
+    with pytest.raises(ValueError, match="배포가 진행 중"):
+        v2.ensure_idle(db, v2_app())
+
+
+def test_env_revision_is_time_based_and_bumps_each_time(monkeypatch):
+    sent = []
+
+    async def submit(payload):
+        sent.append(payload)
+
+    monkeypatch.setattr(v2.builder, "submit", submit)
+    ticks = iter([1_800_000_000, 1_800_000_001])
+    monkeypatch.setattr(v2.time, "time", lambda: next(ticks))
+    event = Build(build_id="ee11ff22", namespace="app-9abcdef0", user_id=UID)
+    asyncio.run(v2.submit_env_revision(event, User(id=UID)))
+    asyncio.run(v2.submit_env_revision(event, User(id=UID)))
+    assert [p["values"]["envRevision"] for p in sent] == [1_800_000_000, 1_800_000_001]   # 매번 달라서 Pod이 다시 뜬다
+    assert sent[0]["namespace"] == "app-9abcdef0" and sent[0]["build_id"] == "ee11ff22"
+
+
+def test_apply_hostnames_sends_the_slot_rule_list(monkeypatch):
+    sent = []
+
+    async def submit(payload):
+        sent.append(payload)
+
+    monkeypatch.setattr(v2.builder, "submit", submit)
+    app = v2_app()
+    app.custom_domain = "www.example.com"
+    app.site_enabled = False
+    asyncio.run(v2.apply_hostnames(app, User(id=UID)))
+    p = sent[0]
+    assert p["kind"] == "config" and p["namespace"] == app.namespace
+    assert p["values"] == {"hostnames": ["demo.kodeploy.com", "demo-api.kodeploy.com", "www.example.com"]}

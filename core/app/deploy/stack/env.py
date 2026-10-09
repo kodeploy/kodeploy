@@ -68,7 +68,8 @@ def get_env(tenant_id: str, app_name: str) -> dict[str, str]:
 # Secret 통째 replace + Pod 재생성 트리거.
 # 부분 patch 안 함 — 클라이언트가 보낸 dict가 새 전체 상태.
 # Deployment 없으면 (첫 배포 전) Secret만 만들고 끝 — 다음 첫 배포 때 자연 적용.
-def set_env(tenant_id: str, app_name: str, env: dict[str, str]) -> None:
+# restart=False면 Secret만 바꾼다 — v2 앱은 Pod 재시작을 Argo가 하므로(envRevision 커밋) core가 Deployment를 건드리지 않는다.
+def set_env(tenant_id: str, app_name: str, env: dict[str, str], restart: bool = True) -> None:
     validate_env(env)
 
     name = _secret_name(app_name)
@@ -96,6 +97,9 @@ def set_env(tenant_id: str, app_name: str, env: dict[str, str]) -> None:
         if e.status != 404:
             raise
         core.create_namespaced_secret(namespace=tenant_id, body=body)
+
+    if not restart:
+        return
 
     # rolling update 트리거 — template.annotations에 매번 다른 timestamp.
     # kubectl rollout restart가 내부적으로 동일 patch를 호출함.

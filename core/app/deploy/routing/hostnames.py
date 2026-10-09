@@ -93,7 +93,8 @@ def _reconcile_route_hostnames(app: App) -> None:
 
 
 # 커스텀 도메인 연결/변경 — CF custom hostname 생성 + App 저장 + 앱 route에 hostname 주입.
-def set_custom_domain(db: Session, app: App, domain: str) -> dict:
+# reconcile=False면 route를 직접 고치지 않는다 — v2 앱은 route를 Argo가 그리므로 호출한 쪽이 빌더로 반영한다.
+def set_custom_domain(db: Session, app: App, domain: str, reconcile: bool = True) -> dict:
     if not domains.is_configured():
         raise ValueError("커스텀 도메인이 서버에 설정되지 않았습니다")
     domain = _normalize_domain(domain)
@@ -130,7 +131,8 @@ def set_custom_domain(db: Session, app: App, domain: str) -> dict:
 
     # DB 갱신 후 reconcile — 슬롯 규칙대로 정적(있으면) 또는 서버 route에 주입.
     # 옛 도메인은 리스트에서 빠지는 걸로 자연 제거됨.
-    _reconcile_route_hostnames(app)
+    if reconcile:
+        _reconcile_route_hostnames(app)
     return {
         "domain": app.custom_domain,
         "status": app.custom_domain_status,
@@ -160,16 +162,17 @@ def refresh_custom_domain_status(db: Session, app: App) -> dict:
 
 
 # 커스텀 도메인 해제 — App 클리어 후 reconcile(route에서 자연 제거) + CF custom hostname 삭제.
-def clear_custom_domain(db: Session, app: App) -> None:
+def clear_custom_domain(db: Session, app: App, reconcile: bool = True) -> None:
     if not app.custom_domain:
         return
     domain = app.custom_domain
     app.custom_domain = None
     app.custom_domain_status = None
     db.commit()
-    try:
-        _reconcile_route_hostnames(app)
-    except ApiException:
-        pass
+    if reconcile:
+        try:
+            _reconcile_route_hostnames(app)
+        except ApiException:
+            pass
     domains.delete(domain)
 

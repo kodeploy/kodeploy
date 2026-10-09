@@ -248,7 +248,7 @@ def roles(db, monkeypatch):
     monkeypatch.setattr(status, "list_builds", lambda d, app_id=None: [])
     monkeypatch.setattr(status, "get_state", lambda d, bid, app_id=None: None)
     monkeypatch.setattr(deploy_router.env, "get_env", lambda ns, name: {"SECRET": "x"})
-    monkeypatch.setattr(deploy_router.env, "set_env", lambda ns, name, e: None)
+    monkeypatch.setattr(deploy_router.env, "set_env", lambda ns, name, e, restart=True: None)
     monkeypatch.setattr(deploy_router.logs, "fetch_app_logs", lambda ns, name: {"current": ""})
     seen = {}
 

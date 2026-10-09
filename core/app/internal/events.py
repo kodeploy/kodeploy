@@ -64,7 +64,9 @@ def apply(build_id: str, ev: dict) -> str:
         elif kind == "log":
             _append_logs(build, ev.get("lines") or [])
         elif kind == "committed":
-            build.status = "deploying"
+            # 환경변수 변경 행은 "적용 중"(applied) 그대로 두고 deployed에서 성공으로 넘긴다 (env 상태 문구에 deploying이 없다)
+            if (build.kind or "build") != "env_change":
+                build.status = "deploying"
             if ev.get("image"):
                 build.image = ev["image"]           # repo:tag@sha256:… (롤백 때 쓸 수 있게 digest까지)
             if record is not None:
@@ -105,7 +107,7 @@ def apply(build_id: str, ev: dict) -> str:
 
         if diagnosis and build.ai_status == "pending":
             pipeline.spawn_background(_diagnose, build_id, diagnosis)
-        if kind == "deployed" and build.status == "running":
+        if kind == "deployed" and build.status == "running" and (build.kind or "build") != "env_change":
             # 성공은 바로 표시하고, 뒤에서 60초 동안 시작 직후 크래시를 본다 (postwatch)
             pipeline.spawn_background(postwatch.watch_after_deploy, build_id)
         return kind
