@@ -20,6 +20,7 @@ import { ArrowRight, ArrowUpRight, CircleCheck, CircleX, Plus, Trash2 } from "lu
 import { createDeploy, getAppStatus, listBuilds } from "../../api/deploy.js";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import { useOptionalApp } from "../app/AppScope.jsx";
+import { can } from "../../lib/roles.js";
 import { APP_STATUS_STYLES } from "../AppStatusBadge.jsx";
 
 // 백엔드 _validate_static_env와 같은 규칙 — 여기서 먼저 막아 왕복을 아낀다.
@@ -43,6 +44,8 @@ export default function FrontendDeploy() {
   // 앱 화면(/apps/:id/deploy/frontend) 안이면 그 앱, 밖이면 앱이 아직 없는 사람의 프론트엔드 단독 첫 배포다.
   const scope = useOptionalApp();
   const app = scope?.app || null;
+  // 초대받은 앱(편집 권한)은 저장소를 바꿀 수 없다 — 서버가 앱이 쓰던 저장소로만 받는다
+  const repoLocked = !!app && !can(app, "owner");
 
   // 서버 슬롯 선언(되돌려 보낼 값) + Pod 상태 — 레일의 "연결할 앱" 정보원.
   const [serverBuild, setServerBuild] = useState(null);
@@ -213,6 +216,7 @@ export default function FrontendDeploy() {
                 // 비우면 백엔드가 서버 슬롯 repo로 fallback 한다 — 그 주소를 placeholder로 보여 준다.
                 placeholder={serverBuild?.repo_url || "https://github.com/me/my-web"}
                 spellCheck={false}
+                readOnly={repoLocked}
                 disabled={submitting}
               />
             </Field>

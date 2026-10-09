@@ -7,6 +7,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from app.apps import service as apps_service
 from app.auth import github_app
 from app.auth.model import User
 from app.deploy.model import Build
@@ -52,13 +53,18 @@ def _repo_is_public(repo_url: str) -> "bool | None":
         return None
 
 
-# 빌드 user의 installation id 조회 (private repo tree/clone 토큰 발급용). 없으면 None.
+# 빌드의 installation id 조회 (private repo tree/clone 토큰 발급용). 없으면 None.
+# 앱이 있으면 앱 주인의 연결이다 — 편집 권한으로 초대받은 사람이 배포해도 주인의 비공개 저장소를 본다.
 def _installation_id_for(build: Build) -> "int | None":
-    if build.user_id is None:
+    if build.user_id is None and build.app_id is None:
         return None
     db = SessionLocal()
     try:
-        owner = db.query(User).filter_by(id=build.user_id).first()
+        if build.app_id is not None:
+            app = apps_service.get_app(db, build.app_id)
+            if app is not None:
+                return apps_service.repo_installation_id(db, app)
+        owner = db.query(User).filter_by(id=build.user_id).first() if build.user_id else None
         return owner.github_installation_id if owner else None
     finally:
         db.close()

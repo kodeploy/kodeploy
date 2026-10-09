@@ -26,6 +26,7 @@ import {
 import { GITHUB_INSTALL_URL } from "../../api/auth.js";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import { useOptionalApp } from "../app/AppScope.jsx";
+import { can } from "../../lib/roles.js";
 import StepRepo, { STEP1_W } from "./steps/StepRepo.jsx";
 import StepReview from "./steps/StepReview.jsx";
 import StepRuntime from "./steps/StepRuntime.jsx";
@@ -48,6 +49,9 @@ export default function DeployWizard({ onRequestGuide }) {
   const scope = useOptionalApp();
   const scopeApp = scope?.app || null;
   const isFirstDeploy = !scopeApp;
+  // 초대받은 앱(편집 권한)에서는 저장소를 바꿀 수 없다 — 주인의 GitHub 연결이 주인의 다른 저장소까지 열려 있어서
+  // 서버가 앱이 쓰던 저장소로만 받는다. 브랜치만 고른다.
+  const repoLocked = !!scopeApp && !can(scopeApp, "owner");
   // 새 앱인데 이미 등급 한도만큼 앱이 있다 (첫 앱 만들기는 항상 가능). 서버도 같은 규칙으로 막는다.
   const atAppLimit =
     isFirstDeploy && (user?.app_count ?? 0) > 0 && user?.max_apps != null && user.app_count >= user.max_apps;
@@ -193,8 +197,9 @@ export default function DeployWizard({ onRequestGuide }) {
     const br = branch.trim() || "main";
 
     // 연결된 저장소면 접근 가능 확정 — 브랜치 목록이 있으면 브랜치 존재까지 판정, 없으면 통과.
+    // 초대받은 앱의 저장소는 주인의 연결로 조회하므로(내 목록에는 없다) 연결된 저장소와 같게 본다.
     const slug = `${owner}/${repo}`.toLowerCase();
-    const connected = ghRepos.some((r) => (r.full_name || "").toLowerCase() === slug);
+    const connected = repoLocked || ghRepos.some((r) => (r.full_name || "").toLowerCase() === slug);
     if (connected) {
       if (ghBranches.length > 0) {
         const hasBranch = ghBranches.some((b) => b.name === br);
@@ -224,7 +229,7 @@ export default function DeployWizard({ onRequestGuide }) {
       }
     }, 500);
     return () => clearTimeout(timer);
-  }, [repoUrl, branch, ghRepos, ghBranches]);
+  }, [repoUrl, branch, ghRepos, ghBranches, repoLocked]);
 
   // repo가 유효하면 그 repo의 브랜치 목록을 받아 드롭다운 채움 (백엔드 경유 — private도).
   // repoCheck와 같은 500ms 디바운스. repo 형식이 안 맞으면 빈 목록.
@@ -533,6 +538,7 @@ export default function DeployWizard({ onRequestGuide }) {
               onProjectPath={setProjectPath}
               submitting={submitting}
               installUrl={GITHUB_INSTALL_URL}
+              repoLocked={repoLocked}
             />
           )}
 

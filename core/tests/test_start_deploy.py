@@ -262,3 +262,29 @@ def test_app_name_immutable_after_first_deploy(spawned):
     builds = run_deploy(MagicMock(), user, name="other")
     assert APPS[user.id].name == "fixed"       # 이름 변경 무시 — 첫 배포에 고정
     assert builds[0].app_name == "fixed"
+
+
+# --- 편집 권한 멤버의 저장소 제한 ---
+
+def test_restricted_deploy_allows_known_repo_in_any_spelling(spawned):
+    allowed = {"https://github.com/u/repo"}
+    builds = run_deploy(MagicMock(), make_user(), repo_url="https://github.com/u/repo.git", allowed_repos=allowed)
+    assert len(builds) == 1
+
+
+def test_restricted_deploy_rejects_other_repo_before_any_spawn(spawned):
+    with pytest.raises(ValueError, match="저장소"):
+        run_deploy(MagicMock(), make_user(), repo_url="https://github.com/u/someone-elses-private",
+                   allowed_repos={"https://github.com/u/repo"})
+    assert spawned == []
+
+
+def test_restricted_deploy_rejects_other_static_repo(spawned):
+    with pytest.raises(ValueError, match="저장소"):
+        run_deploy(MagicMock(), make_user(), use_static=True, static_repo_url="https://github.com/u/other",
+                   allowed_repos={"https://github.com/u/repo"})
+    assert spawned == []
+
+
+def test_unrestricted_deploy_is_unchanged(spawned):
+    assert len(run_deploy(MagicMock(), make_user(), repo_url="https://github.com/anyone/anything")) == 1

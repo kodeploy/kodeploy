@@ -17,6 +17,13 @@ def _normalize_repo_url(url: str) -> str:
     return url
 
 
+# 저장소 주소를 같은지 비교하는 키 — 대소문자, http/https, 끝의 .git·슬래시 차이를 없앤다.
+def repo_key(url: str) -> str:
+    u = (url or "").strip().lower().rstrip("/")
+    u = u.removesuffix(".git")
+    return u.replace("http://", "https://", 1)
+
+
 # 예약 서브도메인 (시스템 인프라용) — 유저 입력 거절
 RESERVED_NAMES = {
     "api",       # kodeploy-core

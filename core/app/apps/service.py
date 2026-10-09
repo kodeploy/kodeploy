@@ -61,3 +61,20 @@ def app_limit(db: Session, user: User) -> int | None:
 def at_app_limit(db: Session, user: User) -> bool:
     limit = app_limit(db, user)
     return limit is not None and db.query(App).filter(App.owner_id == user.id).count() >= limit
+
+
+# 이 앱이 지금까지 배포한 저장소들 (비교용 키). 편집 권한으로 초대받은 사람은 이 저장소로만 배포할 수 있다 —
+# 주인의 GitHub 연결(installation)은 주인의 모든 저장소에 열려 있어서, 아무 저장소나 받게 두면 안 된다.
+def app_repo_keys(db: Session, app: App) -> set[str]:
+    from app.deploy.build.naming import repo_key
+    from app.deploy.model import Build
+
+    rows = db.query(Build.repo_url).filter(Build.app_id == app.id).distinct().all()
+    return {repo_key(r[0]) for r in rows if r[0]}
+
+
+# 이 앱의 저장소를 받을 때 쓸 GitHub 연결(installation id). 앱 주인의 것이다 — 편집 권한으로 초대받은 사람은
+# 자기 연결로는 주인의 비공개 저장소를 볼 수 없다.
+def repo_installation_id(db: Session, app: App) -> int | None:
+    owner = db.get(User, app.owner_id)
+    return owner.github_installation_id if owner else None

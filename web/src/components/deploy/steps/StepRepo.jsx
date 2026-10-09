@@ -26,6 +26,7 @@ export default function StepRepo({
   onProjectPath,
   submitting,
   installUrl,
+  repoLocked = false,
 }) {
   // 브랜치 목록을 못 받아왔으면(미연결·비공개·형식오류) 자유 입력으로 떨어진다 —
   // select만 두면 목록이 빈 순간 브랜치를 아예 못 고른다.
@@ -36,7 +37,14 @@ export default function StepRepo({
 
   return (
     <div style={{ paddingTop: 56, maxWidth: STEP1_W }}>
-      <StepHeading title="저장소를 연결하세요." desc="배포할 앱의 GitHub 저장소를 선택하세요." />
+      <StepHeading
+        title={repoLocked ? "브랜치를 고르세요." : "저장소를 연결하세요."}
+        desc={
+          repoLocked
+            ? "저장소는 앱 주인이 정한 그대로 써요. 배포할 브랜치만 고를 수 있어요."
+            : "배포할 앱의 GitHub 저장소를 선택하세요."
+        }
+      />
 
       <FieldLabel htmlFor="wz-repo">GitHub 저장소</FieldLabel>
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -48,24 +56,27 @@ export default function StepRepo({
           spellCheck={false}
           autoCapitalize="off"
           disabled={submitting}
+          readOnly={repoLocked}
           className="kd-input"
           style={{ flex: 1, minWidth: 0 }}
         />
-        <button
-          type="button"
-          onClick={onToggleRepoList}
-          disabled={submitting}
-          className="kd-btn-secondary kd-btn-md"
-          style={{ flexShrink: 0, width: 102 }}
-        >
-          불러오기
-        </button>
+        {!repoLocked && (
+          <button
+            type="button"
+            onClick={onToggleRepoList}
+            disabled={submitting}
+            className="kd-btn-secondary kd-btn-md"
+            style={{ flexShrink: 0, width: 102 }}
+          >
+            불러오기
+          </button>
+        )}
       </div>
 
       {/* 연결된 저장소 목록 — "불러오기"로 여닫는다. 항목 높이 var(--row-sm), 3개 넘으면 스크롤.
           맨 아래 "저장소 추가"는 스크롤 밖에 고정 — 연결된 게 많아도 항상 보인다
           (GitHub App은 고른 저장소만 접근하므로, 더 쓰려면 설치 화면에서 저장소를 더 골라야 한다). */}
-      {repoListOpen && (
+      {repoListOpen && !repoLocked && (
         <div
           style={{
             marginTop: 8,
@@ -148,7 +159,7 @@ export default function StepRepo({
             </span>
             <Divider />
             <span className="kd-t-body-s" style={{ color: "var(--fg-3)" }}>
-              {repoIsPrivate ? "연결된 저장소" : "공개 저장소"}
+              {repoLocked ? "앱 주인의 저장소" : repoIsPrivate ? "연결된 저장소" : "공개 저장소"}
             </span>
             <Divider />
             <Check aria-hidden size={18} strokeWidth={1.8} style={{ color: "var(--ok-fg)" }} />

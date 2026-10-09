@@ -24,7 +24,7 @@ from app.deploy.console import logs as runtime_logs, snapshots
 from app.deploy.stack import env as env_module, manifests, r2
 from app.deploy.build import diagnose, v2
 from app.deploy.build.github import _detect_build, _fetch_github_raw
-from app.deploy.build.naming import _normalize_repo_url, _resolve_app
+from app.deploy.build.naming import _normalize_repo_url, _resolve_app, repo_key
 from app.deploy.build.source import validate_branch, validate_repo_path, validate_repo_url
 from app.deploy.build.validation import (
     _validate_static_env,
@@ -303,8 +303,13 @@ def _provision_git_auth(build: Build) -> str:
         return ""
     db = SessionLocal()
     try:
-        owner = db.query(User).filter_by(id=build.user_id).first()
-        installation_id = owner.github_installation_id if owner else None
+        # 저장소 접근은 앱 주인의 GitHub 연결로 한다 — 편집 권한으로 초대받은 사람이 배포해도 주인의 비공개 저장소를 받는다
+        app_row = _app_of(db, build)
+        if app_row is not None:
+            installation_id = apps_service.repo_installation_id(db, app_row)
+        else:
+            owner = db.query(User).filter_by(id=build.user_id).first()
+            installation_id = owner.github_installation_id if owner else None
     finally:
         db.close()
     token = github_app.get_clone_token(installation_id)
@@ -374,6 +379,7 @@ async def start_deploy(
     output_dir: str = "",
     static_env: dict[str, str] | None = None,
     app: App | None = None,                # 배포할 앱. None이면 유저의 앱(없으면 첫 배포로 새로 만든다)
+    allowed_repos: set[str] | None = None,  # 주어지면 이 저장소(repo_key)로만 배포 — 편집 권한 멤버용
 ) -> list[Build]:
     has_server = runtime != "none"
     if not has_server and not use_static:
@@ -420,6 +426,13 @@ async def start_deploy(
         if static_branch.strip():
             validate_branch(static_branch.strip())
         validate_repo_path(static_project_path.strip("/"), "정적 사이트 경로")
+
+    # 편집 권한 멤버는 앱이 이미 쓰는 저장소로만 재배포한다 (주인의 GitHub 연결이 주인의 다른 저장소까지 열려 있다)
+    if allowed_repos is not None:
+        used = [repo_url] + ([static_repo_url] if use_static and static_repo_url.strip() else [])
+        for r in used:
+            if repo_key(_normalize_repo_url(r)) not in allowed_repos:
+                raise ValueError("편집 권한으로는 이 앱이 쓰던 저장소로만 배포할 수 있어요. 저장소를 바꾸려면 앱 주인이 해야 해요")
 
     # v2(빌더) 앱 — 조건이 안 맞으면 여기서 400 (아무것도 바꾸기 전). detect면 Dockerfile 경로를 확정한다.
     existing_app = app if app is not None else apps_service.get_user_app(db, user.id)

@@ -348,3 +348,61 @@ def test_migration_creates_and_drops_tables():
         with Operations.context(MigrationContext.configure(conn)):
             mod.upgrade()
         assert {"app_members", "app_invites"} <= set(sa.inspect(conn).get_table_names())
+
+
+# --- 비공개 저장소: 편집 권한 멤버는 주인의 연결로, 앱이 쓰던 저장소에 한해서만 ---
+
+def add_build(db, app, repo, user=None):
+    db.add(Build(build_id=uuid.uuid4().hex[:8], repo_url=repo, branch="main", image="i", app_name=app.name, port=1,
+                 runtime="python", user_id=(user or app).owner_id if user is None else user.id, app_id=app.id, status="running"))
+    db.commit()
+
+
+def test_repo_key_ignores_case_scheme_suffix_and_slash():
+    from app.deploy.build.naming import repo_key
+
+    keys = {repo_key(u) for u in ("https://github.com/Me/Shop.git", "http://github.com/me/shop/", " https://github.com/me/shop ")}
+    assert keys == {"https://github.com/me/shop"}
+
+
+def test_editor_is_limited_to_repos_the_app_already_uses(db, roles):
+    add_build(db, roles.app, "https://github.com/o/shop.git")
+    assert code(db, roles.editor, "post", f"/apps/{roles.app.id}/deploy", json=DEPLOY) == 200
+    assert roles.seen["allowed_repos"] == {"https://github.com/o/shop"}
+    assert code(db, roles.owner, "post", f"/apps/{roles.app.id}/deploy", json=DEPLOY) == 200
+    assert roles.seen["allowed_repos"] is None                      # 주인은 제한 없음
+
+
+def test_github_lookups_use_owner_connection_only_for_the_apps_repos(db):
+    from app.deploy.router import _github_installation
+
+    owner = add_user(db, "owner")
+    owner.github_installation_id = 111
+    editor = add_user(db, "editor")
+    editor.github_installation_id = 222
+    db.commit()
+    app = add_app(db, owner)
+    share(db, app, editor, "editor")
+    add_build(db, app, "https://github.com/o/shop.git")
+
+    assert _github_installation(db, owner, app, "https://github.com/anything/else") == 111       # 주인은 자기 연결
+    assert _github_installation(db, editor, app, "https://github.com/O/Shop") == 111              # 앱 저장소 → 주인의 연결
+    assert _github_installation(db, editor, app, "https://github.com/o/other-private") is None   # 다른 저장소는 못 연다
+    assert _github_installation(db, editor, None, "https://github.com/x/y") == 222                # 앱 밖(옛 경로)은 자기 연결
+
+
+def test_build_clones_with_the_app_owners_installation(db, monkeypatch):
+    from app.deploy.build import github as gh
+
+    owner = add_user(db, "owner")
+    owner.github_installation_id = 111
+    editor = add_user(db, "editor")
+    editor.github_installation_id = 222
+    db.commit()
+    app = add_app(db, owner)
+    share(db, app, editor, "editor")
+    monkeypatch.setattr(gh, "SessionLocal", lambda: db)
+    monkeypatch.setattr(db, "close", lambda: None)
+    build = Build(build_id="b1", repo_url="r", branch="main", image="i", app_name="shop", port=1, runtime="python",
+                  user_id=editor.id, app_id=app.id)          # 배포한 사람은 editor, 앱 주인은 owner
+    assert gh._installation_id_for(build) == 111

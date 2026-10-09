@@ -2,7 +2,7 @@ import { useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Admin from "./components/Admin.jsx";
 import AppLayout from "./components/app/AppLayout.jsx";
-import AppScope from "./components/app/AppScope.jsx";
+import AppScope, { RequireRole } from "./components/app/AppScope.jsx";
 import LegacyDashboard from "./components/app/LegacyDashboard.jsx";
 import AppOverview from "./components/app/AppOverview.jsx";
 import AppWorkspace from "./components/app/AppWorkspace.jsx";
@@ -90,8 +90,8 @@ export default function App() {
               {/* 앱 상세 — 셸(탭바)이 데이터를 폴링하고 탭 화면은 Outlet context로 받는다 */}
               <Route path="/apps/:appId" element={<AppScope />}>
                 {/* 배포 흐름 — 이 앱의 재배포 · 프론트엔드 · 진행 (사이드바 셸 밖) */}
-                <Route path="deploy" element={<FormView />} />
-                <Route path="deploy/frontend" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><FrontendDeploy /></div>} />
+                <Route path="deploy" element={<RequireRole need="editor"><FormView /></RequireRole>} />
+                <Route path="deploy/frontend" element={<RequireRole need="editor"><div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><FrontendDeploy /></div></RequireRole>} />
                 <Route path="deploy/progress" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><DeployProgress /></div>} />
                 <Route element={<AppLayout />}>
                   <Route index element={<AppOverview />} />

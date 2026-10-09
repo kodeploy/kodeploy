@@ -4,10 +4,11 @@
 // 여기서는 그 앱을 서버에서 한 번 찾아 context로 내려주고, api/deploy.js의 요청 경로도 그 앱으로 맞춘다
 // (/deploy/... 요청이 /apps/{id}/deploy/... 로 간다). 화면 쪽은 user.app_name 대신 useCurrentApp()을 쓴다.
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { Link, Outlet, useParams } from "react-router-dom";
+import { Link, Navigate, Outlet, useParams } from "react-router-dom";
 import { listApps, setActiveApp } from "../../api/deploy.js";
 import { useAppShell } from "../../contexts/AppShellContext.jsx";
 import { useAuth } from "../../contexts/AuthContext.jsx";
+import { can } from "../../lib/roles.js";
 
 const CurrentAppContext = createContext(null);
 
@@ -21,6 +22,12 @@ export function useCurrentApp() {
 // 앱 화면 안이면 { app, base, refreshApp }, 밖이면 null — 앱 안팎에서 모두 뜨는 화면(배포 마법사 등)이 쓴다.
 export function useOptionalApp() {
   return useContext(CurrentAppContext);
+}
+
+// 이 화면은 need 이상인 단계만 — 모자라면 앱 개요로 돌려보낸다 (서버도 같은 규칙으로 403을 준다).
+export function RequireRole({ need, children }) {
+  const { app, base } = useCurrentApp();
+  return can(app, need) ? children : <Navigate to={base} replace />;
 }
 
 export default function AppScope() {

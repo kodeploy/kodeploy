@@ -23,6 +23,7 @@ export const APPS = [
   { id: APP_ID, name: "my-api", site_enabled: true, custom_domain: null, created_at: "2026-09-01T00:00:00+00:00", role: "owner" },
   { id: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", name: "blog-server", site_enabled: false, custom_domain: null, created_at: "2026-09-10T00:00:00+00:00", role: "owner" },
   { id: "cccccccc-3333-4333-8333-cccccccccccc", name: "team-shop", site_enabled: false, custom_domain: null, created_at: "2026-09-12T00:00:00+00:00", role: "viewer", owner_login: "kim-dev" },
+  { id: "99999999-7777-4777-8777-999999999999", name: "partner-api", site_enabled: false, custom_domain: null, created_at: "2026-09-13T00:00:00+00:00", role: "editor", owner_login: "lee-dev" },
 ];
 
 const baseBuild = {

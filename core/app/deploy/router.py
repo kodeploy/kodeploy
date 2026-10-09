@@ -16,6 +16,7 @@ from app.auth.model import User
 from app.auth import github_app, service as auth_service
 from app.deploy import crud, status
 from app.deploy.build import github, pipeline, v2, validation
+from app.deploy.build.naming import repo_key
 from app.deploy.console import dbquery, logs, metrics, snapshots, terminal
 from app.deploy.routing import hostnames
 from app.deploy.stack import env, resources
@@ -145,6 +146,16 @@ def _to_status(build: Build, timing: dict | None = None) -> StatusResponse:
     )
 
 
+# 저장소를 조회할 때 쓸 GitHub 연결. 내 앱이면 내 연결이고, 편집 권한으로 초대받은 앱이면 그 앱이 쓰는 저장소에
+# 한해 주인의 연결을 쓴다 (내 연결로는 주인의 비공개 저장소가 안 보이고, 주인의 연결을 아무 저장소에나 쓰게 둘 수는 없다).
+def _github_installation(db: Session, user: User, app: App | None, repo_url: str) -> int | None:
+    if app is None or app.owner_id == user.id:
+        return user.github_installation_id
+    if repo_key(repo_url) in apps_service.app_repo_keys(db, app):
+        return apps_service.repo_installation_id(db, app)
+    return None
+
+
 # 배포 제출 — 스택 선언(서버+정적 슬롯)을 받아 슬롯별 빌드를 백그라운드로 시작.
 @router.post("", response_model=DeployResponse)
 async def create_deploy(
@@ -181,6 +192,10 @@ async def create_deploy(
             build_cmd=req.build_cmd,
             output_dir=req.output_dir,
             static_env=req.static_env,
+            # 편집 권한 멤버는 이 앱이 쓰던 저장소로만 (주인은 제한 없음)
+            allowed_repos=(
+                apps_service.app_repo_keys(db, app) if app is not None and app.owner_id != user.id else None
+            ),
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -664,11 +679,16 @@ def github_repos(user: User = Depends(get_current_user)) -> list[dict]:
 # 특정 repo의 브랜치 목록 — 배포 폼 브랜치 드롭다운용. ?repo=<github url>.
 # installation 토큰으로 private도 조회. /{build_id} GET보다 위에 등록해야 "github"가 build_id로 안 잡힘.
 @router.get("/github/branches")
-def github_branches(repo: str, user: User = Depends(get_current_user)) -> list[dict]:
+def github_branches(
+    repo: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    app: App | None = Depends(editor_app_or_none),
+) -> list[dict]:
     m = re.match(r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", repo.strip())
     if not m:
         return []
-    return github_app.list_branches(user.github_installation_id, m.group(1), m.group(2))
+    return github_app.list_branches(_github_installation(db, user, app, repo), m.group(1), m.group(2))
 
 
 # 저장소 런타임 추정 — 배포 폼 2단계 런타임 미리 채우기용. ?repo=<github url>&branch=&path=
@@ -676,10 +696,15 @@ def github_branches(repo: str, user: User = Depends(get_current_user)) -> list[d
 # /{build_id} GET보다 위에 등록해야 "github"가 build_id로 안 잡힘.
 @router.get("/github/detect")
 def github_detect(
-    repo: str, branch: str = "main", path: str = "", user: User = Depends(get_current_user),
+    repo: str,
+    branch: str = "main",
+    path: str = "",
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    app: App | None = Depends(editor_app_or_none),
 ) -> dict:
     return github.detect_runtime(
-        repo.strip(), branch.strip() or "main", path, user.github_installation_id,
+        repo.strip(), branch.strip() or "main", path, _github_installation(db, user, app, repo),
     )
 
 
