@@ -438,15 +438,20 @@ async def start_deploy(
     existing_app = app if app is not None else apps_service.get_user_app(db, user.id)
     use_v2 = existing_app is not None and v2.is_v2(existing_app)
     if use_v2:
-        dockerfile_path = await v2.check_submit(
+        build_mode, path = await v2.check_submit(
             user, runtime=runtime, repo_url=repo_url, branch=branch, build_mode=build_mode,
             dockerfile_path=dockerfile_path, use_static=use_static, init_dump_token=init_dump_token,
+            project_path=project_path.strip("/"),
             app=existing_app,
             # 저장소는 앱 주인의 GitHub 연결로 받는다 (편집 권한 멤버가 배포해도 주인의 비공개 저장소를 받는다)
             installation_id=apps_service.repo_installation_id(db, existing_app),
         )
-        validate_repo_path(dockerfile_path, "Dockerfile 경로")
-        build_mode = "dockerfile"
+        if build_mode == "auto":     # 경로는 프로젝트 서브디렉토리다 (감지로 정해졌을 수 있다)
+            project_path = path
+            validate_repo_path(project_path, "프로젝트 경로")
+        else:
+            dockerfile_path = path
+            validate_repo_path(dockerfile_path, "Dockerfile 경로")
     app = existing_app if existing_app is not None else _resolve_app(name, repo_url, user, db)
     app_name = app.name
     image_owner = apps_service.namespace_hex(app.namespace)   # GHCR 경로 <hex8>/<app> — 빌더 검증이 ns의 hex8과 맞춘다

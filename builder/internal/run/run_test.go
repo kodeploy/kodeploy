@@ -67,7 +67,7 @@ type fakeLogs struct {
 	calls  int
 }
 
-func (f *fakeLogs) Follow(ctx context.Context, _ string, out chan<- string) error {
+func (f *fakeLogs) Follow(ctx context.Context, _, _ string, out chan<- string) error {
 	f.mu.Lock()
 	f.calls++
 	before, after, gate := f.before, f.after, f.gate
@@ -967,5 +967,21 @@ func TestArgoSyncFailureHasNoAppLogs(t *testing.T) {
 	h.idle()
 	if failed.Stage != contract.StageSync || failed.LastLines != nil {
 		t.Fatalf("failed %+v", failed)
+	}
+}
+
+// 자동 빌드(auto)는 init 컨테이너 이름이 nixpacks라 로그 follow가 그 이름을 읽어야 한다 (dockerfile은 clone).
+func TestInitContainerFollowsTheBuildMode(t *testing.T) {
+	r := &run{req: &contract.DeployRequest{Build: &contract.BuildSpec{Mode: contract.ModeDockerfile}}}
+	if got := r.initContainer(); got != job.InitContainer {
+		t.Fatalf("dockerfile init container %q", got)
+	}
+	r.req.Build.Mode = contract.ModeAuto
+	if got := r.initContainer(); got != job.NixpacksInit {
+		t.Fatalf("auto init container %q", got)
+	}
+	r.req.Build = nil // set-image·config·delete에는 build가 없다
+	if got := r.initContainer(); got != job.InitContainer {
+		t.Fatalf("no build: %q", got)
 	}
 }

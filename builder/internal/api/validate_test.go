@@ -18,6 +18,15 @@ const (
 
 func ptr[T any](v T) *T { return &v }
 
+// validAuto는 자동 빌드(nixpacks) 모드의 유효한 요청이다. Dockerfile 칸은 비운다.
+func validAuto(projectPath string) *contract.DeployRequest {
+	r := validBuild()
+	r.Build.Mode = contract.ModeAuto
+	r.Build.DockerfileName = ""
+	r.Build.ProjectPath = projectPath
+	return r
+}
+
 func validBuild() *contract.DeployRequest {
 	return &contract.DeployRequest{
 		BuildID:   "3f9a2c1d",
@@ -152,7 +161,8 @@ func TestValidate(t *testing.T) {
 
 		// build 칸
 		{"static build", func() *contract.DeployRequest { r := validBuild(); r.Slot = "static"; return r }, "not supported yet"},
-		{"mode auto", func() *contract.DeployRequest { r := validBuild(); r.Build.Mode = "auto"; return r }, "not supported yet"},
+		{"mode unknown", func() *contract.DeployRequest { r := validBuild(); r.Build.Mode = "buildpack"; return r }, "not supported yet"},
+		{"mode static", func() *contract.DeployRequest { r := validBuild(); r.Build.Mode = "static"; return r }, "not supported yet"},
 		{"git_auth_secret ok", func() *contract.DeployRequest {
 			r := validBuild()
 			r.Build.GitAuthSecret = "git-auth-3f9a2c1d"
@@ -165,7 +175,20 @@ func TestValidate(t *testing.T) {
 			return r
 		}, "git-auth-<build_id>"},
 		{"git_auth_secret other secret", func() *contract.DeployRequest { r := validBuild(); r.Build.GitAuthSecret = "ghcr-auth"; return r }, "git-auth-<build_id>"},
-		{"project_path", func() *contract.DeployRequest { r := validBuild(); r.Build.ProjectPath = "backend"; return r }, "not supported yet"},
+		// 자동 빌드(nixpacks): project_path만 쓰고(비면 자동 탐색), Dockerfile 칸은 쓰지 않는다
+		{"auto ok", func() *contract.DeployRequest { return validAuto("") }, ""},
+		{"auto with project_path ok", func() *contract.DeployRequest { return validAuto("backend/api") }, ""},
+		{"auto with private repo ok", func() *contract.DeployRequest {
+			r := validAuto("backend")
+			r.Build.GitAuthSecret = "git-auth-3f9a2c1d"
+			return r
+		}, ""},
+		{"auto with dockerfile_dir", func() *contract.DeployRequest { r := validAuto(""); r.Build.DockerfileDir = "x"; return r }, "not used with mode auto"},
+		{"auto with dockerfile_name", func() *contract.DeployRequest { r := validAuto(""); r.Build.DockerfileName = "Dockerfile"; return r }, "not used with mode auto"},
+		{"auto project_path dotdot", func() *contract.DeployRequest { return validAuto("../etc") }, "project_path"},
+		{"auto project_path absolute", func() *contract.DeployRequest { return validAuto("/etc") }, "project_path"},
+		{"auto project_path odd chars", func() *contract.DeployRequest { return validAuto("a;rm -rf") }, "project_path"},
+		{"project_path with dockerfile mode", func() *contract.DeployRequest { r := validBuild(); r.Build.ProjectPath = "backend"; return r }, "only used with mode auto"},
 		{"build missing", func() *contract.DeployRequest { r := validBuild(); r.Build = nil; return r }, "build is required"},
 		{"build with image", func() *contract.DeployRequest { r := validBuild(); r.Image = validSetImage().Image; return r }, "image is not allowed"},
 		{"unit missing", func() *contract.DeployRequest { r := validBuild(); r.Unit = nil; return r }, "unit"},

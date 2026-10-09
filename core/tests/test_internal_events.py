@@ -280,3 +280,26 @@ def test_env_change_rows_never_touch_build_secrets(env):
     _add_env_change()
     env.post({"seq": 1, "type": "failed", "stage": "sync", "reason": "x"}, build_id="e1e1e1e1")
     assert env.dropped == []
+
+
+# --- 자동 빌드(nixpacks): 로그에서 Dockerfile 뽑기 ---
+
+NIX_LOG = "\n".join([
+    "=== nixpacks (init) ===", "[4/5] running nixpacks build...",
+    "===KODEPLOY_DOCKERFILE_START===", "FROM ubuntu:jammy", "RUN echo hi", "===KODEPLOY_DOCKERFILE_END===",
+    "===KODEPLOY_PLAN_START===", "{}", "===KODEPLOY_PLAN_END===",
+])
+
+
+def test_auto_build_dockerfile_is_extracted_from_the_logs(env):
+    with events.SessionLocal() as s:
+        b = s.get(Build, BID)
+        b.build_mode = "auto"
+        s.commit()
+    env.post({"seq": 1, "type": "log", "lines": NIX_LOG.split("\n")})
+    assert env.row()[0].dockerfile_content == "FROM ubuntu:jammy\nRUN echo hi"
+
+
+def test_dockerfile_mode_builds_never_get_a_generated_dockerfile(env):
+    env.post({"seq": 1, "type": "log", "lines": NIX_LOG.split("\n")})          # 같은 표지가 와도 dockerfile 모드는 건드리지 않는다
+    assert env.row()[0].dockerfile_content is None

@@ -16,6 +16,10 @@ const (
 	KindSetImage = "set-image"
 	KindDelete   = "delete"
 
+	// 빌드 방식 (build.mode) — Dockerfile이 있으면 그대로, 없으면 nixpacks가 Dockerfile을 만든다
+	ModeDockerfile = "dockerfile"
+	ModeAuto       = "auto"
+
 	SlotServer = "server"
 	SlotStatic = "static"
 )
@@ -50,7 +54,7 @@ type BuildSpec struct {
 	ImageTag       string `json:"image_tag"`
 	CacheRef       string `json:"cache_ref,omitempty"`
 	GitAuthSecret  string `json:"git_auth_secret,omitempty"` // private repo: core가 만든 빌드별 Secret 이름 (git-auth-<build_id>)
-	ProjectPath    string `json:"project_path,omitempty"`    // 예약 (nixpacks)
+	ProjectPath    string `json:"project_path,omitempty"`    // auto 전용: 프로젝트 서브디렉토리 (비면 nixpacks가 자동 탐색)
 }
 
 // CoreValues는 values.yaml에서 core가 주인인 칸이다 (지시서 3-4).

@@ -167,6 +167,14 @@ func (r *run) build() {
 	}
 }
 
+// initContainer는 이 빌드의 Pod에서 먼저 읽을 init 컨테이너 이름이다 — 자동 빌드(auto)는 nixpacks, 아니면 clone.
+func (r *run) initContainer() string {
+	if r.req.Build != nil && r.req.Build.Mode == contract.ModeAuto {
+		return job.NixpacksInit
+	}
+	return job.InitContainer
+}
+
 // createJob은 요청으로 Job을 만든다. 요청 JSON을 어노테이션에 넣어 재개에 쓴다. 이미 있으면 그대로 이어서 본다.
 func (r *run) createJob() error {
 	b := r.req.Build
@@ -185,6 +193,8 @@ func (r *run) createJob() error {
 		DockerfileFilename:    b.DockerfileName,
 		CacheRef:              b.CacheRef,
 		GitAuthSecret:         b.GitAuthSecret,
+		Mode:                  b.Mode,
+		ProjectPath:           b.ProjectPath,
 		BuildKitImage:         r.m.d.Cfg.BuildKitImage,
 		ActiveDeadlineSeconds: r.m.d.Cfg.BuildActiveDeadlineSeconds,
 		RequestJSON:           string(reqJSON),
@@ -319,7 +329,7 @@ func (r *run) startLogs(pushDone chan<- string) *logPipe {
 	b := r.req.Build
 
 	go func() {
-		if err := r.m.d.Logs.Follow(fctx, r.req.BuildID, lines); err != nil && fctx.Err() == nil {
+		if err := r.m.d.Logs.Follow(fctx, r.req.BuildID, r.initContainer(), lines); err != nil && fctx.Err() == nil {
 			r.log.Warn("log follow ended", "err", err)
 		}
 		close(lines)

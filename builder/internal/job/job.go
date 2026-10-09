@@ -18,6 +18,12 @@ const (
 	defaultDockerfile = "Dockerfile" // build.py buildkit_job(dockerfile_filename="Dockerfile")
 	InitContainer     = "clone"
 	MainContainer     = "buildkit"
+	NixpacksInit      = "nixpacks" // 자동 빌드(nixpacks) 모드의 init 컨테이너 이름
+	nixpacksVersion   = "v1.41.0"  // 원본 템플릿의 NIXPACKS_VERSION
+
+	// 빌드 방식 — Dockerfile이 있으면 그대로(dockerfile), 없으면 nixpacks가 Dockerfile을 만든다(auto)
+	ModeDockerfile = "dockerfile"
+	ModeAuto       = "auto"
 )
 
 // 라벨: app·build-id·user-id·build-mode는 원본 그대로 (core가 build-id 라벨로 Pod을 찾는다)
@@ -53,8 +59,10 @@ fi
 git clone --depth 1 -b "$BRANCH" "$REPO_URL" /workspace/src
 `
 
-// Params는 Build에 넘기는 값이다. 원본 buildkit_job()의 인자와 같다.
+// Params는 Build에 넘기는 값이다. 원본 buildkit_job()·nixpacks_buildkit_job()의 인자와 같다.
 type Params struct {
+	Mode                  string // "" 또는 dockerfile이면 Dockerfile 빌드, auto면 nixpacks 자동 빌드
+	ProjectPath           string // auto 전용: repo root 기준 서브디렉토리 (빈 값=nixpacks가 자동 탐색)
 	Namespace             string
 	BuildID               string
 	UserID                string // 32 hex
@@ -79,9 +87,95 @@ func Name(buildID, userID string) string {
 	return "build-" + u + "-" + buildID
 }
 
-// Build는 원본 buildkit_job.yaml.j2와 같은 모양의 Job을 만든다.
-// init(clone)이 repo를 emptyDir에 받고, main(rootless BuildKit)이 빌드해 GHCR에 push한다.
+// Build는 원본 템플릿과 같은 모양의 Job을 만든다. Mode에 따라 두 가지다:
+//   - dockerfile(buildkit_job.yaml.j2): init(clone)이 repo를 emptyDir에 받고, main(rootless BuildKit)이 그 Dockerfile을 빌드한다.
+//   - auto(nixpacks_buildkit_job.yaml.j2): init(nixpacks)이 repo를 받아 Dockerfile을 만들고, main이 그걸 빌드한다.
+//
+// 둘 다 GHCR에 push하고, 라벨·TTL·deadline·볼륨은 같다.
 func Build(p Params) *batchv1.Job {
+	workspace := corev1.VolumeMount{Name: "workspace", MountPath: "/workspace"}
+	annotations := map[string]string{}
+	if p.RequestJSON != "" {
+		annotations[AnnRequest] = p.RequestJSON
+	}
+
+	initC := dockerfileContainers(p, workspace)
+	mainC := mainContainer(p, dockerfileMain(p), nil, workspace)
+	mode := ModeDockerfile
+	if p.Mode == ModeAuto {
+		initC, mainC, mode = nixpacksContainers(p, workspace)
+	}
+
+	return &batchv1.Job{
+		TypeMeta: metav1.TypeMeta{APIVersion: "batch/v1", Kind: "Job"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      Name(p.BuildID, p.UserID),
+			Namespace: p.Namespace,
+			Labels: map[string]string{
+				LabelApp:       appLabelValue,
+				LabelBuildID:   p.BuildID,
+				LabelUserID:    p.UserID,
+				LabelBuildMode: mode,
+				LabelManaged:   "true",
+			},
+			Annotations: annotations,
+		},
+		Spec: batchv1.JobSpec{
+			TTLSecondsAfterFinished: ptr.To[int32](ttlAfterFinished),
+			BackoffLimit:            ptr.To[int32](0),
+			ActiveDeadlineSeconds:   ptr.To(p.ActiveDeadlineSeconds),
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{LabelApp: appLabelValue, LabelBuildID: p.BuildID},
+				},
+				Spec: corev1.PodSpec{
+					RestartPolicy:  corev1.RestartPolicyNever,
+					InitContainers: []corev1.Container{initC},
+					Containers:     []corev1.Container{mainC},
+					Volumes: []corev1.Volume{
+						{Name: "workspace", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+						{Name: "docker-config", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+							SecretName: GHCRAuthSecret,
+							Items:      []corev1.KeyToPath{{Key: ".dockerconfigjson", Path: "config.json"}},
+						}}},
+					},
+				},
+			},
+		},
+	}
+}
+
+// gitAuthEnv는 private repo의 토큰 참조다 — Secret의 GIT_AUTH_TOKEN 키를 clone하는 컨테이너에만 준다.
+func gitAuthEnv(secret string) []corev1.EnvVar {
+	if secret == "" {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "GIT_AUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{
+		SecretKeyRef: &corev1.SecretKeySelector{
+			LocalObjectReference: corev1.LocalObjectReference{Name: secret},
+			Key:                  "GIT_AUTH_TOKEN",
+		},
+	}}}
+}
+
+// dockerfileContainers는 Dockerfile 모드의 init(clone) 컨테이너다.
+func dockerfileContainers(p Params, workspace corev1.VolumeMount) corev1.Container {
+	env := append([]corev1.EnvVar{
+		{Name: "REPO_URL", Value: p.RepoURL},
+		{Name: "BRANCH", Value: p.Branch},
+	}, gitAuthEnv(p.GitAuthSecret)...)
+	return corev1.Container{
+		Name:         InitContainer,
+		Image:        cloneImage,
+		Command:      []string{"sh", "-c"},
+		Env:          env,
+		Args:         []string{cloneScript},
+		VolumeMounts: []corev1.VolumeMount{workspace},
+	}
+}
+
+// dockerfileMain은 Dockerfile 모드 main 컨테이너의 buildctl 인자다.
+func dockerfileMain(p Params) []string {
 	filename := p.DockerfileFilename
 	if filename == "" {
 		filename = defaultDockerfile
@@ -104,85 +198,62 @@ func Build(p Params) *batchv1.Job {
 			"--export-cache=type=registry,ref="+p.CacheRef+",mode=max",
 		)
 	}
+	return args
+}
 
-	cloneEnv := []corev1.EnvVar{
+// mainContainer는 두 모드가 공유하는 main(rootless BuildKit) 컨테이너다. command가 비면 buildctl-daemonless.sh를 그대로 쓴다.
+func mainContainer(p Params, args []string, command []string, workspace corev1.VolumeMount) corev1.Container {
+	if command == nil {
+		command = []string{"buildctl-daemonless.sh"}
+	}
+	return corev1.Container{
+		Name:  MainContainer,
+		Image: p.BuildKitImage,
+		SecurityContext: &corev1.SecurityContext{
+			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined},
+			RunAsUser:      ptr.To[int64](1000),
+			RunAsGroup:     ptr.To[int64](1000),
+		},
+		Command: command,
+		Args:    args,
+		Env: []corev1.EnvVar{
+			{Name: "BUILDKITD_FLAGS", Value: "--oci-worker-no-process-sandbox"},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			workspace,
+			{Name: "docker-config", MountPath: "/home/user/.docker", ReadOnly: true},
+		},
+	}
+}
+
+// nixpacksContainers는 자동 빌드 모드의 init(nixpacks)·main 컨테이너다.
+// main은 init이 정한 프로젝트 경로(/workspace/PROJECT_PATH)를 읽어 nixpacks가 만든 Dockerfile을 빌드한다.
+func nixpacksContainers(p Params, workspace corev1.VolumeMount) (corev1.Container, corev1.Container, string) {
+	env := append([]corev1.EnvVar{
 		{Name: "REPO_URL", Value: p.RepoURL},
 		{Name: "BRANCH", Value: p.Branch},
+		{Name: "PROJECT_PATH", Value: p.ProjectPath},
+		{Name: "NIXPACKS_VERSION", Value: nixpacksVersion},
+	}, gitAuthEnv(p.GitAuthSecret)...)
+	initC := corev1.Container{
+		Name:         NixpacksInit,
+		Image:        cloneImage,
+		Command:      []string{"sh", "-c"},
+		Env:          env,
+		Args:         []string{nixpacksScript},
+		VolumeMounts: []corev1.VolumeMount{workspace},
 	}
-	if p.GitAuthSecret != "" {
-		cloneEnv = append(cloneEnv, corev1.EnvVar{Name: "GIT_AUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{
-			SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: p.GitAuthSecret},
-				Key:                  "GIT_AUTH_TOKEN",
-			},
-		}})
+	script := "PROJECT_PATH=$(cat /workspace/PROJECT_PATH)\n" +
+		"echo \"Building from: $PROJECT_PATH\"\n" +
+		"exec buildctl-daemonless.sh build \\\n" +
+		"  --frontend=dockerfile.v0 \\\n" +
+		"  --local \"context=$PROJECT_PATH\" \\\n" +
+		"  --local \"dockerfile=$PROJECT_PATH/.nixpacks\" \\\n" +
+		"  --opt filename=Dockerfile \\\n"
+	if p.CacheRef != "" {
+		script += "  --import-cache=type=registry,ref=" + p.CacheRef + " \\\n" +
+			"  --export-cache=type=registry,ref=" + p.CacheRef + ",mode=max \\\n"
 	}
-
-	workspace := corev1.VolumeMount{Name: "workspace", MountPath: "/workspace"}
-	annotations := map[string]string{}
-	if p.RequestJSON != "" {
-		annotations[AnnRequest] = p.RequestJSON
-	}
-
-	return &batchv1.Job{
-		TypeMeta: metav1.TypeMeta{APIVersion: "batch/v1", Kind: "Job"},
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      Name(p.BuildID, p.UserID),
-			Namespace: p.Namespace,
-			Labels: map[string]string{
-				LabelApp:       appLabelValue,
-				LabelBuildID:   p.BuildID,
-				LabelUserID:    p.UserID,
-				LabelBuildMode: "dockerfile",
-				LabelManaged:   "true",
-			},
-			Annotations: annotations,
-		},
-		Spec: batchv1.JobSpec{
-			TTLSecondsAfterFinished: ptr.To[int32](ttlAfterFinished),
-			BackoffLimit:            ptr.To[int32](0),
-			ActiveDeadlineSeconds:   ptr.To(p.ActiveDeadlineSeconds),
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{LabelApp: appLabelValue, LabelBuildID: p.BuildID},
-				},
-				Spec: corev1.PodSpec{
-					RestartPolicy: corev1.RestartPolicyNever,
-					InitContainers: []corev1.Container{{
-						Name:         InitContainer,
-						Image:        cloneImage,
-						Command:      []string{"sh", "-c"},
-						Env:          cloneEnv,
-						Args:         []string{cloneScript},
-						VolumeMounts: []corev1.VolumeMount{workspace},
-					}},
-					Containers: []corev1.Container{{
-						Name:  MainContainer,
-						Image: p.BuildKitImage,
-						SecurityContext: &corev1.SecurityContext{
-							SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeUnconfined},
-							RunAsUser:      ptr.To[int64](1000),
-							RunAsGroup:     ptr.To[int64](1000),
-						},
-						Command: []string{"buildctl-daemonless.sh"},
-						Args:    args,
-						Env: []corev1.EnvVar{
-							{Name: "BUILDKITD_FLAGS", Value: "--oci-worker-no-process-sandbox"},
-						},
-						VolumeMounts: []corev1.VolumeMount{
-							workspace,
-							{Name: "docker-config", MountPath: "/home/user/.docker", ReadOnly: true},
-						},
-					}},
-					Volumes: []corev1.Volume{
-						{Name: "workspace", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-						{Name: "docker-config", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-							SecretName: GHCRAuthSecret,
-							Items:      []corev1.KeyToPath{{Key: ".dockerconfigjson", Path: "config.json"}},
-						}}},
-					},
-				},
-			},
-		},
-	}
+	script += "  --output \"type=image,name=" + p.Image + ",push=true\"\n"
+	return initC, mainContainer(p, []string{script}, []string{"sh", "-c"}, workspace), ModeAuto
 }

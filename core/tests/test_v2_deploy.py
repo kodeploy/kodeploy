@@ -72,8 +72,6 @@ def test_v2_explicit_dockerfile_mode_skips_detect(spawned, github):  # noqa: F81
     ({"runtime": "none", "use_static": True}, None, "서버 없는 앱"),
     ({"use_static": True}, None, "정적 사이트"),
     ({"init_dump_token": "t"}, None, "초기 DB 복원"),
-    ({"build_mode": "auto"}, None, "Dockerfile 빌드만"),
-    ({"build_mode": "detect"}, lambda g: setattr(g, "detected", ("auto", "")), "Dockerfile을 찾지 못했습니다"),
     ({}, lambda g: setattr(g, "public", False), "찾을 수 없거나 접근할 수 없어요"),   # 비공개인데 GitHub 연결에도 없다
     ({}, lambda g: setattr(g, "public", None), "확인하지 못했습니다"),
 ])
@@ -552,3 +550,47 @@ def test_run_drops_the_token_secret_when_submit_fails(runner):
     runner.monkeypatch.setattr(v2.builder, "submit", refuse)
     asyncio.run(v2.run_v2_build("3f9a2c1d"))
     assert runner.dropped == ["3f9a2c1d"]                        # 제출이 실패하면 토큰이 남지 않게 바로 지운다
+
+
+# --- 자동 빌드(nixpacks) ---
+
+def test_v2_accepts_auto_mode_with_a_project_path(spawned, github):  # noqa: F811
+    builds = run_deploy(MagicMock(), v2_user(), runtime="java", port=8080, build_mode="auto", project_path="/backend/")
+    b = builds[0]
+    assert (b.build_mode, b.project_path, b.last_event_seq) == ("auto", "backend", 0)
+    assert spawned_fns(spawned) == [v2.run_v2_build]
+    assert github.probes == []                                  # 방식을 직접 골랐으면 GitHub를 조회하지 않는다
+
+
+def test_v2_detect_falls_back_to_nixpacks_when_there_is_no_dockerfile(spawned, github):  # noqa: F811
+    github.detected = ("auto", "services/api")                  # Dockerfile이 없고 services/api에서 프로젝트가 보인다
+    builds = run_deploy(MagicMock(), v2_user(), runtime="java", port=8080, build_mode="detect")
+    b = builds[0]
+    assert (b.build_mode, b.project_path) == ("auto", "services/api")
+
+
+def test_v2_rejects_a_bad_project_path_before_any_change(spawned, github):  # noqa: F811
+    with pytest.raises(ValueError):
+        run_deploy(MagicMock(), v2_user(), runtime="java", port=8080, build_mode="auto", project_path="../etc")
+    assert spawned == []
+
+
+def test_auto_payload_has_no_dockerfile_fields(monkeypatch):
+    monkeypatch.setattr(config, "BUILD_REGISTRY_CACHE_ENABLED", False)
+    p = v2.build_payload(make_build(build_mode="auto", project_path="backend", dockerfile_path="Dockerfile"),
+                         User(id=UID), ["demo.kodeploy.com"])
+    spec = p["build"]
+    assert (spec["mode"], spec["project_path"]) == ("auto", "backend")
+    assert not {"dockerfile_dir", "dockerfile_name"} & set(spec)     # 방식마다 쓰는 칸이 다르다 (빌더가 엉뚱한 칸을 거절한다)
+
+
+def test_auto_payload_without_project_path_lets_the_builder_detect_it(monkeypatch):
+    monkeypatch.setattr(config, "BUILD_REGISTRY_CACHE_ENABLED", False)
+    spec = v2.build_payload(make_build(build_mode="auto", project_path=""), User(id=UID), ["demo.kodeploy.com"])["build"]
+    assert spec["mode"] == "auto" and "project_path" not in spec
+
+
+def test_dockerfile_payload_is_unchanged(monkeypatch):
+    monkeypatch.setattr(config, "BUILD_REGISTRY_CACHE_ENABLED", False)
+    spec = v2.build_payload(make_build(), User(id=UID), ["demo.kodeploy.com"])["build"]
+    assert spec["mode"] == "dockerfile" and spec["dockerfile_dir"] == "docker" and "project_path" not in spec

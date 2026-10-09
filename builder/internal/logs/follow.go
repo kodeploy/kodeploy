@@ -14,11 +14,11 @@ import (
 	"github.com/kodeploy/kodeploy/builder/internal/job"
 )
 
-// 원본 _combined_job_logs의 머리줄 (dockerfile 모드: init 이름이 clone)
-const (
-	InitHeader = "=== clone (init) ==="
-	MainHeader = "=== buildkit (main) ==="
-)
+// 원본 _combined_job_logs의 머리줄. init 컨테이너 이름은 빌드 방식에 따라 clone(dockerfile) 또는 nixpacks(auto)다.
+const MainHeader = "=== buildkit (main) ==="
+
+// InitHeader는 init 컨테이너의 머리줄이다 ("=== clone (init) ===" 같은 모양).
+func InitHeader(container string) string { return "=== " + container + " (init) ===" }
 
 // 한 줄 상한. 넘는 부분은 잘라 버린다 (npm 진행 막대 같은 긴 줄이 메모리를 잡아먹지 않게).
 const maxLineBytes = 64 * 1024
@@ -56,8 +56,9 @@ func NewFollower(src Source) *Follower {
 }
 
 // Follow는 빌드 Pod 로그를 줄 단위로 out에 보낸다. 두 컨테이너가 끝나면 nil로 돌아온다.
+// initContainer는 먼저 읽을 init 컨테이너 이름이다 (job.InitContainer 또는 job.NixpacksInit).
 // out은 닫지 않는다 (호출부가 닫는다).
-func (f *Follower) Follow(ctx context.Context, buildID string, out chan<- string) error {
+func (f *Follower) Follow(ctx context.Context, buildID, initContainer string, out chan<- string) error {
 	pod, err := f.src.WaitPod(ctx, buildID)
 	if err != nil {
 		return err
@@ -72,8 +73,8 @@ func (f *Follower) Follow(ctx context.Context, buildID string, out chan<- string
 	}
 
 	initLines := 0
-	err = f.container(ctx, pod, job.InitContainer, func(l string) bool {
-		if initLines == 0 && !send(InitHeader) {
+	err = f.container(ctx, pod, initContainer, func(l string) bool {
+		if initLines == 0 && !send(InitHeader(initContainer)) {
 			return false
 		}
 		initLines++

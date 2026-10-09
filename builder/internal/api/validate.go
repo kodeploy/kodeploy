@@ -129,7 +129,7 @@ func (v Validator) Validate(r *contract.DeployRequest) error {
 	}
 }
 
-// validateBuild는 kind=build 검사다. dockerfile 모드만, 예약 칸 거부, unit·userId 필수,
+// validateBuild는 kind=build 검사다. dockerfile·auto(nixpacks) 모드, unit·userId 필수,
 // repo·ref·경로 입력 검증, 이미지 경로·태그·cache_ref 규칙.
 func (v Validator) validateBuild(r *contract.DeployRequest, nsHex string) error {
 	if r.Slot == contract.SlotStatic {
@@ -150,7 +150,7 @@ func (v Validator) validateBuild(r *contract.DeployRequest, nsHex string) error 
 	}
 
 	b := r.Build
-	if b.Mode != "dockerfile" {
+	if b.Mode != contract.ModeDockerfile && b.Mode != contract.ModeAuto {
 		return notSupported(fmt.Sprintf("build.mode %q", b.Mode))
 	}
 	// private repo용 Secret은 core가 이 빌드를 위해 만든 것만 쓴다 — 같은 ns의 다른 Secret을 가리킬 수 없게
@@ -158,8 +158,17 @@ func (v Validator) validateBuild(r *contract.DeployRequest, nsHex string) error 
 	if b.GitAuthSecret != "" && b.GitAuthSecret != "git-auth-"+r.BuildID {
 		return invalid("build.git_auth_secret must be git-auth-<build_id>")
 	}
-	if b.ProjectPath != "" {
-		return notSupported("build.project_path")
+	// 방식마다 쓰는 칸이 다르다: dockerfile은 dockerfile_dir·dockerfile_name, auto는 project_path만.
+	// 엉뚱한 칸이 오면 조용히 무시하지 않고 거절한다.
+	if b.Mode == contract.ModeAuto {
+		if b.DockerfileDir != "" || b.DockerfileName != "" {
+			return invalid("build.dockerfile_dir and build.dockerfile_name are not used with mode auto")
+		}
+		if err := validateProjectPath(b.ProjectPath); err != nil {
+			return err
+		}
+	} else if b.ProjectPath != "" {
+		return invalid("build.project_path is only used with mode auto")
 	}
 	if err := validateRepoURL(b.Repo); err != nil {
 		return err
@@ -275,6 +284,15 @@ func validateRef(s string) error {
 }
 
 // dockerfile_dir는 repo 안의 상대 경로다. ..와 절대 경로를 거부한다.
+// validateProjectPath는 자동 빌드의 프로젝트 서브디렉토리다 (빈 값 = nixpacks가 자동 탐색).
+// Dockerfile 디렉토리와 같은 규칙(상대 경로, .. · 빈 조각 · 이상한 문자 거부)을 쓴다.
+func validateProjectPath(s string) error {
+	if err := validateRelDir(s); err != nil {
+		return invalid("build.project_path must be a relative directory without .., empty or unusual segments")
+	}
+	return nil
+}
+
 func validateRelDir(s string) error {
 	if s == "" {
 		return nil

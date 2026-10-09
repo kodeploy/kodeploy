@@ -35,7 +35,7 @@ type Jobs interface {
 
 // LogFollower는 빌드 로그를 줄 단위로 out에 보낸다 (logs.Follower).
 type LogFollower interface {
-	Follow(ctx context.Context, buildID string, out chan<- string) error
+	Follow(ctx context.Context, buildID, initContainer string, out chan<- string) error
 }
 
 // Registry는 이미지 존재 확인과 태그 → digest 조회다 (registry.Client).

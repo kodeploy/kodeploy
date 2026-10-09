@@ -58,7 +58,17 @@ func dropZeroArtifacts(m map[string]any) {
 	pod := dig(m, "spec", "template", "spec")
 	for _, key := range []string{"initContainers", "containers"} {
 		for _, c := range pod[key].([]any) {
-			delete(c.(map[string]any), "resources")
+			cm := c.(map[string]any)
+			delete(cm, "resources")
+			// 값이 빈 env는 Go가 JSON에서 value를 생략한다 (원본 YAML은 value: ""). 쿠버네티스에선 같은 뜻이다.
+			if envs, ok := cm["env"].([]any); ok {
+				for _, e := range envs {
+					em := e.(map[string]any)
+					if _, has := em["value"]; !has && em["valueFrom"] == nil {
+						em["value"] = ""
+					}
+				}
+			}
 		}
 	}
 }
@@ -171,5 +181,74 @@ func TestNoTokenEnvForPublicRepos(t *testing.T) {
 		if e.Name == "GIT_AUTH_TOKEN" {
 			t.Fatal("public clone must not reference a git-auth secret")
 		}
+	}
+}
+
+// nixpacksParams는 hack/render-original-job.py의 nixpacks-* 모드와 같은 매개변수다.
+func nixpacksParams(cache bool, private bool) Params {
+	p := goldenParams(false)
+	p.Mode = ModeAuto
+	if cache {
+		p.ProjectPath = "backend"
+		p.CacheRef = "ghcr.io/yuntyu01/d6d8b759/kodeploy-test-spring:buildcache"
+	}
+	if private {
+		p.GitAuthSecret = "git-auth-3f9a2c1d"
+	}
+	return p
+}
+
+// TestNixpacksMatchesOriginalTemplate는 자동 빌드(nixpacks) Job이 원본 Jinja 렌더와 같은지 본다.
+// init 스크립트는 원본을 글자 그대로 옮겼으니, 이 테스트가 옮기다 생긴 차이를 잡는다.
+func TestNixpacksMatchesOriginalTemplate(t *testing.T) {
+	for _, tc := range []struct {
+		golden  string
+		cache   bool
+		private bool
+	}{
+		{"testdata/original-nixpacks-cache.json", true, false},
+		{"testdata/original-nixpacks-nocache.json", false, false},
+		{"testdata/original-nixpacks-private.json", false, true},
+	} {
+		t.Run(tc.golden, func(t *testing.T) {
+			raw, err := os.ReadFile(tc.golden)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want map[string]any
+			if err := json.Unmarshal(raw, &want); err != nil {
+				t.Fatal(err)
+			}
+
+			got := toMap(t, Build(nixpacksParams(tc.cache, tc.private)))
+			dropZeroArtifacts(got)
+			meta := dig(got, "metadata")
+			labels := meta["labels"].(map[string]any)
+			if labels[LabelManaged] != "true" || labels[LabelBuildMode] != "auto" {
+				t.Fatalf("labels: %v", labels)
+			}
+			delete(labels, LabelManaged)
+			delete(meta, "annotations") // kodeploy.io/request는 빌더가 더하는 의도한 차이
+
+			if !reflect.DeepEqual(got, want) {
+				g, _ := json.MarshalIndent(got, "", "  ")
+				w, _ := json.MarshalIndent(want, "", "  ")
+				t.Fatalf("nixpacks Job differs from original template\n--- got\n%s\n--- want\n%s", g, w)
+			}
+		})
+	}
+}
+
+func TestNixpacksTokenReachesOnlyTheInitContainer(t *testing.T) {
+	j := Build(nixpacksParams(false, true))
+	var inInit, inMain bool
+	for _, e := range j.Spec.Template.Spec.InitContainers[0].Env {
+		inInit = inInit || e.Name == "GIT_AUTH_TOKEN" && e.ValueFrom != nil && e.Value == ""
+	}
+	for _, e := range j.Spec.Template.Spec.Containers[0].Env {
+		inMain = inMain || e.Name == "GIT_AUTH_TOKEN"
+	}
+	if !inInit || inMain {
+		t.Fatalf("token in init=%v main=%v", inInit, inMain)
 	}
 }

@@ -5,7 +5,7 @@ core가 하는 일: 제출 조건 검사 → 네임스페이스·Secret·PVC 준
 계약: docs/go-builder-plan.md 3절, docs/builder-e2e.md "4부 할 일".
 
 v2가 아직 받지 않는 것 (빌더가 400으로 거부하거나, 한 앱이 v1·v2로 갈라지는 것):
-  서버 없는 앱, 정적 사이트, nixpacks 자동 빌드, 초기 DB 복원.
+  서버 없는 앱, 정적 사이트, 초기 DB 복원.
 """
 
 import asyncio
@@ -45,8 +45,9 @@ def is_v2_build(build: Build) -> bool:
     return build.last_event_seq is not None
 
 
-# 제출 조건 검사 — 통과하면 빌드에 쓸 Dockerfile 경로(repo 기준)를 돌려준다. 아니면 ValueError(→ 400).
-# detect(웹 기본값)면 여기서 바로 감지한다: Dockerfile이면 그 경로로 진행, 없으면(nixpacks 대상) 거절.
+# 제출 조건 검사 — 통과하면 (빌드 방식, 경로)를 돌려준다. 아니면 ValueError(→ 400).
+#   ("dockerfile", Dockerfile 경로) 또는 ("auto", 프로젝트 경로) — 경로는 repo 기준이다.
+# detect(웹 기본값)면 여기서 바로 감지한다: Dockerfile이 있으면 dockerfile, 없으면 nixpacks 자동 빌드(auto)로 간다.
 async def check_submit(
     user: User,
     *,
@@ -57,9 +58,10 @@ async def check_submit(
     dockerfile_path: str,
     use_static: bool,
     init_dump_token: str | None,
+    project_path: str = "",                # 자동 빌드의 프로젝트 서브디렉토리 (비면 nixpacks가 자동 탐색)
     app: App | None = None,                # 이미 있는 앱이면 그 앱 (저장소 접근은 앱 주인의 GitHub 연결로 한다)
     installation_id: int | None = None,    # 저장소를 받을 GitHub 연결 (비공개 저장소 확인용)
-) -> str:
+) -> tuple[str, str]:
     if not config.BUILDER_HMAC_SECRET:
         raise ValueError("새 경로(v2) 빌더 연결이 설정되지 않았습니다")
     if runtime == "none":
@@ -68,8 +70,6 @@ async def check_submit(
         raise ValueError(f"{NOT_YET} 정적 사이트를 지원하지 않습니다")
     if init_dump_token:
         raise ValueError(f"{NOT_YET} 초기 DB 복원을 지원하지 않습니다")
-    if build_mode == "auto":
-        raise ValueError(f"{NOT_YET} Dockerfile 빌드만 지원합니다")
 
     public = await asyncio.to_thread(_repo_is_public, repo_url)
     if public is None:
@@ -84,14 +84,13 @@ async def check_submit(
 
     if build_mode == "detect":
         probe = Build(
-            repo_url=repo_url, branch=branch, project_path="", runtime=runtime, user_id=user.id,
+            repo_url=repo_url, branch=branch, project_path=project_path, runtime=runtime, user_id=user.id,
             app_id=app.id if app is not None else None,
         )
-        mode, path = await asyncio.to_thread(_detect_build, probe)
-        if mode != "dockerfile":
-            raise ValueError(f"{NOT_YET} Dockerfile 빌드만 지원합니다 (저장소에서 Dockerfile을 찾지 못했습니다)")
-        return path
-    return dockerfile_path or "Dockerfile"
+        return await asyncio.to_thread(_detect_build, probe)   # ("dockerfile", Dockerfile 경로) | ("auto", 프로젝트 경로)
+    if build_mode == "auto":
+        return "auto", project_path
+    return "dockerfile", dockerfile_path or "Dockerfile"
 
 
 # 빌더 요청 본문 (계약 3-1). values에는 core 소유 칸만 — image·runtime·port는 빌더 소유라 넣으면 400.
@@ -107,17 +106,21 @@ def _installation_has_repo(installation_id: int | None, repo_url: str) -> bool:
 
 
 def build_payload(build: Build, owner: User, hostnames: list[str], git_auth_secret: str = "") -> dict:
-    subdir, filename = os.path.split(build.dockerfile_path or "Dockerfile")
     image_repo = build.image.rsplit(":", 1)[0]
     spec = {
         "repo": build.repo_url,
         "ref": build.branch,
-        "mode": "dockerfile",
-        "dockerfile_dir": subdir,
-        "dockerfile_name": filename,
         "image_repo": image_repo,
         "image_tag": build.build_id,
     }
+    if build.build_mode == "auto":
+        # 자동 빌드(nixpacks): Dockerfile 칸은 쓰지 않고, 프로젝트 경로만 (비면 빌더가 자동 탐색한다)
+        spec["mode"] = "auto"
+        if build.project_path:
+            spec["project_path"] = build.project_path
+    else:
+        subdir, filename = os.path.split(build.dockerfile_path or "Dockerfile")
+        spec.update({"mode": "dockerfile", "dockerfile_dir": subdir, "dockerfile_name": filename})
     if config.BUILD_REGISTRY_CACHE_ENABLED:
         spec["cache_ref"] = f"{image_repo}:buildcache"
     if git_auth_secret:

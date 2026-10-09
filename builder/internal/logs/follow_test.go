@@ -14,6 +14,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/kodeploy/kodeploy/builder/internal/job"
 )
 
 // 스트림 하나 = 본문 + 끝에 낼 오류(nil이면 EOF)
@@ -98,7 +100,7 @@ func follow(t *testing.T, src Source) ([]string, error) {
 	out := make(chan string, 1000)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	err := f.Follow(ctx, "3f9a2c1d", out)
+	err := f.Follow(ctx, "3f9a2c1d", job.InitContainer, out)
 	close(out)
 	var got []string
 	for l := range out {
@@ -121,7 +123,7 @@ func TestFollowFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		InitHeader, "[1/1] cloning x (main)...", "Cloning into '/workspace/src'...",
+		InitHeader(job.InitContainer), "[1/1] cloning x (main)...", "Cloning into '/workspace/src'...",
 		"",
 		MainHeader, "#1 [internal] load build definition", "#20 exporting to image",
 	}
@@ -146,7 +148,7 @@ func TestFollowReconnectNoDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{InitHeader, "clone", "", MainHeader, "a", "b", "c"}
+	want := []string{InitHeader(job.InitContainer), "clone", "", MainHeader, "a", "b", "c"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q", got)
 	}
@@ -185,7 +187,7 @@ func TestFollowInitFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{InitHeader, "fatal: Remote branch nope not found in upstream origin"}
+	want := []string{InitHeader(job.InitContainer), "fatal: Remote branch nope not found in upstream origin"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %q", got)
 	}
@@ -209,7 +211,7 @@ func TestFollowStopsOnContext(t *testing.T) {
 	cause := errors.New("build cancelled")
 	ctx, cancel := context.WithCancelCause(context.Background())
 	errc := make(chan error, 1)
-	go func() { errc <- f.Follow(ctx, "3f9a2c1d", make(chan string)) }()
+	go func() { errc <- f.Follow(ctx, "3f9a2c1d", job.InitContainer, make(chan string)) }()
 	time.Sleep(10 * time.Millisecond)
 	cancel(cause)
 	select {
@@ -298,5 +300,15 @@ func TestKubeSourceWaitPodAndState(t *testing.T) {
 	st, _ = src.State(context.Background(), "missing", "clone")
 	if !st.Gone {
 		t.Fatalf("missing pod state %+v", st)
+	}
+}
+
+// nixpacks(auto) 모드는 init 컨테이너 이름이 달라 머리줄도 달라진다 (원본 _combined_job_logs와 같다).
+func TestInitHeaderFollowsTheContainerName(t *testing.T) {
+	if got := InitHeader(job.NixpacksInit); got != "=== nixpacks (init) ===" {
+		t.Fatalf("header %q", got)
+	}
+	if got := InitHeader(job.InitContainer); got != "=== clone (init) ===" {
+		t.Fatalf("header %q", got)
 	}
 }

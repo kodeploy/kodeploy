@@ -104,6 +104,12 @@ def apply(build_id: str, ev: dict) -> str:
             build.status = "cancelled"
             if record is not None:
                 close_record(record, "cancelled")
+        # 자동 빌드(nixpacks)가 만든 Dockerfile은 init 컨테이너 로그에 표지와 함께 찍힌다 — 화면의 Dockerfile 탭과
+        # 실패 진단이 쓰도록 빌드 행에 뽑아 둔다 (v1과 같다). 이미 뽑았으면 건너뛴다.
+        if build.build_mode == "auto" and not build.dockerfile_content and build.logs:
+            build.dockerfile_content = pipeline._extract_between(
+                build.logs, "===KODEPLOY_DOCKERFILE_START===", "===KODEPLOY_DOCKERFILE_END==="
+            )
         db.commit()
 
         # 비공개 저장소 빌드의 토큰 Secret은 빌드가 끝나면(성공·실패·취소) 지운다
