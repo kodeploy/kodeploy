@@ -23,6 +23,7 @@ import Privacy from "./components/legal/Privacy.jsx";
 import Terms from "./components/legal/Terms.jsx";
 import LoginModal from "./components/LoginModal.jsx";
 import TopBar from "./components/TopBar.jsx";
+import WhatsNew from "./components/WhatsNew.jsx";
 import { AppShellProvider } from "./contexts/AppShellContext.jsx";
 import { AuthProvider } from "./contexts/AuthContext.jsx";
 import { ThemeProvider } from "./contexts/ThemeContext.jsx";
@@ -122,6 +123,7 @@ export default function App() {
             </Routes>
           </div>
           {showLogin && <LoginModal onClose={() => setShowLogin(false)} />}
+          <WhatsNew />
         </div>
         </AppShellProvider>
       </AuthProvider>
