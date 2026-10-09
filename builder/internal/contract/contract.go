@@ -15,6 +15,9 @@ const (
 	KindConfig   = "config"
 	KindSetImage = "set-image"
 	KindDelete   = "delete"
+	// KindRemove는 서버 슬롯을 내린다: 빌더 소유 칸(image·runtime·port)을 비워 차트가 서버와 DB·Redis를 그리지 않게 한다.
+	// core 소유 칸(db 등)은 그대로라 서버를 다시 올리면 같은 설정으로 돌아온다. DB 디스크는 StatefulSet이 만든 PVC라 남는다.
+	KindRemove = "remove"
 
 	// 빌드 방식 (build.mode) — Dockerfile이 있으면 그대로, 없으면 nixpacks가 Dockerfile을 만든다.
 	// static은 정적 사이트 슬롯 전용: core가 만든 Dockerfile(dockerfile_b64)로 빌드한다.

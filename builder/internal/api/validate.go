@@ -129,8 +129,17 @@ func (v Validator) Validate(r *contract.DeployRequest) error {
 			return invalid("delete must not carry values, unit, build or image")
 		}
 		return nil
+	case contract.KindRemove:
+		// 정적 슬롯은 core 칸(static.enabled)이라 config로 끈다 — remove는 빌더 칸을 비우는 서버 슬롯 전용
+		if r.Slot != contract.SlotServer {
+			return invalid("remove is only for the server slot (turn the static slot off with config static.enabled=false)")
+		}
+		if r.Values != nil || r.Unit != nil || r.Build != nil || r.Image != "" {
+			return invalid("remove must not carry values, unit, build or image")
+		}
+		return nil
 	default:
-		return invalid("kind must be build, config, set-image or delete")
+		return invalid("kind must be build, config, set-image, remove or delete")
 	}
 }
 

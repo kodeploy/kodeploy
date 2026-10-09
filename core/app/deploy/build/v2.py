@@ -4,8 +4,7 @@ core가 하는 일: 제출 조건 검사 → 네임스페이스·Secret·PVC 준
 그 뒤(Job·로그·커밋·Argo 대기)는 빌더가 하고, 결과는 콜백(app/internal)으로 받아 builds를 갱신한다.
 계약: docs/go-builder-plan.md 3절, docs/builder-e2e.md "4부 할 일".
 
-v2가 아직 받지 않는 것 (빌더가 400으로 거부하거나, 한 앱이 v1·v2로 갈라지는 것):
-  초기 DB 복원, 서버를 쓰던 앱에서 서버를 빼는 것 (정적 사이트만 남기기).
+v1과 다른 점: 초기 DB 복원은 앱이 뜬 뒤에 한다 (DB와 앱을 Argo가 함께 띄우므로) — 아래 "초기 DB 복원" 참고.
 """
 
 import asyncio
@@ -27,6 +26,7 @@ from app.auth import github_app
 from app.auth.model import User
 from app.builder import client as builder
 from app.deploy import crud
+from app.deploy.console import snapshots
 from app.deploy.build.github import _detect_build, _repo_is_public
 from app.deploy.model import Build, BuildRecord
 from app.deploy.routing.hostnames import _slot_hostnames
@@ -69,9 +69,6 @@ async def check_submit(
 ) -> tuple[str, str]:
     if not config.BUILDER_HMAC_SECRET:
         raise ValueError("새 경로(v2) 빌더 연결이 설정되지 않았습니다")
-    if init_dump_token:
-        raise ValueError(f"{NOT_YET} 초기 DB 복원을 지원하지 않습니다")
-
     # 빌드할 저장소를 모두 확인한다: 서버가 있으면 repo_url, 정적 사이트가 있으면 그 저장소 (기본은 repo_url)
     repos: list[str] = []
     if runtime != "none":
@@ -249,18 +246,23 @@ def _fail(db, build: Build | None, record: BuildRecord | None, error: str) -> No
 
 
 # spawn_background로 도는 v2 제출: 준비(ns·Secret·PVC) → 빌더 전송. 이후 상태는 콜백이 바꾼다.
-async def run_v2_build(build_id: str, initial_env: dict[str, str] | None = None) -> None:
+# init_dump_token: 폼에서 올린 초기 DB 덤프 — 배포가 끝나면(deployed) 복원한다 (hold_initial_dump).
+async def run_v2_build(build_id: str, initial_env: dict[str, str] | None = None, init_dump_token: str | None = None) -> None:
     db = SessionLocal()
     record = None
     build = None
     try:
         build = crud.get_build(db, build_id)
         if not build or build.status == "cancelled":
+            if init_dump_token:
+                snapshots.discard_staged(init_dump_token)
             return
+        hold_initial_dump(build, init_dump_token)
         record = _new_record(db, build)
         owner = db.query(User).filter_by(id=build.user_id).first()
         app_row = apps_service.get_app(db, build.app_id) if build.app_id else None
         if not owner or not app_row:
+            drop_initial_dump(build_id)
             return
 
         # 빌더에 보내기 전에 Pod이 참조할 것들을 만든다 — 없으면 DB가 Secret을 못 찾아 바로 실패한다.
@@ -281,6 +283,7 @@ async def run_v2_build(build_id: str, initial_env: dict[str, str] | None = None)
         if build.status == "cancelled":  # 준비 중에 재배포로 대체됨
             close_record(record, "cancelled")
             db.commit()
+            drop_initial_dump(build_id)
             return
         server_hosts, static_hosts = _slot_hostnames(app_row)
         # 비공개 저장소: 앱 주인의 GitHub 연결로 토큰을 발급해 빌드별 Secret에 담는다 ("" = public clone).
@@ -297,12 +300,82 @@ async def run_v2_build(build_id: str, initial_env: dict[str, str] | None = None)
     except builder.BuilderError as e:
         db.rollback()
         _drop_git_auth(build_id)
+        drop_initial_dump(build_id)
         _fail(db, build, record, f"빌더가 받지 않았습니다: {e}")
     except Exception as e:
         db.rollback()
         _drop_git_auth(build_id)
+        drop_initial_dump(build_id)
         if build is not None:
             _fail(db, build, record, f"오케스트레이션 에러: {e}")
+    finally:
+        db.close()
+
+
+# ---- 초기 DB 복원 -------------------------------------------------------------------------------
+# v1은 DB를 core가 먼저 띄워 앱보다 앞서 복원했다. v2는 DB와 앱을 Argo가 values 하나로 함께 띄우므로
+# 앱이 다 뜬 뒤(deployed)에 복원하고, 앱을 한 번 다시 띄워 복원된 데이터로 시작하게 한다.
+# (앱이 빈 DB에 먼저 스키마를 만들어도, 덤프의 DROP TABLE IF EXISTS·CREATE가 그 위를 덮는다)
+# 덤프 파일은 core Pod의 /tmp(stage_dump)에 있어 토큰도 이 프로세스 메모리에 둔다 — core가 재시작되면 둘 다 사라진다(v1과 같다).
+# 그 경우 복원은 하지 않고 배포는 그대로 성공이다.
+
+_pending_dumps: dict[str, str] = {}   # build_id → stage된 덤프 토큰
+
+
+# 이 빌드가 끝나면 복원할 덤프를 맡긴다. DB를 고르지 않았으면 복원할 곳이 없으니 바로 버린다 (v1과 같다).
+def hold_initial_dump(build: Build, token: str | None) -> None:
+    if not token:
+        return
+    if build.db_type in ("mysql", "postgres"):
+        _pending_dumps[build.build_id] = token
+    else:
+        snapshots.discard_staged(token)
+
+
+def has_initial_dump(build_id: str) -> bool:
+    return build_id in _pending_dumps
+
+
+# 배포가 실패·취소되면 맡긴 덤프를 버린다.
+def drop_initial_dump(build_id: str) -> None:
+    token = _pending_dumps.pop(build_id, None)
+    if token:
+        snapshots.discard_staged(token)
+
+
+# 배포가 끝났다(deployed) — DB가 준비되면 덤프를 복원하고 앱을 다시 띄운다. 실패는 빌드 행의 error에 남긴다
+# (배포 자체는 성공이다 — v1과 같은 문구).
+async def restore_initial_dump(build_id: str) -> None:
+    token = _pending_dumps.pop(build_id, None)
+    if not token:
+        return
+    db = SessionLocal()
+    try:
+        build = crud.get_build(db, build_id)
+        if build is None:
+            snapshots.discard_staged(token)
+            return
+        error = None
+        if not await snapshots.wait_db_ready(build.tenant_id, build.db_type):
+            snapshots.discard_staged(token)
+            error = "초기 데이터 복원 실패: DB 준비 타임아웃"
+        else:
+            try:
+                await snapshots.restore_staged(build.tenant_id, token)
+            except Exception as e:
+                error = f"초기 데이터 복원 실패: {e}"
+        if error:
+            build.error = error
+            db.commit()
+            return
+        logger.info("build %s: initial dump restored into %s", build_id, build.tenant_id)
+        # 앱은 빈 DB로 먼저 떴다 — envRevision을 올려 Pod을 다시 띄운다 (이력 행 없는 config, 도메인 변경과 같다)
+        try:
+            await builder.submit(config_payload(
+                uuid.uuid4().hex[:8], User(id=build.user_id), build.tenant_id, {"envRevision": int(time.time())},
+            ))
+        except Exception as e:
+            logger.warning("build %s: restart after restore failed — %s", build_id, e)
     finally:
         db.close()
 
@@ -452,8 +525,8 @@ async def run_v2_rollback(build_id: str) -> None:
         db.close()
 
 
-# 이 앱에 배포된 서버가 있는가 — 성공한 v2 서버 배포가 하나라도 있으면 있다.
-# v2는 서버를 내리는 길이 아직 없어서, 서버가 있는 앱을 정적 사이트만 남기게 둘 수 없다.
+# 이 앱에 배포된 서버가 있었는가 — 성공한 v2 서버 배포가 하나라도 있으면 있다 (내린 뒤에도 참이다).
+# 정적 사이트만 남기는 배포에서 서버를 내릴지 정한다. 이미 내린 앱에 다시 보내도 빌더가 같은 값이라 커밋을 건너뛴다.
 def has_server_deployed(db, app: App) -> bool:
     return (
         db.query(Build.build_id)
@@ -464,6 +537,23 @@ def has_server_deployed(db, app: App) -> bool:
         .first()
         is not None
     )
+
+
+# ---- 서버 내리기 ---------------------------------------------------------------------------------
+# 정적 사이트만 남기는 배포. 빌더가 values의 서버 칸(image·runtime·port)을 비우면 Argo가 서버와 DB·Redis를 내린다.
+# DB 디스크(StatefulSet이 만든 PVC)·볼륨·버킷·Secret은 남는다 — 서버를 다시 올리면 데이터가 돌아온다 (v1 _teardown_server와 같다).
+# v1 teardown처럼 이력 행 없이 best-effort다: 실패는 기록만 하고, 다음 정적 단독 제출이 다시 보낸다.
+
+def remove_payload(build_id: str, actor: str, namespace: str) -> dict:
+    return {"build_id": build_id, "actor": actor, "namespace": namespace, "slot": "server", "kind": "remove"}
+
+
+async def remove_server(namespace: str, actor: str) -> None:
+    try:
+        await builder.submit(remove_payload(uuid.uuid4().hex[:8], actor, namespace))
+        logger.info("%s: server slot removal submitted", namespace)
+    except Exception as e:
+        logger.warning("%s: server slot removal failed — %s", namespace, e)
 
 
 # ---- 설정 변경 (환경변수·도메인) -------------------------------------------------------------------

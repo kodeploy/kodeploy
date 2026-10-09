@@ -102,6 +102,23 @@ func TestValidate(t *testing.T) {
 			return &contract.DeployRequest{BuildID: "cc33dd44", Namespace: testNS, Slot: "server", Kind: "config",
 				Values: &contract.CoreValues{EnvRevision: ptr(2)}}
 		}, ""},
+		{"remove ok", func() *contract.DeployRequest {
+			return &contract.DeployRequest{BuildID: "ff66aa77", Namespace: testNS, Slot: "server", Kind: "remove"}
+		}, ""},
+		{"remove static slot", func() *contract.DeployRequest {
+			return &contract.DeployRequest{BuildID: "ff66aa77", Namespace: testNS, Slot: "static", Kind: "remove"}
+		}, "only for the server slot"},
+		{"remove without slot", func() *contract.DeployRequest {
+			return &contract.DeployRequest{BuildID: "ff66aa77", Namespace: testNS, Kind: "remove"}
+		}, "slot is required"},
+		{"remove with values", func() *contract.DeployRequest {
+			return &contract.DeployRequest{BuildID: "ff66aa77", Namespace: testNS, Slot: "server", Kind: "remove",
+				Values: &contract.CoreValues{EnvRevision: ptr(2)}}
+		}, "remove must not carry"},
+		{"remove with image", func() *contract.DeployRequest {
+			return &contract.DeployRequest{BuildID: "ff66aa77", Namespace: testNS, Slot: "server", Kind: "remove",
+				Image: testRepo + ":v1@sha256:" + testDigest}
+		}, "remove must not carry"},
 		{"delete ok", func() *contract.DeployRequest {
 			return &contract.DeployRequest{BuildID: "ee55ff66", Namespace: testNS, Kind: "delete"}
 		}, ""},

@@ -123,12 +123,13 @@ var ErrNoValuesFile = errors.New("values file does not exist")
 // image는 build·set-image에서 요청 slot 칸에 넣을 <repo>:<tag>@sha256:<hex>.
 //   - core 소유 칸: req.Values에 온 것만 덮는다.
 //   - 요청 slot의 묶인 칸: build·set-image면 image(+서버는 unit의 runtime·port). config면 그대로.
+//     remove(서버 슬롯)면 image·runtime·port를 비운다.
 //   - 다른 slot의 묶인 칸: 그대로.
 func Merge(cur *Values, req *contract.DeployRequest, image string) (*Values, error) {
 	var v *Values
 	if cur == nil {
-		if req.Kind == contract.KindConfig {
-			return nil, ErrNoValuesFile // 앱이 없는데 설정만 바꿀 수는 없다
+		if req.Kind == contract.KindConfig || req.Kind == contract.KindRemove {
+			return nil, ErrNoValuesFile // 앱이 없는데 설정만 바꾸거나 서버를 내릴 수는 없다
 		}
 		v = Empty()
 	} else {
@@ -150,6 +151,8 @@ func Merge(cur *Values, req *contract.DeployRequest, image string) (*Values, err
 		port := req.Unit.Port
 		v.Port = &port
 	case contract.KindConfig:
+	case contract.KindRemove:
+		v.Image, v.Runtime, v.Port = "", "none", nil
 	default:
 		return nil, fmt.Errorf("kind %q does not merge values", req.Kind)
 	}

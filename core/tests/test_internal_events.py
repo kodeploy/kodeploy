@@ -321,3 +321,23 @@ def test_static_site_deploy_is_not_crash_watched(env):
     env.post({"seq": 1, "type": "committed", "image": "i"})
     env.post({"seq": 2, "type": "deployed"})
     assert [fn.__name__ for fn, _ in env.spawned] == ["watch_after_deploy"]
+
+
+def test_initial_dump_is_restored_after_deploy(env, monkeypatch):
+    # v2는 DB와 앱을 Argo가 함께 띄운다 — 배포가 끝나면(deployed) 맡겨 둔 덤프를 복원한다
+    monkeypatch.setattr(events.v2_module, "_pending_dumps", {BID: "a" * 32})
+    env.post({"seq": 1, "type": "committed", "image": "i"})
+    assert env.spawned == []                                   # 커밋만으로는 아직 (앱·DB가 안 떴다)
+    env.post({"seq": 2, "type": "deployed"})
+    fns = [fn.__name__ for fn, _ in env.spawned]
+    assert "restore_initial_dump" in fns and "watch_after_deploy" in fns
+    assert [a for fn, a in env.spawned if fn.__name__ == "restore_initial_dump"] == [(BID,)]
+
+
+def test_initial_dump_is_dropped_when_the_deploy_fails(env, monkeypatch):
+    dropped = []
+    monkeypatch.setattr(events.v2_module, "_pending_dumps", {BID: "a" * 32})
+    monkeypatch.setattr(events.v2_module, "drop_initial_dump", lambda bid: dropped.append(bid))
+    env.post({"seq": 1, "type": "failed", "stage": "build", "reason": "exit 1"})
+    assert dropped == [BID]
+    assert all(fn.__name__ != "restore_initial_dump" for fn, _ in env.spawned)

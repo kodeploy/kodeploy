@@ -438,9 +438,6 @@ async def start_deploy(
     existing_app = app if app is not None else apps_service.get_user_app(db, user.id)
     use_v2 = existing_app is not None and v2.is_v2(existing_app)
     if use_v2:
-        # v2에는 서버를 내리는 길이 아직 없다 — 서버가 있는 앱을 정적 사이트만 남기게 둘 수 없다
-        if not has_server and v2.has_server_deployed(db, existing_app):
-            raise ValueError(f"{v2.NOT_YET} 서버를 쓰던 앱에서 서버를 빼는 것을 지원하지 않습니다")
         build_mode, path = await v2.check_submit(
             user, runtime=runtime, repo_url=repo_url, branch=branch, build_mode=build_mode,
             dockerfile_path=dockerfile_path, use_static=use_static, init_dump_token=init_dump_token,
@@ -496,14 +493,16 @@ async def start_deploy(
         )
         builds.append(crud.create_build(db, server_build))
         if use_v2:
-            spawn_background(v2.run_v2_build, build_id, env_vars or {})
+            spawn_background(v2.run_v2_build, build_id, env_vars or {}, init_dump_token)
         else:
             spawn_background(_run_build, build_id, env_vars or {}, init_dump_token)
     elif not use_v2:
         # 서버 사용 안 함 — 기존 서버 리소스 + deps 정리 (PVC·버킷 보존). 매 제출마다
         # spawn이라 직전 실패도 다음 제출에서 재시도되는 self-healing.
-        # (v2 앱은 서버 리소스를 Argo가 관리한다. 서버가 없던 앱만 여기까지 오고, 치울 것도 없다)
         spawn_background(_teardown_server, app.id)
+    elif v2.has_server_deployed(db, app):
+        # v2는 서버 리소스를 Argo가 그린다 — 빌더에 서버 슬롯을 내리게 한다 (같은 self-healing, 데이터 보존)
+        spawn_background(v2.remove_server, app.namespace, user.id.hex[:8])
 
     # --- 정적 슬롯 ---
     _cancel_stale_builds(db, app.id, slot="static")

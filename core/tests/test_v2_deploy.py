@@ -60,7 +60,7 @@ def test_v2_detect_resolves_dockerfile_and_skips_v1(spawned, github):  # noqa: F
     b = builds[0]
     assert (b.build_mode, b.dockerfile_path, b.last_event_seq) == ("dockerfile", "docker/Dockerfile.prod", 0)
     assert spawned_fns(spawned) == [v2.run_v2_build]  # _run_build도, 정적 teardown(route reconcile)도 없다
-    assert spawned[0][1] == (b.build_id, {"A": "1"})
+    assert spawned[0][1] == (b.build_id, {"A": "1"}, None)
     assert github.probes == [("https://github.com/u/repo.git", "main", "java")]
 
 
@@ -70,7 +70,6 @@ def test_v2_explicit_dockerfile_mode_skips_detect(spawned, github):  # noqa: F81
 
 
 @pytest.mark.parametrize("kwargs,setup,reason", [
-    ({"init_dump_token": "t"}, None, "초기 DB 복원"),
     ({}, lambda g: setattr(g, "public", False), "찾을 수 없거나 접근할 수 없어요"),   # 비공개인데 GitHub 연결에도 없다
     ({}, lambda g: setattr(g, "public", None), "확인하지 못했습니다"),
 ])
@@ -709,7 +708,7 @@ def test_v2_static_with_server_builds_both_slots_on_the_builder(spawned, github)
     assert (site.build_mode, site.app_name, site.port) == ("static", "foo-static", 8080)
     assert site.image.rsplit("/", 1)[1].startswith("foo-static:")
     assert spawned_fns(spawned) == [v2.run_v2_build, v2.run_v2_build]          # v1 빌드·정적 teardown 없음
-    assert spawned[0][1] == (server.build_id, {"A": "1"})
+    assert spawned[0][1] == (server.build_id, {"A": "1"}, None)
     assert spawned[1][1] == (site.build_id,)                                    # 서버 환경변수는 정적 사이트와 상관없다
     assert APPS[server.user_id].site_enabled is True
 
@@ -731,13 +730,34 @@ def test_v2_dropping_the_static_site_leaves_it_to_the_server_build(spawned, gith
     assert spawned_fns(spawned) == [v2.run_v2_build]
 
 
-def test_v2_cannot_drop_a_deployed_server(spawned, github, monkeypatch):  # noqa: F811
+def test_v2_static_only_removes_a_deployed_server(spawned, github, monkeypatch):  # noqa: F811
+    # 서버가 있던 앱을 정적 사이트만 남기면 빌더에 서버 슬롯을 내리게 한다 (v1 _teardown_server 자리)
     monkeypatch.setattr(v2, "has_server_deployed", lambda db, app: True)
     user = v2_user()
-    db = MagicMock()
-    with pytest.raises(ValueError, match="서버를 쓰던 앱에서 서버를 빼는 것"):
-        run_deploy(db, user, runtime="none", use_static=True)
-    assert spawned == [] and APPS[user.id].site_enabled is False and not db.commit.called
+    builds = run_deploy(MagicMock(), user, runtime="none", use_static=True)
+    assert [b.runtime for b in builds] == ["static"]
+    assert spawned_fns(spawned) == [v2.remove_server, v2.run_v2_build]
+    assert spawned[0][1] == (APPS[user.id].namespace, UID.hex[:8])
+    assert APPS[user.id].site_enabled is True
+
+
+def test_remove_payload_names_only_the_server_slot():
+    assert v2.remove_payload("ab12cd34", "d6d8b759", "app-9abcdef0") == {
+        "build_id": "ab12cd34", "actor": "d6d8b759", "namespace": "app-9abcdef0", "slot": "server", "kind": "remove",
+    }
+
+
+def test_remove_server_submits_and_swallows_builder_errors(monkeypatch):
+    sent = []
+
+    async def submit(payload):
+        sent.append(payload)
+        raise builder.BuilderError("connection refused")
+
+    monkeypatch.setattr(v2.builder, "submit", submit)
+    asyncio.run(v2.remove_server("app-9abcdef0", "d6d8b759"))     # 배포 제출을 막지 않는다 — 다음 제출이 다시 보낸다
+    assert sent[0]["kind"] == "remove" and sent[0]["namespace"] == "app-9abcdef0"
+    assert len(sent[0]["build_id"]) == 8
 
 
 def test_v2_static_repo_is_checked_too(spawned, github, monkeypatch):  # noqa: F811
@@ -793,3 +813,107 @@ def test_run_server_build_declares_the_static_slot_from_the_app(runner):
         id=app_id, owner_id=UID, name="demo", namespace=f"tenant-{UID.hex[:8]}", site_enabled=True, pipeline="v2"))
     asyncio.run(v2.run_v2_build("3f9a2c1d"))
     assert runner.sent[0][0]["values"]["static"] == {"enabled": True, "hostnames": ["demo.kodeploy.com"]}
+
+
+# --- 초기 DB 복원 (v2는 배포가 끝난 뒤에 한다) ---
+
+TOKEN = "a" * 32
+
+
+@pytest.fixture
+def dumps(monkeypatch):
+    """stage된 덤프 처리를 기록한다 — 파일·DB Pod 대신."""
+    state = SimpleNamespace(discarded=[], restored=[], ready=True, restore_error=None, sent=[])
+    monkeypatch.setattr(v2.snapshots, "discard_staged", lambda t: state.discarded.append(t))
+
+    async def wait_db_ready(ns, db_type):
+        return state.ready
+
+    async def restore_staged(ns, token):
+        if state.restore_error:
+            raise state.restore_error
+        state.restored.append((ns, token))
+        return {}
+
+    async def submit(payload):
+        state.sent.append(payload)
+
+    monkeypatch.setattr(v2.snapshots, "wait_db_ready", wait_db_ready)
+    monkeypatch.setattr(v2.snapshots, "restore_staged", restore_staged)
+    monkeypatch.setattr(v2.builder, "submit", submit)
+    v2._pending_dumps.clear()
+    yield state
+    v2._pending_dumps.clear()
+
+
+def test_v2_passes_the_dump_token_to_the_build(spawned, github):  # noqa: F811
+    builds = run_deploy(MagicMock(), v2_user(), runtime="java", db_type="mysql", init_dump_token=TOKEN)
+    assert spawned[0] == (v2.run_v2_build, (builds[0].build_id, {}, TOKEN))
+
+
+def test_dump_is_held_only_when_there_is_a_database(dumps):
+    v2.hold_initial_dump(make_build(build_id="b1b1b1b1", db_type="mysql"), TOKEN)
+    assert v2.has_initial_dump("b1b1b1b1") and dumps.discarded == []
+    v2.hold_initial_dump(make_build(build_id="b2b2b2b2", db_type="none"), TOKEN)
+    assert not v2.has_initial_dump("b2b2b2b2") and dumps.discarded == [TOKEN]   # 복원할 DB가 없다 — 바로 버린다
+    v2.hold_initial_dump(make_build(build_id="b3b3b3b3"), None)
+    assert not v2.has_initial_dump("b3b3b3b3")
+
+
+def test_run_holds_the_dump_until_deployed(runner, dumps):
+    asyncio.run(v2.run_v2_build("3f9a2c1d", {}, TOKEN))
+    assert v2.has_initial_dump("3f9a2c1d") and dumps.discarded == []
+
+
+def test_run_drops_the_dump_when_the_builder_refuses(runner, dumps):
+    async def refuse(payload):
+        raise builder.BuilderError("bad request")
+
+    runner.monkeypatch.setattr(v2.builder, "submit", refuse)
+    asyncio.run(v2.run_v2_build("3f9a2c1d", {}, TOKEN))
+    assert not v2.has_initial_dump("3f9a2c1d") and dumps.discarded == [TOKEN]
+
+
+def _restore_db(monkeypatch, build):
+    db = MagicMock()
+    monkeypatch.setattr(v2, "SessionLocal", lambda: db)
+    monkeypatch.setattr(v2.crud, "get_build", lambda d, bid: build)
+    return db
+
+
+def test_restore_after_deploy_then_restarts_the_app(monkeypatch, dumps):
+    build = make_build(status="running", namespace="app-9abcdef0")
+    db = _restore_db(monkeypatch, build)
+    v2._pending_dumps["3f9a2c1d"] = TOKEN
+    asyncio.run(v2.restore_initial_dump("3f9a2c1d"))
+    assert dumps.restored == [("app-9abcdef0", TOKEN)]
+    restart = dumps.sent[0]
+    assert restart["kind"] == "config" and restart["namespace"] == "app-9abcdef0"
+    assert set(restart["values"]) == {"envRevision"} and restart["actor"] == UID.hex[:8]
+    assert build.error is None and not v2.has_initial_dump("3f9a2c1d") and not db.commit.called
+
+
+def test_restore_failure_is_recorded_on_the_build_and_skips_restart(monkeypatch, dumps):
+    build = make_build(status="running")
+    db = _restore_db(monkeypatch, build)
+    dumps.restore_error = v2.snapshots.SnapshotError("syntax error at line 3")
+    v2._pending_dumps["3f9a2c1d"] = TOKEN
+    asyncio.run(v2.restore_initial_dump("3f9a2c1d"))
+    assert build.error == "초기 데이터 복원 실패: syntax error at line 3" and db.commit.called
+    assert build.status == "running" and dumps.sent == []          # 배포는 성공 그대로, 앱 재시작은 안 한다
+
+
+def test_restore_gives_up_when_the_database_never_gets_ready(monkeypatch, dumps):
+    build = make_build(status="running")
+    _restore_db(monkeypatch, build)
+    dumps.ready = False
+    v2._pending_dumps["3f9a2c1d"] = TOKEN
+    asyncio.run(v2.restore_initial_dump("3f9a2c1d"))
+    assert build.error == "초기 데이터 복원 실패: DB 준비 타임아웃"
+    assert dumps.restored == [] and dumps.discarded == [TOKEN]
+
+
+def test_restore_without_a_held_dump_does_nothing(monkeypatch, dumps):
+    db = _restore_db(monkeypatch, make_build())
+    asyncio.run(v2.restore_initial_dump("3f9a2c1d"))
+    assert dumps.restored == [] and dumps.sent == [] and not db.method_calls

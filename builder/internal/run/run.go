@@ -116,7 +116,7 @@ func (r *run) execute() {
 		r.build()
 	case contract.KindSetImage:
 		r.setImage()
-	case contract.KindConfig:
+	case contract.KindConfig, contract.KindRemove:
 		r.config()
 	case contract.KindDelete:
 		r.delete()
@@ -586,7 +586,8 @@ func (r *run) setImage() {
 	r.deployImage(repoTag[:colon], repoTag[colon+1:], digest)
 }
 
-// config는 kind=config 흐름이다. core 칸만 커밋하고 Argo를 기다린다.
+// config는 kind=config·remove 흐름이다. 값만 커밋하고(remove는 서버 칸을 비운다) Argo를 기다린다.
+// remove 뒤엔 서버 이미지가 비어 앱 Pod 감시 없이 Argo 판정만 본다.
 func (r *run) config() {
 	res, ok := r.commit("", "")
 	if !ok {

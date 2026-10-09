@@ -1096,3 +1096,42 @@ func TestStaticInitContainerIsClone(t *testing.T) {
 		t.Fatalf("static init container %q", got)
 	}
 }
+
+// remove는 서버 칸을 비우는 커밋을 하고 Argo를 기다린다 (Job 없음). 정적 슬롯 빌드와는 슬롯이 달라 함께 돈다.
+func TestRemoveServer(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t, nil)
+	defer h.close()
+
+	port := 8080
+	seed := gitops.Empty()
+	seed.Name, seed.UserID, seed.Runtime, seed.Port, seed.Image, seed.DB = "kodeploy-test-spring", userID, "java", &port, repo+":99483bd9@"+digest, "mysql"
+	seed.Static = gitops.Static{Enabled: true, Image: staticRepo + ":v1@" + digest, Hostnames: []string{"kodeploy-test-spring.kodeploy.com"}}
+	h.git.values[ns] = seed
+
+	rm := &contract.DeployRequest{BuildID: "ee55ff66", Actor: "d6d8b759", Namespace: ns, Slot: contract.SlotServer, Kind: contract.KindRemove}
+	if err := h.m.Submit(rm); err != nil {
+		t.Fatal(err)
+	}
+	h.idle()
+	v := h.git.get(ns)
+	if v.Image != "" || v.Runtime != "none" || v.Port != nil {
+		t.Fatalf("server slot not removed: %+v", v)
+	}
+	if v.DB != "mysql" || v.Static.Image == "" || !v.Static.Enabled {
+		t.Fatalf("remove touched other fields: db=%q static=%+v", v.DB, v.Static)
+	}
+	if h.git.messages[0] != "deploy(tenant-d6d8b759): remove [ee55ff66] by d6d8b759" {
+		t.Fatalf("message %q", h.git.messages[0])
+	}
+	evs := h.core.list()
+	if got := strings.Join(types(evs), ","); got != "committed,deployed" {
+		t.Fatalf("events %s", got)
+	}
+	if evs[0].Image != "" || evs[0].CommitSHA == "" {
+		t.Fatalf("committed %+v", evs[0])
+	}
+	if j, _ := h.cs.BatchV1().Jobs("kodeploy-build").List(context.Background(), metav1.ListOptions{}); len(j.Items) != 0 {
+		t.Fatalf("remove must not create a job: %d", len(j.Items))
+	}
+}

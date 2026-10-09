@@ -188,3 +188,39 @@ func TestPath(t *testing.T) {
 
 func intp(i int) *int    { return &i }
 func boolp(b bool) *bool { return &b }
+
+// remove는 서버 슬롯의 빌더 칸만 비운다 — core 칸(db·redis·volume·hostnames)과 정적 슬롯은 그대로라
+// 서버를 다시 올리면 같은 설정으로 돌아오고, 정적 사이트는 계속 뜬다.
+func TestMergeRemoveClearsOnlyTheServerSlot(t *testing.T) {
+	port := 8080
+	cur := Empty()
+	cur.Name, cur.UserID, cur.Runtime, cur.Port, cur.Image = "shop", "d6d8b75985524d6f9a9000665e7ca0da", "java", &port, "ghcr.io/u/d6d8b759/shop:v1@"+newDigest
+	cur.DB, cur.Redis, cur.Volume.MountPath, cur.EnvRevision = "mysql", true, "/data", 7
+	cur.Hostnames = []string{"shop-api.kodeploy.com"}
+	cur.Static = Static{Enabled: true, Image: "ghcr.io/u/d6d8b759/shop-static:v1@" + newDigest, Hostnames: []string{"shop.kodeploy.com"}}
+
+	got, err := Merge(cur, &contract.DeployRequest{Kind: contract.KindRemove, Slot: contract.SlotServer}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Image != "" || got.Runtime != "none" || got.Port != nil {
+		t.Fatalf("server slot not cleared: image=%q runtime=%q port=%v", got.Image, got.Runtime, got.Port)
+	}
+	want := cur.clone()
+	want.Image, want.Runtime, want.Port = "", "none", nil
+	if !got.Equal(want) {
+		t.Fatalf("other fields changed:\n got %+v\nwant %+v", got, want)
+	}
+	if cur.Image == "" || cur.Port == nil {
+		t.Fatal("Merge must not modify its input")
+	}
+
+	// 이미 내린 앱에 다시 보내도 같은 값이다 (커밋을 건너뛴다)
+	again, err := Merge(got, &contract.DeployRequest{Kind: contract.KindRemove, Slot: contract.SlotServer}, "")
+	if err != nil || !again.Equal(got) {
+		t.Fatalf("remove is not idempotent: %+v %v", again, err)
+	}
+	if _, err := Merge(nil, &contract.DeployRequest{Kind: contract.KindRemove, Slot: contract.SlotServer}, ""); !errors.Is(err, ErrNoValuesFile) {
+		t.Fatalf("remove without file: %v", err)
+	}
+}

@@ -115,6 +115,12 @@ def apply(build_id: str, ev: dict) -> str:
         # 비공개 저장소 빌드의 토큰 Secret은 빌드가 끝나면(성공·실패·취소) 지운다
         if kind in ("finished", "failed", "cancelled") and (build.kind or "build") == "build":
             v2_module._drop_git_auth(build_id)
+        # 초기 DB 덤프를 맡긴 빌드: 배포가 끝나면 복원하고, 실패·취소면 버린다
+        if v2_module.has_initial_dump(build_id):
+            if kind == "deployed" and build.status == "running":
+                pipeline.spawn_background(v2_module.restore_initial_dump, build_id)
+            elif kind in ("failed", "cancelled") or build.status == "cancelled":
+                v2_module.drop_initial_dump(build_id)
 
         if diagnosis and build.ai_status == "pending":
             pipeline.spawn_background(_diagnose, build_id, diagnosis)
