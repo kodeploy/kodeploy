@@ -1,4 +1,4 @@
-// 마케팅 화면 공통 푸터 — 전체 폭 괘선 + 워드마크 + 링크 3개.
+// 마케팅 화면 공통 푸터 — 전체 폭 괘선 + 워드마크 + 링크 4개(가이드·피드백·이용약관·개인정보처리방침).
 // 랜딩·블로그·피드백이 같은 마감을 쓴다(시안 01·22·25 동일).
 import { Link } from "react-router-dom";
 import Brand from "../Brand.jsx";
@@ -16,14 +16,6 @@ export default function SiteFooter() {
             <Link to="/guide" className={LINK}>
               가이드
             </Link>
-            <a
-              href="https://github.com/yuntyu01/kodeploy"
-              target="_blank"
-              rel="noopener noreferrer"
-              className={LINK}
-            >
-              GitHub
-            </a>
             <Link to="/community" className={LINK}>
               피드백
             </Link>

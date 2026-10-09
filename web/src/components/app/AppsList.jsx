@@ -610,7 +610,10 @@ function AppMenu({ base, app, onDelete }) {
             <MenuLink to={`${base}/env`} label="환경변수" onDone={() => setOpen(false)} />
           )}
           {can(app, "owner") && (
-            <MenuLink to={`${base}/settings`} label="설정" onDone={() => setOpen(false)} />
+            <>
+              <MenuLink to={`${base}/settings?section=share`} label="초대하기" onDone={() => setOpen(false)} />
+              <MenuLink to={`${base}/settings`} label="설정" onDone={() => setOpen(false)} />
+            </>
           )}
           {onDelete && (
             <button

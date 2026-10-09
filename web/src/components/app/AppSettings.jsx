@@ -49,7 +49,7 @@ const SECTIONS = [
   { id: "general", nav: "일반", row: "빌드와 실행 설정" },
   { id: "domain", nav: "도메인", row: "도메인 설정" },
   { id: "storage", nav: "스토리지", row: "스토리지 설정" },
-  { id: "share", nav: "공유", row: "공유 설정" },
+  { id: "share", nav: "초대하기", row: "초대하기" },
   { id: "danger", row: "앱 삭제" },
 ];
 const SECTION_IDS = new Set(SECTIONS.map((s) => s.id));
@@ -726,7 +726,7 @@ function ShareSection({ appId }) {
 
   return (
     <>
-      <SectionHead>공유 설정</SectionHead>
+      <SectionHead>초대하기</SectionHead>
       <p className="kd-t-body-s text-fg-2" style={{ marginTop: 10 }}>
         {ROLE_HINT}
       </p>

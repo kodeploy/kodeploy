@@ -276,9 +276,15 @@ export default function AppOverview() {
             </InfoRow>
 
             {isOwner && (
-              <div style={{ marginTop: 16 }}>
+              <div className="flex items-center gap-4" style={{ marginTop: 16 }}>
                 <Link to={`${base}/settings`} className="kd-t-caption text-fg-1 underline underline-offset-4">
                   설정 보기
+                </Link>
+                <Link
+                  to={`${base}/settings?section=share`}
+                  className="kd-t-caption text-fg-1 underline underline-offset-4"
+                >
+                  초대하기
                 </Link>
               </div>
             )}
