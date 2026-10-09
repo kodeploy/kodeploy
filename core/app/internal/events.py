@@ -118,8 +118,10 @@ def apply(build_id: str, ev: dict) -> str:
 
         if diagnosis and build.ai_status == "pending":
             pipeline.spawn_background(_diagnose, build_id, diagnosis)
-        if kind == "deployed" and build.status == "running" and (build.kind or "build") != "env_change":
-            # 성공은 바로 표시하고, 뒤에서 60초 동안 시작 직후 크래시를 본다 (postwatch)
+        if kind == "deployed" and build.status == "running" and (build.kind or "build") != "env_change" and build.runtime != "static":
+            # 성공은 바로 표시하고, 뒤에서 60초 동안 시작 직후 크래시를 본다 (postwatch).
+            # 정적 사이트는 대상이 아니다 — 서버 배포 기준(최신 서버 빌드)으로 판정하는 감시라 정적 행엔 맞지 않고,
+            # nginx는 Argo의 readiness 판정이면 충분하다
             pipeline.spawn_background(postwatch.watch_after_deploy, build_id)
         return kind
     finally:

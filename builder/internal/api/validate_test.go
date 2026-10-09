@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"strings"
 	"testing"
 
@@ -24,6 +25,17 @@ func validAuto(projectPath string) *contract.DeployRequest {
 	r.Build.Mode = contract.ModeAuto
 	r.Build.DockerfileName = ""
 	r.Build.ProjectPath = projectPath
+	return r
+}
+
+// validStatic은 정적 사이트 슬롯의 유효한 빌드 요청이다. unit은 없고, Dockerfile은 core가 만들어 base64로 보낸다.
+func validStatic() *contract.DeployRequest {
+	r := validBuild()
+	r.Slot = contract.SlotStatic
+	r.Unit = nil
+	r.Build.Mode = contract.ModeStatic
+	r.Build.DockerfileName = ""
+	r.Build.DockerfileB64 = base64.StdEncoding.EncodeToString([]byte("FROM nginxinc/nginx-unprivileged:stable-alpine\n"))
 	return r
 }
 
@@ -160,9 +172,82 @@ func TestValidate(t *testing.T) {
 		}, "image must be"},
 
 		// build 칸
-		{"static build", func() *contract.DeployRequest { r := validBuild(); r.Slot = "static"; return r }, "not supported yet"},
 		{"mode unknown", func() *contract.DeployRequest { r := validBuild(); r.Build.Mode = "buildpack"; return r }, "not supported yet"},
-		{"mode static", func() *contract.DeployRequest { r := validBuild(); r.Build.Mode = "static"; return r }, "not supported yet"},
+
+		// 정적 사이트 슬롯
+		{"static build ok", validStatic, ""},
+		{"static build ok subdir", func() *contract.DeployRequest { r := validStatic(); r.Build.ProjectPath = "web/site"; return r }, ""},
+		{"static build ok private", func() *contract.DeployRequest {
+			r := validStatic()
+			r.Build.GitAuthSecret = "git-auth-3f9a2c1d"
+			return r
+		}, ""},
+		{"static slot with dockerfile mode", func() *contract.DeployRequest {
+			r := validStatic()
+			r.Build.Mode = contract.ModeDockerfile
+			r.Build.DockerfileB64 = ""
+			return r
+		}, "static slot builds only with mode static"},
+		{"static slot with auto mode", func() *contract.DeployRequest {
+			r := validStatic()
+			r.Build.Mode = contract.ModeAuto
+			r.Build.DockerfileB64 = ""
+			return r
+		}, "static slot builds only with mode static"},
+		{"static mode in server slot", func() *contract.DeployRequest {
+			r := validStatic()
+			r.Slot = contract.SlotServer
+			r.Unit = &contract.Unit{Runtime: "java", Port: 8080}
+			return r
+		}, "only for the static slot"},
+		{"static with unit", func() *contract.DeployRequest {
+			r := validStatic()
+			r.Unit = &contract.Unit{Runtime: "java", Port: 8080}
+			return r
+		}, "unit is only for the server slot"},
+		{"static without userId", func() *contract.DeployRequest { r := validStatic(); r.Values.UserID = nil; return r }, "values.userId"},
+		{"static without dockerfile", func() *contract.DeployRequest { r := validStatic(); r.Build.DockerfileB64 = ""; return r }, "dockerfile_b64 is required"},
+		{"static bad base64", func() *contract.DeployRequest { r := validStatic(); r.Build.DockerfileB64 = "not base64!"; return r }, "standard base64"},
+		{"static empty after decode", func() *contract.DeployRequest {
+			r := validStatic()
+			r.Build.DockerfileB64 = base64.StdEncoding.EncodeToString(nil) + "===="
+			return r
+		}, "dockerfile_b64"},
+		{"static dockerfile too large", func() *contract.DeployRequest {
+			r := validStatic()
+			r.Build.DockerfileB64 = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", maxDockerfileBytes+1)))
+			return r
+		}, "too large"},
+		{"static dockerfile at the limit", func() *contract.DeployRequest {
+			r := validStatic()
+			r.Build.DockerfileB64 = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", maxDockerfileBytes)))
+			return r
+		}, ""},
+		{"static with dockerfile_name", func() *contract.DeployRequest { r := validStatic(); r.Build.DockerfileName = "Dockerfile"; return r }, "not used with mode static"},
+		{"static with dockerfile_dir", func() *contract.DeployRequest { r := validStatic(); r.Build.DockerfileDir = "web"; return r }, "not used with mode static"},
+		{"static project_path dotdot", func() *contract.DeployRequest { r := validStatic(); r.Build.ProjectPath = "../etc"; return r }, "project_path"},
+		{"static project_path absolute", func() *contract.DeployRequest { r := validStatic(); r.Build.ProjectPath = "/etc"; return r }, "project_path"},
+		{"static project_path shell chars", func() *contract.DeployRequest { r := validStatic(); r.Build.ProjectPath = "a;rm -rf"; return r }, "project_path"},
+		{"static git_auth_secret other build", func() *contract.DeployRequest {
+			r := validStatic()
+			r.Build.GitAuthSecret = "git-auth-aa11bb22"
+			return r
+		}, "git_auth_secret"},
+		{"static image_repo other namespace", func() *contract.DeployRequest {
+			r := validStatic()
+			r.Build.ImageRepo = "ghcr.io/yuntyu01/aaaaaaaa/site-static"
+			return r
+		}, "hex8"},
+		{"dockerfile_b64 with dockerfile mode", func() *contract.DeployRequest {
+			r := validBuild()
+			r.Build.DockerfileB64 = "RlJPTSBhbHBpbmUK"
+			return r
+		}, "only used with mode static"},
+		{"dockerfile_b64 with auto mode", func() *contract.DeployRequest {
+			r := validAuto("")
+			r.Build.DockerfileB64 = "RlJPTSBhbHBpbmUK"
+			return r
+		}, "only used with mode static"},
 		{"git_auth_secret ok", func() *contract.DeployRequest {
 			r := validBuild()
 			r.Build.GitAuthSecret = "git-auth-3f9a2c1d"

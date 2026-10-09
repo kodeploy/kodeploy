@@ -630,7 +630,7 @@ async def put_domain(
     is_v2 = v2.is_v2(app)
     try:
         if is_v2:
-            v2.ensure_idle(db, app)   # 서버 배포가 도는 중이면 빌더 요청이 겹쳐 배포가 죽는다
+            v2.ensure_idle(db, app, include_static=True)   # 배포가 도는 중이면 빌더 요청이 겹치거나 옛 호스트를 되돌린다
         # CF·K8s 호출이 동기라 메인 루프를 막지 않게 스레드에서. v2는 route를 Argo가 그리므로 직접 안 고친다.
         result = await asyncio.to_thread(hostnames.set_custom_domain, db, app, req.domain, not is_v2)
     except ValueError as e:
@@ -653,7 +653,7 @@ async def delete_domain(
     is_v2 = v2.is_v2(app)
     if is_v2:
         try:
-            v2.ensure_idle(db, app)
+            v2.ensure_idle(db, app, include_static=True)
         except ValueError as e:
             raise HTTPException(status_code=409, detail=str(e))
     await asyncio.to_thread(hostnames.clear_custom_domain, db, app, not is_v2)

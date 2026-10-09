@@ -985,3 +985,114 @@ func TestInitContainerFollowsTheBuildMode(t *testing.T) {
 		t.Fatalf("no build: %q", got)
 	}
 }
+
+// ---- 정적 사이트 슬롯 -----------------------------------------------------------------------------
+
+const (
+	staticBuildID = "5a6b7c8d"
+	staticRepo    = "ghcr.io/yuntyu01/d6d8b759/kodeploy-test-spring-static"
+)
+
+func staticBuildReq() *contract.DeployRequest {
+	uid, name, on := userID, "kodeploy-test-spring", true
+	hosts := []string{"kodeploy-test-spring.kodeploy.com"}
+	return &contract.DeployRequest{
+		BuildID: staticBuildID, Namespace: ns, Slot: contract.SlotStatic, Kind: contract.KindBuild,
+		Values: &contract.CoreValues{UserID: &uid, Name: &name, Static: &contract.CoreStatic{Enabled: &on, Hostnames: &hosts}},
+		Build: &contract.BuildSpec{Repo: "https://github.com/yuntyu01/kodeploy-test-spring.git", Ref: "main",
+			Mode: contract.ModeStatic, DockerfileB64: "RlJPTSBuZ2lueAo=", ProjectPath: "site",
+			ImageRepo: staticRepo, ImageTag: staticBuildID, CacheRef: staticRepo + ":buildcache"},
+	}
+}
+
+// 정적 슬롯 빌드는 static 방식 Job을 만들고, 커밋은 values.static만 채운다 — 이미 배포된 서버 슬롯 칸은 건드리지 않는다.
+// 서버 슬롯 요청과는 슬롯이 달라 같은 namespace에서 함께 돌 수 있다.
+func TestStaticSlotBuild(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t, nil)
+	defer h.close()
+
+	serverImage := repo + ":99483bd9@" + digest
+	seed := gitops.Empty()
+	seed.Image, seed.Runtime, seed.Name, seed.UserID = serverImage, "java", "kodeploy-test-spring", userID
+	port := 8080
+	seed.Port = &port
+	h.git.values[ns] = seed
+
+	staticDigest := "sha256:" + strings.Repeat("ab", 32)
+	h.reg.exists[staticDigest] = true
+	h.logs.before = append(append([]string{}, preLines...),
+		"#20 exporting to image",
+		"#20 pushing manifest for "+staticRepo+":"+staticBuildID+"@"+staticDigest+" 0.8s done")
+
+	if err := h.m.Submit(staticBuildReq()); err != nil {
+		t.Fatal(err)
+	}
+	// 서버 슬롯 요청은 슬롯이 달라 겹쳐도 409가 아니다 (같은 슬롯이면 409)
+	rev := 3
+	other := &contract.DeployRequest{BuildID: "aa11bb22", Namespace: ns, Slot: contract.SlotServer, Kind: contract.KindConfig,
+		Values: &contract.CoreValues{EnvRevision: &rev}}
+	if err := h.m.Submit(other); err != nil {
+		t.Fatalf("server slot while static builds: %v", err)
+	}
+	var conflict *contract.ConflictError
+	again := staticBuildReq()
+	again.BuildID = "bb22cc33"
+	if err := h.m.Submit(again); !errors.As(err, &conflict) || conflict.BuildID != staticBuildID {
+		t.Fatalf("same slot should conflict: %v", err)
+	}
+
+	// 두 요청의 이벤트가 섞여 오니 정적 이미지가 실린 committed·deployed를 찾는다
+	wantImage := staticRepo + ":" + staticBuildID + "@" + staticDigest
+	has := func(typ string) bool {
+		for _, ev := range h.core.list() {
+			if ev.Type == typ && ev.Image == wantImage {
+				return true
+			}
+		}
+		return false
+	}
+	h.waitFor("static committed", func() bool { return has(contract.EventCommitted) })
+	h.waitFor("static deployed", func() bool { return has(contract.EventDeployed) })
+
+	j, err := h.cs.BatchV1().Jobs("kodeploy-build").Get(context.Background(), "build-d6d8b759-"+staticBuildID, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j.Labels[job.LabelBuildMode] != "static" {
+		t.Fatalf("job labels %v", j.Labels)
+	}
+	init := j.Spec.Template.Spec.InitContainers[0]
+	var b64 string
+	for _, e := range init.Env {
+		if e.Name == "DOCKERFILE_B64" {
+			b64 = e.Value
+		}
+	}
+	if b64 != "RlJPTSBuZ2lueAo=" {
+		t.Fatalf("DOCKERFILE_B64 %q", b64)
+	}
+	if ctxArg := j.Spec.Template.Spec.Containers[0].Args[2]; ctxArg != "--local=context=/workspace/src/site" {
+		t.Fatalf("context arg %q", ctxArg)
+	}
+
+	v := h.git.get(ns)
+	if v.Static.Image != wantImage || !v.Static.Enabled || len(v.Static.Hostnames) != 1 {
+		t.Fatalf("static values %+v", v.Static)
+	}
+	if v.Image != serverImage || v.Runtime != "java" || *v.Port != 8080 || v.EnvRevision != rev {
+		t.Fatalf("server slot changed: image=%q runtime=%q envRevision=%d", v.Image, v.Runtime, v.EnvRevision)
+	}
+
+	close(h.logs.gate)
+	_ = h.m.Cancel(staticBuildID)
+	h.idle()
+}
+
+// 정적 사이트 init 컨테이너 이름은 clone이다 (dockerfile 방식과 같다) — 로그 follow가 그 이름을 읽는다.
+func TestStaticInitContainerIsClone(t *testing.T) {
+	r := &run{req: &contract.DeployRequest{Build: &contract.BuildSpec{Mode: contract.ModeStatic}}}
+	if got := r.initContainer(); got != job.InitContainer {
+		t.Fatalf("static init container %q", got)
+	}
+}

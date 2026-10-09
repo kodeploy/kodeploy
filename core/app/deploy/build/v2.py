@@ -5,10 +5,12 @@ core가 하는 일: 제출 조건 검사 → 네임스페이스·Secret·PVC 준
 계약: docs/go-builder-plan.md 3절, docs/builder-e2e.md "4부 할 일".
 
 v2가 아직 받지 않는 것 (빌더가 400으로 거부하거나, 한 앱이 v1·v2로 갈라지는 것):
-  서버 없는 앱, 정적 사이트, 초기 DB 복원.
+  초기 DB 복원, 서버를 쓰던 앱에서 서버를 빼는 것 (정적 사이트만 남기기).
 """
 
 import asyncio
+import base64
+import json
 import logging
 import os.path
 import re
@@ -29,6 +31,7 @@ from app.deploy.build.github import _detect_build, _repo_is_public
 from app.deploy.model import Build, BuildRecord
 from app.deploy.routing.hostnames import _slot_hostnames
 from app.deploy.stack import env as env_module
+from app.deploy.stack import manifests
 from app.deploy.stack.resources import _apply_storage, _apply_volume, _ensure_tenant_ns, ensure_dep_secrets
 from app.shared.db import SessionLocal
 
@@ -46,7 +49,8 @@ def is_v2_build(build: Build) -> bool:
 
 
 # 제출 조건 검사 — 통과하면 (빌드 방식, 경로)를 돌려준다. 아니면 ValueError(→ 400).
-#   ("dockerfile", Dockerfile 경로) 또는 ("auto", 프로젝트 경로) — 경로는 repo 기준이다.
+#   ("dockerfile", Dockerfile 경로) 또는 ("auto", 프로젝트 경로) — 경로는 repo 기준이다. 서버가 없는 제출(정적만)은
+#   서버 빌드가 없으니 방식·경로를 정하지 않고 기본값을 돌려준다.
 # detect(웹 기본값)면 여기서 바로 감지한다: Dockerfile이 있으면 dockerfile, 없으면 nixpacks 자동 빌드(auto)로 간다.
 async def check_submit(
     user: User,
@@ -59,29 +63,26 @@ async def check_submit(
     use_static: bool,
     init_dump_token: str | None,
     project_path: str = "",                # 자동 빌드의 프로젝트 서브디렉토리 (비면 nixpacks가 자동 탐색)
+    static_repo_url: str = "",             # 정적 사이트를 다른 저장소에서 받을 때 그 저장소 (비면 repo_url)
     app: App | None = None,                # 이미 있는 앱이면 그 앱 (저장소 접근은 앱 주인의 GitHub 연결로 한다)
     installation_id: int | None = None,    # 저장소를 받을 GitHub 연결 (비공개 저장소 확인용)
 ) -> tuple[str, str]:
     if not config.BUILDER_HMAC_SECRET:
         raise ValueError("새 경로(v2) 빌더 연결이 설정되지 않았습니다")
-    if runtime == "none":
-        raise ValueError(f"{NOT_YET} 서버 없는 앱을 지원하지 않습니다")
-    if use_static:
-        raise ValueError(f"{NOT_YET} 정적 사이트를 지원하지 않습니다")
     if init_dump_token:
         raise ValueError(f"{NOT_YET} 초기 DB 복원을 지원하지 않습니다")
 
-    public = await asyncio.to_thread(_repo_is_public, repo_url)
-    if public is None:
-        raise ValueError("GitHub에서 저장소를 확인하지 못했습니다. 잠시 후 다시 시도하세요")
-    if not public:
-        # public이 아니면 비공개이거나 없는 저장소다 — 연결된 GitHub App(앱 주인의 것)이 접근할 수 있으면 비공개로 받는다.
-        # 빌드 Job이 그 연결의 토큰으로 clone한다 (run_v2_build가 빌드별 Secret을 만든다).
-        if not await asyncio.to_thread(_installation_has_repo, installation_id, repo_url):
-            raise ValueError(
-                "저장소를 찾을 수 없거나 접근할 수 없어요. 비공개 저장소라면 GitHub 연결에서 이 저장소를 추가해 주세요"
-            )
+    # 빌드할 저장소를 모두 확인한다: 서버가 있으면 repo_url, 정적 사이트가 있으면 그 저장소 (기본은 repo_url)
+    repos: list[str] = []
+    if runtime != "none":
+        repos.append(repo_url)
+    if use_static:
+        repos.append(static_repo_url.strip() or repo_url)
+    for url in dict.fromkeys(repos):
+        await _ensure_repo_access(url, installation_id)
 
+    if runtime == "none":
+        return "dockerfile", dockerfile_path or "Dockerfile"
     if build_mode == "detect":
         probe = Build(
             repo_url=repo_url, branch=branch, project_path=project_path, runtime=runtime, user_id=user.id,
@@ -93,7 +94,20 @@ async def check_submit(
     return "dockerfile", dockerfile_path or "Dockerfile"
 
 
-# 빌더 요청 본문 (계약 3-1). values에는 core 소유 칸만 — image·runtime·port는 빌더 소유라 넣으면 400.
+# 저장소를 받을 수 있는지 본다: public이면 통과, 아니면 GitHub 연결이 접근할 수 있어야 한다. 못 하면 ValueError.
+async def _ensure_repo_access(repo_url: str, installation_id: int | None) -> None:
+    public = await asyncio.to_thread(_repo_is_public, repo_url)
+    if public is None:
+        raise ValueError("GitHub에서 저장소를 확인하지 못했습니다. 잠시 후 다시 시도하세요")
+    if not public:
+        # public이 아니면 비공개이거나 없는 저장소다 — 연결된 GitHub App(앱 주인의 것)이 접근할 수 있으면 비공개로 받는다.
+        # 빌드 Job이 그 연결의 토큰으로 clone한다 (run_v2_build가 빌드별 Secret을 만든다).
+        if not await asyncio.to_thread(_installation_has_repo, installation_id, repo_url):
+            raise ValueError(
+                "저장소를 찾을 수 없거나 접근할 수 없어요. 비공개 저장소라면 GitHub 연결에서 이 저장소를 추가해 주세요"
+            )
+
+
 # 이 GitHub 연결(installation)이 접근할 수 있는 저장소인가 — 비공개 저장소를 받아도 되는지 본다.
 def _installation_has_repo(installation_id: int | None, repo_url: str) -> bool:
     if not installation_id:
@@ -105,7 +119,35 @@ def _installation_has_repo(installation_id: int | None, repo_url: str) -> bool:
     return any((r.get("full_name") or "").lower() == slug for r in github_app.list_installation_repos(installation_id))
 
 
-def build_payload(build: Build, owner: User, hostnames: list[str], git_auth_secret: str = "") -> dict:
+# 정적 사이트 빌드에 쓸 Dockerfile 본문 — repo엔 없고 플랫폼이 만든다 (v1과 같은 템플릿).
+# 빌드 입력(빌드 커맨드·출력 폴더·빌드 변수)만의 함수라 같은 행이면 늘 같은 글자다 (화면의 Dockerfile 탭에도 이걸 둔다).
+def static_dockerfile_text(build: Build) -> str:
+    return manifests.static_dockerfile(
+        build.build_cmd or "",
+        build.output_dir or "",
+        build_env=json.loads(build.build_env) if build.build_env else None,
+    )
+
+
+# 정적 사이트 슬롯 빌드의 values — core 칸 중 이 슬롯의 것만 보낸다. 서버 칸(db·redis·volume)은 보내지 않는다:
+# 이 행은 서버 설정을 모르니(db none·볼륨 없음) 보내면 이미 배포된 서버 설정을 지워 버린다.
+def _static_values(build: Build, owner: User, server_hosts: list[str], static_hosts: list[str]) -> dict:
+    return {
+        "name": build.app_name.removesuffix("-static"),   # 정적 행의 이름은 {앱}-static, 차트의 values.name은 앱 이름이다
+        "userId": owner.id.hex,
+        "hostnames": server_hosts,
+        "static": {"enabled": True, "hostnames": static_hosts},
+    }
+
+
+def build_payload(
+    build: Build,
+    owner: User,
+    hostnames: list[str],
+    git_auth_secret: str = "",
+    static_enabled: bool = False,                 # 서버 빌드가 함께 싣는 정적 슬롯 선언 (앱의 site_enabled)
+    static_hosts: list[str] | None = None,
+) -> dict:
     image_repo = build.image.rsplit(":", 1)[0]
     spec = {
         "repo": build.repo_url,
@@ -113,7 +155,14 @@ def build_payload(build: Build, owner: User, hostnames: list[str], git_auth_secr
         "image_repo": image_repo,
         "image_tag": build.build_id,
     }
-    if build.build_mode == "auto":
+    is_static = build.runtime == "static"
+    if is_static:
+        # 정적 사이트: core가 만든 Dockerfile을 base64로 보낸다 (project_path가 있으면 그 폴더가 빌드 context)
+        spec["mode"] = "static"
+        spec["dockerfile_b64"] = base64.b64encode(static_dockerfile_text(build).encode("utf-8")).decode("ascii")
+        if build.project_path:
+            spec["project_path"] = build.project_path
+    elif build.build_mode == "auto":
         # 자동 빌드(nixpacks): Dockerfile 칸은 쓰지 않고, 프로젝트 경로만 (비면 빌더가 자동 탐색한다)
         spec["mode"] = "auto"
         if build.project_path:
@@ -125,6 +174,16 @@ def build_payload(build: Build, owner: User, hostnames: list[str], git_auth_secr
         spec["cache_ref"] = f"{image_repo}:buildcache"
     if git_auth_secret:
         spec["git_auth_secret"] = git_auth_secret       # 비공개 저장소: clone 컨테이너에만 토큰이 간다
+    if is_static:
+        return {
+            "build_id": build.build_id,
+            "actor": owner.id.hex[:8],
+            "namespace": build.tenant_id,
+            "slot": "static",
+            "kind": "build",
+            "values": _static_values(build, owner, hostnames, static_hosts or []),
+            "build": spec,
+        }
     return {
         "build_id": build.build_id,
         "actor": owner.id.hex[:8],
@@ -138,7 +197,7 @@ def build_payload(build: Build, owner: User, hostnames: list[str], git_auth_secr
             "redis": bool(build.use_redis),
             "volume": {"mountPath": build.volume_mount_path or ""},
             "hostnames": hostnames,
-            "static": {"enabled": False, "hostnames": []},
+            "static": {"enabled": static_enabled, "hostnames": static_hosts or []},
         },
         "unit": {"runtime": build.runtime, "port": build.port},
         "build": spec,
@@ -205,19 +264,25 @@ async def run_v2_build(build_id: str, initial_env: dict[str, str] | None = None)
             return
 
         # 빌더에 보내기 전에 Pod이 참조할 것들을 만든다 — 없으면 DB가 Secret을 못 찾아 바로 실패한다.
+        # 정적 사이트는 서버가 쓰는 환경변수·DB·저장소·볼륨이 없다 (그건 서버 슬롯 빌드의 몫이다).
+        is_static = build.runtime == "static"
         _ensure_tenant_ns(build)
-        if initial_env:
-            env_module.set_env(build.tenant_id, build.app_name, initial_env)
-        ensure_dep_secrets(build)
-        _apply_storage(build)
-        _apply_volume(build)
+        if not is_static:
+            if initial_env:
+                env_module.set_env(build.tenant_id, build.app_name, initial_env)
+            ensure_dep_secrets(build)
+            _apply_storage(build)
+            _apply_volume(build)
+        else:
+            build.dockerfile_content = static_dockerfile_text(build)   # 빌드 전에 보존 (화면 Dockerfile 탭 · 진단)
+            db.commit()
 
         db.refresh(build)
         if build.status == "cancelled":  # 준비 중에 재배포로 대체됨
             close_record(record, "cancelled")
             db.commit()
             return
-        server_hosts, _ = _slot_hostnames(app_row)
+        server_hosts, static_hosts = _slot_hostnames(app_row)
         # 비공개 저장소: 앱 주인의 GitHub 연결로 토큰을 발급해 빌드별 Secret에 담는다 ("" = public clone).
         # 빌드가 끝나면(콜백의 finished·failed·cancelled) 지운다.
         from app.deploy.build import pipeline
@@ -225,7 +290,9 @@ async def run_v2_build(build_id: str, initial_env: dict[str, str] | None = None)
         git_auth = await asyncio.to_thread(pipeline._provision_git_auth, build)
         build.status = "building"         # 이벤트가 먼저 와도 뒤로 돌리지 않게 전송 전에 바꾼다
         db.commit()
-        await builder.submit(build_payload(build, owner, server_hosts, git_auth))
+        await builder.submit(
+            build_payload(build, owner, server_hosts, git_auth, static_enabled=app_row.site_enabled, static_hosts=static_hosts)
+        )
         logger.info("build %s submitted to builder", build_id)
     except builder.BuilderError as e:
         db.rollback()
@@ -385,6 +452,20 @@ async def run_v2_rollback(build_id: str) -> None:
         db.close()
 
 
+# 이 앱에 배포된 서버가 있는가 — 성공한 v2 서버 배포가 하나라도 있으면 있다.
+# v2는 서버를 내리는 길이 아직 없어서, 서버가 있는 앱을 정적 사이트만 남기게 둘 수 없다.
+def has_server_deployed(db, app: App) -> bool:
+    return (
+        db.query(Build.build_id)
+        .filter(
+            Build.app_id == app.id, Build.runtime != "static", Build.kind == "build",
+            Build.status == "running", Build.last_event_seq.isnot(None),
+        )
+        .first()
+        is not None
+    )
+
+
 # ---- 설정 변경 (환경변수·도메인) -------------------------------------------------------------------
 # v2 앱의 Deployment·HTTPRoute는 Argo가 git values로 그린다. core가 직접 고치면 Argo가 되돌리므로,
 # 값만 바꾸는 요청(kind=config)을 빌더에 보내 values를 커밋하게 한다 — Argo가 적용한다.
@@ -395,12 +476,13 @@ async def run_v2_rollback(build_id: str) -> None:
 _ACTIVE = ("queued", "building", "built", "deploying")
 
 
-def ensure_idle(db, app: App) -> None:
-    busy = (
-        db.query(Build)
-        .filter(Build.app_id == app.id, Build.runtime != "static", Build.status.in_(_ACTIVE))
-        .first()
-    )
+# 환경변수는 정적 사이트와 상관없어 서버 배포만 기다린다. 도메인은 정적 슬롯의 호스트도 바꾸니 정적 배포까지 기다린다
+# (돌던 정적 빌드가 나중에 옛 호스트 목록을 커밋해 새 도메인을 되돌리지 않게).
+def ensure_idle(db, app: App, *, include_static: bool = False) -> None:
+    conds = [Build.app_id == app.id, Build.status.in_(_ACTIVE)]
+    if not include_static:
+        conds.append(Build.runtime != "static")
+    busy = db.query(Build).filter(*conds).first()
     if busy is not None:
         raise ValueError("배포가 진행 중이에요. 끝난 뒤에 다시 시도해 주세요")
 
@@ -425,10 +507,14 @@ async def submit_env_revision(event: Build, actor: User) -> None:
     )
 
 
-# 도메인이 바뀌었다 — 슬롯 규칙으로 계산한 hostnames를 values에 싣는다 (새 목록이 route를 통째로 대체한다).
+# 도메인이 바뀌었다 — 슬롯 규칙으로 계산한 두 슬롯의 hostnames를 values에 싣는다 (새 목록이 route를 통째로 대체한다).
+# 정적 사이트가 켜져 있으면 커스텀 도메인은 정적 슬롯으로 간다. 정적 슬롯의 켬/끔(enabled)은 건드리지 않는다.
 # 이 요청은 이력 행이 없다(도메인 변경은 이력에 안 남는다) — 콜백은 모르는 build_id라 무시된다.
 async def apply_hostnames(app: App, actor: User) -> None:
-    server_hosts, _ = _slot_hostnames(app)
+    server_hosts, static_hosts = _slot_hostnames(app)
     await builder.submit(
-        config_payload(uuid.uuid4().hex[:8], actor, app.namespace, {"hostnames": server_hosts})
+        config_payload(
+            uuid.uuid4().hex[:8], actor, app.namespace,
+            {"hostnames": server_hosts, "static": {"hostnames": static_hosts}},
+        )
     )

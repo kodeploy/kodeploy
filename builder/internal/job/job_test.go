@@ -1,6 +1,7 @@
 package job
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"reflect"
@@ -241,6 +242,81 @@ func TestNixpacksMatchesOriginalTemplate(t *testing.T) {
 
 func TestNixpacksTokenReachesOnlyTheInitContainer(t *testing.T) {
 	j := Build(nixpacksParams(false, true))
+	var inInit, inMain bool
+	for _, e := range j.Spec.Template.Spec.InitContainers[0].Env {
+		inInit = inInit || e.Name == "GIT_AUTH_TOKEN" && e.ValueFrom != nil && e.Value == ""
+	}
+	for _, e := range j.Spec.Template.Spec.Containers[0].Env {
+		inMain = inMain || e.Name == "GIT_AUTH_TOKEN"
+	}
+	if !inInit || inMain {
+		t.Fatalf("token in init=%v main=%v", inInit, inMain)
+	}
+}
+
+// staticParams는 hack/render-original-job.py의 static-* 모드와 같은 매개변수다.
+// Dockerfile 본문은 같은 스크립트가 뽑은 testdata/static-dockerfile.txt (core의 static_dockerfile 렌더 결과).
+func staticParams(t *testing.T, cache bool, private bool) Params {
+	t.Helper()
+	text, err := os.ReadFile("testdata/static-dockerfile.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := goldenParams(false)
+	p.Mode = ModeStatic
+	p.DockerfileB64 = base64.StdEncoding.EncodeToString(text)
+	if cache {
+		p.ProjectPath = "site"
+		p.CacheRef = "ghcr.io/yuntyu01/d6d8b759/kodeploy-test-spring:buildcache"
+	}
+	if private {
+		p.GitAuthSecret = "git-auth-3f9a2c1d"
+	}
+	return p
+}
+
+// TestStaticMatchesOriginalTemplate는 정적 사이트 Job이 원본 Jinja 렌더와 같은지 본다 (init 스크립트 글자 그대로).
+func TestStaticMatchesOriginalTemplate(t *testing.T) {
+	for _, tc := range []struct {
+		golden  string
+		cache   bool
+		private bool
+	}{
+		{"testdata/original-static-cache.json", true, false},
+		{"testdata/original-static-nocache.json", false, false},
+		{"testdata/original-static-private.json", false, true},
+	} {
+		t.Run(tc.golden, func(t *testing.T) {
+			raw, err := os.ReadFile(tc.golden)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var want map[string]any
+			if err := json.Unmarshal(raw, &want); err != nil {
+				t.Fatal(err)
+			}
+
+			got := toMap(t, Build(staticParams(t, tc.cache, tc.private)))
+			dropZeroArtifacts(got)
+			meta := dig(got, "metadata")
+			labels := meta["labels"].(map[string]any)
+			if labels[LabelManaged] != "true" || labels[LabelBuildMode] != "static" {
+				t.Fatalf("labels: %v", labels)
+			}
+			delete(labels, LabelManaged)
+			delete(meta, "annotations") // kodeploy.io/request는 빌더가 더하는 의도한 차이
+
+			if !reflect.DeepEqual(got, want) {
+				g, _ := json.MarshalIndent(got, "", "  ")
+				w, _ := json.MarshalIndent(want, "", "  ")
+				t.Fatalf("static Job differs from original template\n--- got\n%s\n--- want\n%s", g, w)
+			}
+		})
+	}
+}
+
+func TestStaticTokenReachesOnlyTheInitContainer(t *testing.T) {
+	j := Build(staticParams(t, false, true))
 	var inInit, inMain bool
 	for _, e := range j.Spec.Template.Spec.InitContainers[0].Env {
 		inInit = inInit || e.Name == "GIT_AUTH_TOKEN" && e.ValueFrom != nil && e.Value == ""

@@ -195,6 +195,7 @@ func (r *run) createJob() error {
 		GitAuthSecret:         b.GitAuthSecret,
 		Mode:                  b.Mode,
 		ProjectPath:           b.ProjectPath,
+		DockerfileB64:         b.DockerfileB64,
 		BuildKitImage:         r.m.d.Cfg.BuildKitImage,
 		ActiveDeadlineSeconds: r.m.d.Cfg.BuildActiveDeadlineSeconds,
 		RequestJSON:           string(reqJSON),

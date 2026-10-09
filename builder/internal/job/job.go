@@ -21,9 +21,11 @@ const (
 	NixpacksInit      = "nixpacks" // 자동 빌드(nixpacks) 모드의 init 컨테이너 이름
 	nixpacksVersion   = "v1.41.0"  // 원본 템플릿의 NIXPACKS_VERSION
 
-	// 빌드 방식 — Dockerfile이 있으면 그대로(dockerfile), 없으면 nixpacks가 Dockerfile을 만든다(auto)
+	// 빌드 방식 — Dockerfile이 있으면 그대로(dockerfile), 없으면 nixpacks가 Dockerfile을 만든다(auto),
+	// 정적 사이트는 core가 만든 Dockerfile(base64)로 빌드한다(static)
 	ModeDockerfile = "dockerfile"
 	ModeAuto       = "auto"
+	ModeStatic     = "static"
 )
 
 // 라벨: app·build-id·user-id·build-mode는 원본 그대로 (core가 build-id 라벨로 Pod을 찾는다)
@@ -59,10 +61,28 @@ fi
 git clone --depth 1 -b "$BRANCH" "$REPO_URL" /workspace/src
 `
 
+// 정적 사이트 init 스크립트 — 원본 static_buildkit_job.yaml.j2 그대로. clone한 뒤 core가 만든 Dockerfile을
+// 따로 쓴다 (repo엔 Dockerfile이 없다). 표지 두 줄은 core가 화면의 Dockerfile 탭에 쓰던 것이라 남겼다.
+const staticScript = `set -eu
+echo "[1/2] cloning ${REPO_URL} (${BRANCH})..."
+# private repo: 토큰을 URL rewrite로 주입 — REPO_URL/로그엔 토큰 안 보임(set -x 꺼짐)
+if [ -n "${GIT_AUTH_TOKEN:-}" ]; then
+  git config --global url."https://x-access-token:${GIT_AUTH_TOKEN}@github.com/".insteadOf "https://github.com/"
+fi
+git clone --depth 1 -b "$BRANCH" "$REPO_URL" /workspace/src
+echo "[2/2] writing generated Dockerfile..."
+mkdir -p /workspace/df
+echo "$DOCKERFILE_B64" | base64 -d > /workspace/df/Dockerfile
+echo "===KODEPLOY_DOCKERFILE_START==="
+cat /workspace/df/Dockerfile
+echo "===KODEPLOY_DOCKERFILE_END==="
+`
+
 // Params는 Build에 넘기는 값이다. 원본 buildkit_job()·nixpacks_buildkit_job()의 인자와 같다.
 type Params struct {
-	Mode                  string // "" 또는 dockerfile이면 Dockerfile 빌드, auto면 nixpacks 자동 빌드
-	ProjectPath           string // auto 전용: repo root 기준 서브디렉토리 (빈 값=nixpacks가 자동 탐색)
+	Mode                  string // "" 또는 dockerfile이면 Dockerfile 빌드, auto면 nixpacks 자동 빌드, static이면 정적 사이트
+	ProjectPath           string // auto·static: repo root 기준 서브디렉토리 (auto는 빈 값=자동 탐색, static은 빈 값=root)
+	DockerfileB64         string // static 전용: core가 만든 Dockerfile 본문(base64)
 	Namespace             string
 	BuildID               string
 	UserID                string // 32 hex
@@ -87,9 +107,10 @@ func Name(buildID, userID string) string {
 	return "build-" + u + "-" + buildID
 }
 
-// Build는 원본 템플릿과 같은 모양의 Job을 만든다. Mode에 따라 두 가지다:
+// Build는 원본 템플릿과 같은 모양의 Job을 만든다. Mode에 따라 세 가지다:
 //   - dockerfile(buildkit_job.yaml.j2): init(clone)이 repo를 emptyDir에 받고, main(rootless BuildKit)이 그 Dockerfile을 빌드한다.
 //   - auto(nixpacks_buildkit_job.yaml.j2): init(nixpacks)이 repo를 받아 Dockerfile을 만들고, main이 그걸 빌드한다.
+//   - static(static_buildkit_job.yaml.j2): init(clone)이 repo를 받고 core가 보낸 Dockerfile을 따로 써 두면, main이 그걸로 빌드한다.
 //
 // 둘 다 GHCR에 push하고, 라벨·TTL·deadline·볼륨은 같다.
 func Build(p Params) *batchv1.Job {
@@ -102,8 +123,11 @@ func Build(p Params) *batchv1.Job {
 	initC := dockerfileContainers(p, workspace)
 	mainC := mainContainer(p, dockerfileMain(p), nil, workspace)
 	mode := ModeDockerfile
-	if p.Mode == ModeAuto {
+	switch p.Mode {
+	case ModeAuto:
 		initC, mainC, mode = nixpacksContainers(p, workspace)
+	case ModeStatic:
+		initC, mainC, mode = staticContainers(p, workspace)
 	}
 
 	return &batchv1.Job{
@@ -256,4 +280,41 @@ func nixpacksContainers(p Params, workspace corev1.VolumeMount) (corev1.Containe
 	}
 	script += "  --output \"type=image,name=" + p.Image + ",push=true\"\n"
 	return initC, mainContainer(p, []string{script}, []string{"sh", "-c"}, workspace), ModeAuto
+}
+
+// staticContainers는 정적 사이트 모드의 init(clone)·main 컨테이너다.
+// Dockerfile은 repo가 아니라 /workspace/df에 있고, 빌드 context는 clone한 소스(+서브디렉토리)다.
+func staticContainers(p Params, workspace corev1.VolumeMount) (corev1.Container, corev1.Container, string) {
+	env := append([]corev1.EnvVar{
+		{Name: "REPO_URL", Value: p.RepoURL},
+		{Name: "BRANCH", Value: p.Branch},
+		{Name: "DOCKERFILE_B64", Value: p.DockerfileB64},
+	}, gitAuthEnv(p.GitAuthSecret)...)
+	initC := corev1.Container{
+		Name:         InitContainer,
+		Image:        cloneImage,
+		Command:      []string{"sh", "-c"},
+		Env:          env,
+		Args:         []string{staticScript},
+		VolumeMounts: []corev1.VolumeMount{workspace},
+	}
+	context := "/workspace/src"
+	if p.ProjectPath != "" {
+		context += "/" + p.ProjectPath
+	}
+	args := []string{
+		"build",
+		"--frontend=dockerfile.v0",
+		"--local=context=" + context,
+		"--local=dockerfile=/workspace/df",
+		"--opt=filename=Dockerfile",
+		"--output=type=image,name=" + p.Image + ",push=true",
+	}
+	if p.CacheRef != "" {
+		args = append(args,
+			"--import-cache=type=registry,ref="+p.CacheRef,
+			"--export-cache=type=registry,ref="+p.CacheRef+",mode=max",
+		)
+	}
+	return initC, mainContainer(p, args, nil, workspace), ModeStatic
 }

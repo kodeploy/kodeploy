@@ -1,0 +1,122 @@
+{
+  "apiVersion": "batch/v1",
+  "kind": "Job",
+  "metadata": {
+    "labels": {
+      "app": "kodeploy-build",
+      "build-id": "3f9a2c1d",
+      "build-mode": "static",
+      "user-id": "d6d8b75985524d6f9a9000665e7ca0da"
+    },
+    "name": "build-d6d8b759-3f9a2c1d",
+    "namespace": "kodeploy-build"
+  },
+  "spec": {
+    "activeDeadlineSeconds": 900,
+    "backoffLimit": 0,
+    "template": {
+      "metadata": {
+        "labels": {
+          "app": "kodeploy-build",
+          "build-id": "3f9a2c1d"
+        }
+      },
+      "spec": {
+        "containers": [
+          {
+            "args": [
+              "build",
+              "--frontend=dockerfile.v0",
+              "--local=context=/workspace/src",
+              "--local=dockerfile=/workspace/df",
+              "--opt=filename=Dockerfile",
+              "--output=type=image,name=ghcr.io/yuntyu01/d6d8b759/kodeploy-test-spring:3f9a2c1d,push=true"
+            ],
+            "command": [
+              "buildctl-daemonless.sh"
+            ],
+            "env": [
+              {
+                "name": "BUILDKITD_FLAGS",
+                "value": "--oci-worker-no-process-sandbox"
+              }
+            ],
+            "image": "moby/buildkit:v0.30.0-rootless",
+            "name": "buildkit",
+            "securityContext": {
+              "runAsGroup": 1000,
+              "runAsUser": 1000,
+              "seccompProfile": {
+                "type": "Unconfined"
+              }
+            },
+            "volumeMounts": [
+              {
+                "mountPath": "/workspace",
+                "name": "workspace"
+              },
+              {
+                "mountPath": "/home/user/.docker",
+                "name": "docker-config",
+                "readOnly": true
+              }
+            ]
+          }
+        ],
+        "initContainers": [
+          {
+            "args": [
+              "set -eu\necho \"[1/2] cloning ${REPO_URL} (${BRANCH})...\"\n# private repo: 토큰을 URL rewrite로 주입 — REPO_URL/로그엔 토큰 안 보임(set -x 꺼짐)\nif [ -n \"${GIT_AUTH_TOKEN:-}\" ]; then\n  git config --global url.\"https://x-access-token:${GIT_AUTH_TOKEN}@github.com/\".insteadOf \"https://github.com/\"\nfi\ngit clone --depth 1 -b \"$BRANCH\" \"$REPO_URL\" /workspace/src\necho \"[2/2] writing generated Dockerfile...\"\nmkdir -p /workspace/df\necho \"$DOCKERFILE_B64\" | base64 -d > /workspace/df/Dockerfile\necho \"===KODEPLOY_DOCKERFILE_START===\"\ncat /workspace/df/Dockerfile\necho \"===KODEPLOY_DOCKERFILE_END===\"\n"
+            ],
+            "command": [
+              "sh",
+              "-c"
+            ],
+            "env": [
+              {
+                "name": "REPO_URL",
+                "value": "https://github.com/yuntyu01/kodeploy-test-spring.git"
+              },
+              {
+                "name": "BRANCH",
+                "value": "r2-test-v1"
+              },
+              {
+                "name": "DOCKERFILE_B64",
+                "value": "IyBLb0RlcGxveeqwgCDsg53shLHtlZwgRG9ja2VyZmlsZSAoc3RhdGljIOufsO2DgOyehCkKIyAtIGJ1aWxkX2NtZCDsnojsnYw6IG5vZGUg7Iqk7YWM7J207KeA7JeQ7IScIOu5jOuTnCDihpIg7IKw7Lac66y8KG91dHB1dF9kaXIp66eMIG5naW54IOydtOuvuOyngOuhnAojIC0gYnVpbGRfY21kIOyXhuydjDogcmVwbyDsoITssrTrpbwg6re464yA66GcIOyEnOu5mSAo7Iic7IiYIEhUTUwpCiMgLSBuZ2lueC11bnByaXZpbGVnZWQ6IFBTUyByZXN0cmljdGVkIO2YuO2ZmCAo67mELXJvb3QgwrcgODA4MCDrpqzsiqggwrcg7J6E7J2YIFVJRCDrj5nsnpEpCgpGUk9NIG5vZGU6MjItYWxwaW5lIEFTIGJ1aWxkCldPUktESVIgL2FwcApDT1BZIC4gLgoKRU5WIFZJVEVfQVBJX1VSTD0iaHR0cHM6Ly9hcGkuZXhhbXBsZS5jb20vXCR4IFwicVwiIgoKUlVOIG5wbSBjaSAmJiBucG0gcnVuIGJ1aWxkCgoKRlJPTSBuZ2lueGluYy9uZ2lueC11bnByaXZpbGVnZWQ6c3RhYmxlLWFscGluZQoKQ09QWSAtLWZyb209YnVpbGQgL2FwcC9kaXN0LyAvdXNyL3NoYXJlL25naW54L2h0bWwvCgojIFNQQSBmYWxsYmFjayArIOy6kOyLnCDsoJXssYUuIENG6rCAIG9yaWdpbiBDYWNoZS1Db250cm9s7J2EIOyhtOykke2VmOuvgOuhnCDsl6zquLAg7Zek642U6rCAIOqzpyDsl6Psp4Ag7LqQ7IucIOygleyxhToKIyAtIO2VtOyLnCDrsojrk6Qg65SU66CJ7Yag66asIOKAlCBWaXRlKC9hc3NldHMvKSDCtyBDUkEoL3N0YXRpYy8pOiDrgrTsmqkg67CU64CM66m0IO2MjOydvOuqheydtCDrsJTrgJwg4oaSIDHrhYQgaW1tdXRhYmxlCiMgLSDqt7gg7Jm4KGluZGV4Lmh0bWwg7Y+s7ZWoKTogbm8tY2FjaGUg4oaSIOunpOuyiCDsnqzqsoDspp0sIOuwsO2PrCDsponsi5wg7IOIIOuyhOyghCDrsJjsmIEgKHB1cmdlIOu2iO2VhOyalCkKQ09QWSA8PCdLRF9OR0lOWF9DT05GJyAvZXRjL25naW54L2NvbmYuZC9kZWZhdWx0LmNvbmYKc2VydmVyIHsKICAgIGxpc3RlbiAgICAgICA4MDgwOwogICAgc2VydmVyX25hbWUgIF87CiAgICByb290ICAgICAgICAgL3Vzci9zaGFyZS9uZ2lueC9odG1sOwogICAgaW5kZXggICAgICAgIGluZGV4Lmh0bWw7CgogICAgZ3ppcCBvbjsKICAgIGd6aXBfdHlwZXMgdGV4dC9jc3MgYXBwbGljYXRpb24vamF2YXNjcmlwdCBhcHBsaWNhdGlvbi9qc29uIGltYWdlL3N2Zyt4bWw7CgogICAgbG9jYXRpb24gfiBeLyhhc3NldHN8c3RhdGljKS8gewogICAgICAgIGFkZF9oZWFkZXIgQ2FjaGUtQ29udHJvbCAicHVibGljLCBtYXgtYWdlPTMxNTM2MDAwLCBpbW11dGFibGUiOwogICAgICAgIHRyeV9maWxlcyAkdXJpID00MDQ7CiAgICB9CgogICAgbG9jYXRpb24gLyB7CiAgICAgICAgYWRkX2hlYWRlciBDYWNoZS1Db250cm9sICJuby1jYWNoZSI7CiAgICAgICAgdHJ5X2ZpbGVzICR1cmkgJHVyaS8gL2luZGV4Lmh0bWw7CiAgICB9Cn0KS0RfTkdJTlhfQ09ORgo="
+              }
+            ],
+            "image": "alpine/git:latest",
+            "name": "clone",
+            "volumeMounts": [
+              {
+                "mountPath": "/workspace",
+                "name": "workspace"
+              }
+            ]
+          }
+        ],
+        "restartPolicy": "Never",
+        "volumes": [
+          {
+            "emptyDir": {},
+            "name": "workspace"
+          },
+          {
+            "name": "docker-config",
+            "secret": {
+              "items": [
+                {
+                  "key": ".dockerconfigjson",
+                  "path": "config.json"
+                }
+              ],
+              "secretName": "ghcr-auth"
+            }
+          }
+        ]
+      }
+    },
+    "ttlSecondsAfterFinished": 1200
+  }
+}

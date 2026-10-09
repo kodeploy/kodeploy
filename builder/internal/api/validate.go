@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"regexp"
@@ -48,7 +49,11 @@ var (
 	dbTypes        = map[string]bool{"none": true, "mysql": true, "postgres": true}
 )
 
-const maxHostnames = 10
+const (
+	maxHostnames = 10
+	// 정적 사이트 Dockerfile 상한 (디코딩 뒤). core가 만드는 것은 2KB 안쪽이고, Job env와 요청 어노테이션에 들어간다.
+	maxDockerfileBytes = 32 << 10
+)
 
 // ValidationError → 400. 메시지는 core에 그대로 돌려준다(비밀값 없음).
 type ValidationError struct{ Msg string }
@@ -132,16 +137,18 @@ func (v Validator) Validate(r *contract.DeployRequest) error {
 // validateBuild는 kind=build 검사다. dockerfile·auto(nixpacks) 모드, unit·userId 필수,
 // repo·ref·경로 입력 검증, 이미지 경로·태그·cache_ref 규칙.
 func (v Validator) validateBuild(r *contract.DeployRequest, nsHex string) error {
-	if r.Slot == contract.SlotStatic {
-		return notSupported("static build")
-	}
 	if r.Build == nil {
 		return invalid("build is required for kind=build")
 	}
 	if r.Image != "" {
 		return invalid("image is not allowed for kind=build")
 	}
-	if err := validateUnit(r.Unit); err != nil {
+	static := r.Slot == contract.SlotStatic
+	if static {
+		if r.Unit != nil {
+			return invalid("unit is only for the server slot")
+		}
+	} else if err := validateUnit(r.Unit); err != nil {
 		return err
 	}
 	// Job 이름·user-id 라벨에 쓴다 (원본 _build_job_name = build-<user_id[:8]>-<build_id>)
@@ -150,25 +157,44 @@ func (v Validator) validateBuild(r *contract.DeployRequest, nsHex string) error 
 	}
 
 	b := r.Build
-	if b.Mode != contract.ModeDockerfile && b.Mode != contract.ModeAuto {
+	switch b.Mode {
+	case contract.ModeDockerfile, contract.ModeAuto, contract.ModeStatic:
+	default:
 		return notSupported(fmt.Sprintf("build.mode %q", b.Mode))
+	}
+	// 정적 슬롯은 static 방식으로만, static 방식은 정적 슬롯에서만 쓴다.
+	if static != (b.Mode == contract.ModeStatic) {
+		if static {
+			return invalid("the static slot builds only with mode static")
+		}
+		return invalid("build.mode static is only for the static slot")
 	}
 	// private repo용 Secret은 core가 이 빌드를 위해 만든 것만 쓴다 — 같은 ns의 다른 Secret을 가리킬 수 없게
 	// 이름을 build_id에 묶는다.
 	if b.GitAuthSecret != "" && b.GitAuthSecret != "git-auth-"+r.BuildID {
 		return invalid("build.git_auth_secret must be git-auth-<build_id>")
 	}
-	// 방식마다 쓰는 칸이 다르다: dockerfile은 dockerfile_dir·dockerfile_name, auto는 project_path만.
-	// 엉뚱한 칸이 오면 조용히 무시하지 않고 거절한다.
-	if b.Mode == contract.ModeAuto {
+	// 방식마다 쓰는 칸이 다르다: dockerfile은 dockerfile_dir·dockerfile_name, auto는 project_path만,
+	// static은 project_path와 dockerfile_b64. 엉뚱한 칸이 오면 조용히 무시하지 않고 거절한다.
+	switch b.Mode {
+	case contract.ModeAuto, contract.ModeStatic:
 		if b.DockerfileDir != "" || b.DockerfileName != "" {
-			return invalid("build.dockerfile_dir and build.dockerfile_name are not used with mode auto")
+			return invalid("build.dockerfile_dir and build.dockerfile_name are not used with mode %s", b.Mode)
 		}
 		if err := validateProjectPath(b.ProjectPath); err != nil {
 			return err
 		}
-	} else if b.ProjectPath != "" {
-		return invalid("build.project_path is only used with mode auto")
+	default:
+		if b.ProjectPath != "" {
+			return invalid("build.project_path is only used with mode auto or static")
+		}
+	}
+	if b.Mode == contract.ModeStatic {
+		if err := validateDockerfileB64(b.DockerfileB64); err != nil {
+			return err
+		}
+	} else if b.DockerfileB64 != "" {
+		return invalid("build.dockerfile_b64 is only used with mode static")
 	}
 	if err := validateRepoURL(b.Repo); err != nil {
 		return err
@@ -279,6 +305,25 @@ func validateRef(s string) error {
 		return invalid("build.ref must not contain .. or //")
 	case strings.HasSuffix(s, "/"), strings.HasSuffix(s, "."), strings.HasSuffix(s, ".lock"):
 		return invalid("build.ref has an invalid ending")
+	}
+	return nil
+}
+
+// validateDockerfileB64는 정적 사이트 Dockerfile이 올바른 base64이고 비어 있지 않으며 상한 안인지 본다.
+// 내용은 보지 않는다 — core가 서명해 보낸 것이고, 빌드는 Dockerfile을 직접 쓰는 유저와 같은 샌드박스(rootless BuildKit)에서 돈다.
+func validateDockerfileB64(s string) error {
+	if s == "" {
+		return invalid("build.dockerfile_b64 is required for mode static")
+	}
+	raw, err := base64.StdEncoding.DecodeString(s) // 요청 본문이 1MiB 이하라 먼저 풀어도 싸다
+	if err != nil {
+		return invalid("build.dockerfile_b64 must be standard base64")
+	}
+	switch {
+	case len(raw) == 0:
+		return invalid("build.dockerfile_b64 must not decode to an empty file")
+	case len(raw) > maxDockerfileBytes:
+		return invalid("build.dockerfile_b64 is too large (max %d bytes)", maxDockerfileBytes)
 	}
 	return nil
 }

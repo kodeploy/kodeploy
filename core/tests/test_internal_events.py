@@ -303,3 +303,21 @@ def test_auto_build_dockerfile_is_extracted_from_the_logs(env):
 def test_dockerfile_mode_builds_never_get_a_generated_dockerfile(env):
     env.post({"seq": 1, "type": "log", "lines": NIX_LOG.split("\n")})          # 같은 표지가 와도 dockerfile 모드는 건드리지 않는다
     assert env.row()[0].dockerfile_content is None
+
+
+def test_static_site_deploy_is_not_crash_watched(env):
+    # 크래시 감시(postwatch)는 서버 배포 기준(최신 서버 빌드)으로 판정한다. 정적 행에 붙이면 엉뚱한 빌드와 비교한다.
+    with events.SessionLocal() as s:
+        s.add(Build(build_id="5a6b7c8d", repo_url="r", branch="main", image="ghcr.io/u/x/demo-static:5a6b7c8d",
+                    app_name="demo-static", port=8080, runtime="static", build_mode="static", status="building",
+                    user_id=UID, last_event_seq=0))
+        s.commit()
+    env.post({"seq": 1, "type": "committed", "image": "ghcr.io/u/x/demo-static:5a6b7c8d@sha256:" + "ab" * 32}, build_id="5a6b7c8d")
+    assert _status("5a6b7c8d") == "deploying"
+    env.post({"seq": 2, "type": "deployed"}, build_id="5a6b7c8d")
+    assert _status("5a6b7c8d") == "running"
+    assert env.spawned == []
+    # 서버 빌드는 그대로 감시한다
+    env.post({"seq": 1, "type": "committed", "image": "i"})
+    env.post({"seq": 2, "type": "deployed"})
+    assert [fn.__name__ for fn, _ in env.spawned] == ["watch_after_deploy"]

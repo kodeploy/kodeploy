@@ -5,6 +5,7 @@ start_deploy가 v2 앱만 조건 검사 → run_v2_build로 보내는지, 조건
 """
 
 import asyncio
+import base64
 import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -69,8 +70,6 @@ def test_v2_explicit_dockerfile_mode_skips_detect(spawned, github):  # noqa: F81
 
 
 @pytest.mark.parametrize("kwargs,setup,reason", [
-    ({"runtime": "none", "use_static": True}, None, "서버 없는 앱"),
-    ({"use_static": True}, None, "정적 사이트"),
     ({"init_dump_token": "t"}, None, "초기 DB 복원"),
     ({}, lambda g: setattr(g, "public", False), "찾을 수 없거나 접근할 수 없어요"),   # 비공개인데 GitHub 연결에도 없다
     ({}, lambda g: setattr(g, "public", None), "확인하지 못했습니다"),
@@ -456,6 +455,36 @@ def test_ensure_idle():
         v2.ensure_idle(db, v2_app())
 
 
+class _SpyDb:
+    """query().filter(...).first()에 쓰인 조건을 모은다 — 실제 DB 없이 어떤 빌드를 기다리는지 본다."""
+
+    def __init__(self, busy=None):
+        self.conds, self.busy = [], busy
+
+    def query(self, *_):
+        return self
+
+    def filter(self, *conds):
+        self.conds += conds
+        return self
+
+    def first(self):
+        return self.busy
+
+
+def test_ensure_idle_includes_static_builds_only_when_asked():
+    # 환경변수는 서버 배포만 기다리고, 도메인은 정적 사이트 배포까지 기다린다 (정적 슬롯 호스트도 바뀌니까)
+    def waits_on_static(**kw):
+        spy = _SpyDb()
+        v2.ensure_idle(spy, v2_app(), **kw)
+        return not any("runtime" in str(c) for c in spy.conds)
+
+    assert waits_on_static() is False
+    assert waits_on_static(include_static=True) is True
+    with pytest.raises(ValueError, match="배포가 진행 중"):
+        v2.ensure_idle(_SpyDb(busy=Build(build_id="s", status="building", runtime="static")), v2_app(), include_static=True)
+
+
 def test_env_revision_is_time_based_and_bumps_each_time(monkeypatch):
     sent = []
 
@@ -485,7 +514,28 @@ def test_apply_hostnames_sends_the_slot_rule_list(monkeypatch):
     asyncio.run(v2.apply_hostnames(app, User(id=UID)))
     p = sent[0]
     assert p["kind"] == "config" and p["namespace"] == app.namespace
-    assert p["values"] == {"hostnames": ["demo.kodeploy.com", "demo-api.kodeploy.com", "www.example.com"]}
+    assert p["values"] == {
+        "hostnames": ["demo.kodeploy.com", "demo-api.kodeploy.com", "www.example.com"],
+        "static": {"hostnames": []},                  # 정적 사이트가 꺼져 있으면 비운다 (켬/끔은 건드리지 않는다)
+    }
+
+
+def test_apply_hostnames_moves_the_custom_domain_to_the_static_slot(monkeypatch):
+    sent = []
+
+    async def submit(payload):
+        sent.append(payload)
+
+    monkeypatch.setattr(v2.builder, "submit", submit)
+    app = v2_app()
+    app.custom_domain = "www.example.com"
+    app.site_enabled = True
+    asyncio.run(v2.apply_hostnames(app, User(id=UID)))
+    assert sent[0]["values"] == {
+        "hostnames": ["demo-api.kodeploy.com"],
+        "static": {"hostnames": ["demo.kodeploy.com", "www.example.com"]},
+    }
+    assert "enabled" not in sent[0]["values"]["static"]
 
 
 # --- 비공개 저장소 ---
@@ -594,3 +644,152 @@ def test_dockerfile_payload_is_unchanged(monkeypatch):
     monkeypatch.setattr(config, "BUILD_REGISTRY_CACHE_ENABLED", False)
     spec = v2.build_payload(make_build(), User(id=UID), ["demo.kodeploy.com"])["build"]
     assert spec["mode"] == "dockerfile" and spec["dockerfile_dir"] == "docker" and "project_path" not in spec
+
+
+# --- 정적 사이트 ---
+
+def static_build(**kw):
+    b = make_build(runtime="static", app_name="demo-static", port=8080, db_type="none", use_redis=False,
+                   volume_mount_path="", build_mode="static", dockerfile_path="", project_path="",
+                   build_cmd="npm ci && npm run build", output_dir="dist",
+                   image=f"ghcr.io/yuntyu01/{UID.hex[:8]}/demo-static:5a6b7c8d", build_id="5a6b7c8d")
+    for k, v in kw.items():
+        setattr(b, k, v)
+    return b
+
+
+def test_static_payload_matches_contract(monkeypatch):
+    monkeypatch.setattr(config, "BUILD_REGISTRY_CACHE_ENABLED", True)
+    b = static_build(project_path="site", build_env='{"VITE_API": "https://api.example.com"}')
+    p = v2.build_payload(b, User(id=UID), ["demo-api.kodeploy.com"], static_hosts=["demo.kodeploy.com"])
+    assert p["slot"] == "static" and p["kind"] == "build" and "unit" not in p
+    assert p["values"] == {
+        "name": "demo", "userId": UID.hex,                       # 정적 행 이름(demo-static)이 아니라 앱 이름
+        "hostnames": ["demo-api.kodeploy.com"],
+        "static": {"enabled": True, "hostnames": ["demo.kodeploy.com"]},
+    }
+    spec = p["build"]
+    assert spec["mode"] == "static" and spec["project_path"] == "site"
+    assert spec["image_repo"] == f"ghcr.io/yuntyu01/{UID.hex[:8]}/demo-static" and spec["image_tag"] == "5a6b7c8d"
+    assert spec["cache_ref"] == spec["image_repo"] + ":buildcache"
+    assert not {"dockerfile_dir", "dockerfile_name"} & set(spec)  # 정적은 repo의 Dockerfile을 쓰지 않는다
+    # Dockerfile은 v1과 같은 템플릿으로 core가 만든다 — 빌더는 받은 그대로 쓴다
+    text = base64.b64decode(spec["dockerfile_b64"]).decode("utf-8")
+    assert text == v2.static_dockerfile_text(b)
+    assert "RUN npm ci && npm run build" in text and "/app/dist/" in text and 'ENV VITE_API="https://api.example.com"' in text
+
+
+def test_static_payload_never_carries_server_settings(monkeypatch):
+    # 정적 행은 서버 설정을 모른다 (db none · 볼륨 없음). 보내면 배포된 서버의 DB·볼륨 설정을 지워 버린다.
+    monkeypatch.setattr(config, "BUILD_REGISTRY_CACHE_ENABLED", False)
+    p = v2.build_payload(static_build(), User(id=UID), ["demo-api.kodeploy.com"], static_hosts=["demo.kodeploy.com"])
+    assert not {"db", "redis", "volume", "image", "runtime", "port"} & set(p["values"])
+    assert "project_path" not in p["build"] and "cache_ref" not in p["build"]
+
+
+def test_static_without_build_command_serves_the_repo_as_is():
+    text = v2.static_dockerfile_text(static_build(build_cmd="", output_dir=""))
+    assert "FROM node" not in text and "COPY . /usr/share/nginx/html/" in text
+
+
+def test_server_payload_carries_the_static_slot_declaration(monkeypatch):
+    monkeypatch.setattr(config, "BUILD_REGISTRY_CACHE_ENABLED", False)
+    p = v2.build_payload(make_build(), User(id=UID), ["demo-api.kodeploy.com"],
+                         static_enabled=True, static_hosts=["demo.kodeploy.com"])
+    assert p["values"]["static"] == {"enabled": True, "hostnames": ["demo.kodeploy.com"]}   # {앱}이 정적으로 넘어간다
+    assert p["slot"] == "server" and p["unit"] == {"runtime": "java", "port": 8080}
+
+
+def test_v2_static_with_server_builds_both_slots_on_the_builder(spawned, github):  # noqa: F811
+    builds = run_deploy(MagicMock(), v2_user(), runtime="java", port=8080, env_vars={"A": "1"}, use_static=True,
+                        build_cmd="npm run build")
+    server, site = builds
+    assert (server.runtime, site.runtime) == ("java", "static")
+    assert (server.last_event_seq, site.last_event_seq) == (0, 0)             # 둘 다 콜백으로 상태를 받는다
+    assert (site.build_mode, site.app_name, site.port) == ("static", "foo-static", 8080)
+    assert site.image.rsplit("/", 1)[1].startswith("foo-static:")
+    assert spawned_fns(spawned) == [v2.run_v2_build, v2.run_v2_build]          # v1 빌드·정적 teardown 없음
+    assert spawned[0][1] == (server.build_id, {"A": "1"})
+    assert spawned[1][1] == (site.build_id,)                                    # 서버 환경변수는 정적 사이트와 상관없다
+    assert APPS[server.user_id].site_enabled is True
+
+
+def test_v2_static_only_app_has_no_server_build_and_nothing_to_tear_down(spawned, github, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(v2, "has_server_deployed", lambda db, app: False)
+    builds = run_deploy(MagicMock(), v2_user(), runtime="none", use_static=True)
+    assert [b.runtime for b in builds] == ["static"]
+    assert spawned_fns(spawned) == [v2.run_v2_build]                           # _teardown_server·_teardown_static 없음
+    assert github.probes == []                                                  # 서버 빌드가 없으니 Dockerfile 감지도 없다
+
+
+def test_v2_dropping_the_static_site_leaves_it_to_the_server_build(spawned, github):  # noqa: F811
+    # 정적을 끄는 배포는 서버 빌드의 values가 static.enabled=false를 싣는다 — 따로 보낼 요청이 없다
+    user = v2_user()
+    APPS[user.id].site_enabled = True
+    builds = run_deploy(MagicMock(), user, runtime="java", port=8080)
+    assert [b.runtime for b in builds] == ["java"] and APPS[user.id].site_enabled is False
+    assert spawned_fns(spawned) == [v2.run_v2_build]
+
+
+def test_v2_cannot_drop_a_deployed_server(spawned, github, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(v2, "has_server_deployed", lambda db, app: True)
+    user = v2_user()
+    db = MagicMock()
+    with pytest.raises(ValueError, match="서버를 쓰던 앱에서 서버를 빼는 것"):
+        run_deploy(db, user, runtime="none", use_static=True)
+    assert spawned == [] and APPS[user.id].site_enabled is False and not db.commit.called
+
+
+def test_v2_static_repo_is_checked_too(spawned, github, monkeypatch):  # noqa: F811
+    # 정적 사이트를 다른 저장소에서 받으면 그 저장소도 접근할 수 있어야 한다 (비공개면 GitHub 연결에 있어야)
+    monkeypatch.setattr(v2, "_repo_is_public", lambda url: "site" not in url)
+    user = v2_user()
+    with pytest.raises(ValueError, match="찾을 수 없거나 접근할 수 없어요"):
+        run_deploy(MagicMock(), user, runtime="java", use_static=True, static_repo_url="https://github.com/u/site")
+    assert spawned == []
+
+
+def test_v2_static_only_checks_just_the_static_repo(spawned, github, monkeypatch):  # noqa: F811
+    seen = []
+    monkeypatch.setattr(v2, "_repo_is_public", lambda url: seen.append(url) or True)
+    monkeypatch.setattr(v2, "has_server_deployed", lambda db, app: False)
+    run_deploy(MagicMock(), v2_user(), runtime="none", use_static=True, static_repo_url="https://github.com/u/site")
+    assert seen == ["https://github.com/u/site"]
+
+
+def test_has_server_deployed_looks_for_a_successful_v2_server_build():
+    db = MagicMock()
+    q = db.query.return_value.filter.return_value
+    q.first.return_value = ("3f9a2c1d",)
+    assert v2.has_server_deployed(db, v2_app()) is True
+    q.first.return_value = None
+    assert v2.has_server_deployed(db, v2_app()) is False
+
+
+@pytest.fixture
+def static_runner(runner):
+    site = static_build(status="queued")
+    runner.monkeypatch.setattr(v2.crud, "get_build", lambda d, bid: site)
+    runner.monkeypatch.setattr(v2, "_slot_hostnames", lambda a: (["demo-api.kodeploy.com"], ["demo.kodeploy.com"]))
+    runner.monkeypatch.setattr(v2.apps_service, "get_app", lambda d, app_id: App(
+        id=app_id, owner_id=UID, name="demo", namespace=f"tenant-{UID.hex[:8]}", site_enabled=True, pipeline="v2"))
+    runner.site = site
+    return runner
+
+
+def test_run_static_prepares_only_the_namespace_and_sends_the_static_slot(static_runner):
+    asyncio.run(v2.run_v2_build("5a6b7c8d", {"IGNORED": "1"}))
+    assert static_runner.steps == ["_ensure_tenant_ns", "submit"]            # 환경변수·DB·저장소·볼륨은 서버 슬롯의 몫
+    payload = static_runner.sent[0][0]
+    assert static_runner.site.status == "building" and payload["slot"] == "static"   # 전송 전에 바꿔 둔다
+    assert payload["values"]["static"] == {"enabled": True, "hostnames": ["demo.kodeploy.com"]}
+    assert payload["values"]["hostnames"] == ["demo-api.kodeploy.com"]
+    assert static_runner.site.dockerfile_content == v2.static_dockerfile_text(static_runner.site)   # 빌드 전에 보존
+
+
+def test_run_server_build_declares_the_static_slot_from_the_app(runner):
+    runner.monkeypatch.setattr(v2, "_slot_hostnames", lambda a: (["demo-api.kodeploy.com"], ["demo.kodeploy.com"]))
+    runner.monkeypatch.setattr(v2.apps_service, "get_app", lambda d, app_id: App(
+        id=app_id, owner_id=UID, name="demo", namespace=f"tenant-{UID.hex[:8]}", site_enabled=True, pipeline="v2"))
+    asyncio.run(v2.run_v2_build("3f9a2c1d"))
+    assert runner.sent[0][0]["values"]["static"] == {"enabled": True, "hostnames": ["demo.kodeploy.com"]}

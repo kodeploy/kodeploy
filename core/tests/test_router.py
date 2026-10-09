@@ -179,13 +179,14 @@ def test_ws_rejects_missing_cookie_with_allowed_origin():
 @pytest.fixture
 def cfg(monkeypatch):
     """환경변수·도메인 변경 경로의 바깥 호출을 가짜로 — 기록만 한다."""
-    rec = SimpleNamespace(set_env=[], submitted=[], hostnames=[], domain=[], cleared=[], spawned=[], busy=False, builder_down=False)
+    rec = SimpleNamespace(set_env=[], submitted=[], hostnames=[], domain=[], cleared=[], spawned=[], busy=False, builder_down=False, idle=[])
 
     monkeypatch.setattr(deploy_router.env, "get_env", lambda ns, name: {"OLD": "1"})
     monkeypatch.setattr(deploy_router.env, "set_env", lambda ns, name, e, restart=True: rec.set_env.append(restart))
     monkeypatch.setattr(pipeline, "spawn_background", lambda fn, *a: rec.spawned.append(fn))
 
-    def ensure_idle(db, app):
+    def ensure_idle(db, app, include_static=False):
+        rec.idle.append(include_static)
         if rec.busy:
             raise ValueError("배포가 진행 중이에요. 끝난 뒤에 다시 시도해 주세요")
 
@@ -214,6 +215,7 @@ def test_v2_env_change_writes_the_secret_then_asks_the_builder(cfg):
     r = client.put("/deploy/env", json={"env": {"A": "1"}})
     assert r.status_code == 200
     assert cfg.set_env == [False]                                 # Deployment은 건드리지 않는다 (Argo가 다시 띄운다)
+    assert cfg.idle == [False]                                    # 환경변수는 서버 배포만 기다린다 (정적 사이트와 상관없다)
     assert len(cfg.submitted) == 1
     ev = cfg.submitted[0]
     assert (ev.kind, ev.status, ev.last_event_seq) == ("env_change", "applied", 0)
@@ -245,6 +247,7 @@ def test_v2_domain_goes_through_the_builder(cfg):
     assert client.put("/deploy/domain", json={"domain": "www.example.com"}).status_code == 200
     assert cfg.domain == [False] and len(cfg.hostnames) == 1      # route를 직접 안 고치고 빌더로 반영한다
     assert client.delete("/deploy/domain").json() == {"status": "cleared"}
+    assert cfg.idle == [True, True]                               # 도메인은 정적 사이트 배포까지 기다린다 (정적 슬롯 호스트도 바뀐다)
     assert cfg.cleared == [False] and len(cfg.hostnames) == 2
 
 

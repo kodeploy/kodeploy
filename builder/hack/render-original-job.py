@@ -5,6 +5,10 @@
     cd kodeploy && core/.venv/bin/python builder/hack/render-original-job.py nixpacks-cache > builder/internal/job/testdata/original-nixpacks-cache.json
     cd kodeploy && core/.venv/bin/python builder/hack/render-original-job.py nixpacks-nocache > builder/internal/job/testdata/original-nixpacks-nocache.json
     cd kodeploy && core/.venv/bin/python builder/hack/render-original-job.py nixpacks-private > builder/internal/job/testdata/original-nixpacks-private.json
+    cd kodeploy && core/.venv/bin/python builder/hack/render-original-job.py static-cache > builder/internal/job/testdata/original-static-cache.json
+    cd kodeploy && core/.venv/bin/python builder/hack/render-original-job.py static-nocache > builder/internal/job/testdata/original-static-nocache.json
+    cd kodeploy && core/.venv/bin/python builder/hack/render-original-job.py static-private > builder/internal/job/testdata/original-static-private.json
+    cd kodeploy && core/.venv/bin/python builder/hack/render-original-job.py static-dockerfile > builder/internal/job/testdata/static-dockerfile.txt
 
 매개변수는 internal/job/job_test.go의 goldenParams와 같아야 한다.
 """
@@ -15,16 +19,37 @@ import sys
 
 mode = sys.argv[1]
 os.environ["GHCR_USER"] = "yuntyu01"
-os.environ["BUILD_REGISTRY_CACHE"] = "true" if mode in ("cache", "nixpacks-cache") else "false"
+os.environ["BUILD_REGISTRY_CACHE"] = "true" if mode in ("cache", "nixpacks-cache", "static-cache") else "false"
 os.environ.pop("BUILD_ACTIVE_DEADLINE_SECONDS", None)
 os.environ.pop("BUILD_TIMEOUT_SECONDS", None)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "core"))
 
-from app.deploy.stack.manifests.build import buildkit_job, nixpacks_buildkit_job  # noqa: E402
+from app.deploy.stack.manifests.build import (  # noqa: E402
+    buildkit_job,
+    nixpacks_buildkit_job,
+    static_buildkit_job,
+    static_dockerfile,
+)
 
 IMAGE = "ghcr.io/yuntyu01/d6d8b759/kodeploy-test-spring:3f9a2c1d"
 REPO = "https://github.com/yuntyu01/kodeploy-test-spring.git"
 USER = "d6d8b75985524d6f9a9000665e7ca0da"
+
+# 정적 사이트 — Dockerfile은 core가 만들어 base64로 넘긴다 (빌더는 받은 그대로 쓴다). 캐시 켠 것은 서브디렉토리를 쓴다.
+# 같은 Dockerfile 본문을 static-dockerfile 모드로 따로 뽑아 job_test.go가 base64로 만들어 쓴다.
+DOCKERFILE = static_dockerfile("npm ci && npm run build", "dist", {"VITE_API_URL": 'https://api.example.com/$x "q"'})
+if mode == "static-dockerfile":
+    sys.stdout.write(DOCKERFILE)
+    sys.exit(0)
+if mode.startswith("static"):
+    job = static_buildkit_job(
+        build_id="3f9a2c1d", user_id=USER, image=IMAGE, repo_url=REPO, branch="r2-test-v1",
+        dockerfile_text=DOCKERFILE,
+        project_path="site" if mode == "static-cache" else "",
+        git_auth_secret="git-auth-3f9a2c1d" if mode == "static-private" else "",
+    )
+    print(json.dumps(job, indent=2, sort_keys=True, ensure_ascii=False))
+    sys.exit(0)
 
 # 자동 빌드(nixpacks) — 캐시 켠 것은 서브디렉토리를, 나머지는 root를 쓴다. private는 Secret 참조가 붙는다.
 if mode.startswith("nixpacks"):
