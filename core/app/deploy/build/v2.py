@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from sqlalchemy import func
 
 from app import config
+from app.apps import service as apps_service
+from app.apps.model import App
 from app.auth.model import User
 from app.builder import client as builder
 from app.deploy import crud
@@ -32,8 +34,8 @@ logger = logging.getLogger(__name__)
 NOT_YET = "새 경로(v2)는 아직"
 
 
-def is_v2(user: User) -> bool:
-    return user.pipeline == "v2"
+def is_v2(app: App) -> bool:
+    return app.pipeline == "v2"
 
 
 def is_v2_build(build: Build) -> bool:
@@ -121,6 +123,7 @@ def _new_record(db, build: Build) -> BuildRecord:
     record = BuildRecord(
         build_id=build.build_id,
         user_id=build.user_id,
+        app_id=build.app_id,
         seq=seq,
         app_name=build.app_name,
         runtime=build.runtime,
@@ -168,7 +171,8 @@ async def run_v2_build(build_id: str, initial_env: dict[str, str] | None = None)
             return
         record = _new_record(db, build)
         owner = db.query(User).filter_by(id=build.user_id).first()
-        if not owner:
+        app_row = apps_service.get_app(db, build.app_id) if build.app_id else None
+        if not owner or not app_row:
             return
 
         # 빌더에 보내기 전에 Pod이 참조할 것들을 만든다 — 없으면 DB가 Secret을 못 찾아 바로 실패한다.
@@ -184,7 +188,7 @@ async def run_v2_build(build_id: str, initial_env: dict[str, str] | None = None)
             close_record(record, "cancelled")
             db.commit()
             return
-        server_hosts, _ = _slot_hostnames(owner)
+        server_hosts, _ = _slot_hostnames(app_row)
         build.status = "building"         # 이벤트가 먼저 와도 뒤로 돌리지 않게 전송 전에 바꾼다
         db.commit()
         await builder.submit(build_payload(build, owner, server_hosts))
@@ -219,24 +223,22 @@ DELETE_TIMEOUT = 90.0   # 초. Cloudflare 요청 상한(100초) 안쪽. 넘기�
 _deleting: dict[str, asyncio.Future] = {}
 
 
-def delete_payload(user: User, delete_id: str) -> dict:
+def delete_payload(user: User, app: App, delete_id: str) -> dict:
     return {
         "build_id": delete_id,
         "actor": user.id.hex[:8],
-        "namespace": f"tenant-{user.id.hex[:8]}",
+        "namespace": app.namespace,
         "kind": "delete",
     }
 
 
 # 빌더에 삭제를 맡기고 deleted를 기다린다. 못 하면 ValueError(→ 400), 화면에 보여도 되는 이유.
-async def request_delete(user: User) -> None:
-    if not user.app_name:
-        raise ValueError("삭제할 앱이 없습니다")
+async def request_delete(user: User, app: App) -> None:
     delete_id = uuid.uuid4().hex[:8]
     fut = asyncio.get_running_loop().create_future()
     _deleting[delete_id] = fut
     try:
-        await builder.submit(delete_payload(user, delete_id))   # 진행 중인 빌드가 있으면 409 → 취소 후 다시
+        await builder.submit(delete_payload(user, app, delete_id))   # 진행 중인 빌드가 있으면 409 → 취소 후 다시
         await asyncio.wait_for(fut, DELETE_TIMEOUT)
     except builder.BuilderError as e:
         raise ValueError(f"빌더가 삭제를 받지 않았습니다: {e}")

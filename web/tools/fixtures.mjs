@@ -11,7 +11,19 @@ export const ME = {
   role: "root",
   app_name: "my-api",
   site_enabled: true,
+  github_connected: true,
+  tier: "standard",
+  max_apps: 3,
+  app_count: Number(process.env.ME_APP_COUNT ?? 2),   // 한도(3)에 닿는 화면은 ME_APP_COUNT=3으로 찍는다
 };
+
+// GET /apps — 내 앱 둘 + 남이 공유해 준 앱 하나 (role이 owner가 아니면 "공유받음" 표시)
+export const APP_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa";
+export const APPS = [
+  { id: APP_ID, name: "my-api", site_enabled: true, custom_domain: null, created_at: "2026-09-01T00:00:00+00:00", role: "owner" },
+  { id: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", name: "blog-server", site_enabled: false, custom_domain: null, created_at: "2026-09-10T00:00:00+00:00", role: "owner" },
+  { id: "cccccccc-3333-4333-8333-cccccccccccc", name: "team-shop", site_enabled: false, custom_domain: null, created_at: "2026-09-12T00:00:00+00:00", role: "viewer", owner_login: "kim-dev" },
+];
 
 const baseBuild = {
   repo_url: "https://github.com/me/my-api",
@@ -178,13 +190,13 @@ export const ADMIN_NODES = [
 ];
 
 export const ADMIN_USERS = [
-  { id: 1, login: "yuntyu01", email: "yuntyu01@example.com", avatar_url: null, role: "root",
+  { id: 1, login: "yuntyu01", email: "yuntyu01@example.com", avatar_url: null, role: "root", tier: "master", app_count: 2,
     app_name: "my-api", tenant_id: "tenant-1a2b3c4d", custom_domain: "api.mine.dev",
     build_count: 42, last_build_at: AGO(25), created_at: AGO(60 * 24 * 90) },
-  { id: 2, login: "someone", email: "someone@example.com", avatar_url: null, role: "user",
+  { id: 2, login: "someone", email: "someone@example.com", avatar_url: null, role: "user", tier: "basic", app_count: 1,
     app_name: "blog", tenant_id: "tenant-9f8e7d6c", custom_domain: null,
     build_count: 8, last_build_at: AGO(60 * 20), created_at: AGO(60 * 24 * 12) },
-  { id: 3, login: "another", email: "another@example.com", avatar_url: null, role: "user",
+  { id: 3, login: "another", email: "another@example.com", avatar_url: null, role: "user", tier: "standard", app_count: 0,
     app_name: null, tenant_id: null, custom_domain: null,
     build_count: 0, last_build_at: null, created_at: AGO(60 * 24 * 2) },
 ];
@@ -206,6 +218,7 @@ export const ADMIN_PODS = [
 // 경로는 web/src/api/*.js의 실제 호출과 1:1로 맞춘다 (listBuilds는 GET /deploy 이다).
 export const ROUTES = [
   ["/auth/me", () => ME],
+  ["/apps", () => APPS],
   ["/deploy/app/status", () => APP_STATUS],
   ["/deploy/app/logs", () => LOGS],
   ["/deploy/app/metrics", () => METRICS],
@@ -218,6 +231,10 @@ export const ROUTES = [
     redis: ["REDIS_HOST", "REDIS_PORT", "SPRING_DATA_REDIS_HOST", "SPRING_DATA_REDIS_PORT"],
     storage: ["S3_ENDPOINT", "S3_BUCKET", "S3_ACCESS_KEY", "S3_SECRET_KEY", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
   })],
+  ["/admin/tiers", () => [
+    { name: "basic", max_apps: 1, users: 5 }, { name: "standard", max_apps: 3, users: 2 },
+    { name: "pro", max_apps: 5, users: 0 }, { name: "master", max_apps: null, users: 1 },
+  ]],
   ["/admin/overview", () => ADMIN_OVERVIEW],
   ["/admin/users/1/tenant", () => ({ login: "yuntyu01", app_name: "my-api", tenant_id: "tenant-1a2b3c4d", custom_domain: "api.mine.dev", config: { runtime: "python", db_type: "postgres", use_redis: true, use_storage: true, build_mode: "auto", port: 8080, repo_url: "https://github.com/me/my-api", branch: "main", status: "running", created_at: AGO(300) }, pods: ADMIN_PODS })],
   ["/admin/users", () => ADMIN_USERS],
@@ -231,7 +248,10 @@ export const ROUTES = [
     { sha: "c47d2100ab", message: "의존성 수정", author: "yuntyu01", date: AGO(210), url: "https://github.com/me/my-api/commit/c47d2100ab" },
     { sha: "4bd381aa77", message: "초기 배포", author: "yuntyu01", date: AGO(1410), url: "https://github.com/me/my-api/commit/4bd381aa77" },
   ]],
-  ["/deploy/github/repos", () => [{ full_name: "me/my-api", html_url: "https://github.com/me/my-api", private: false, default_branch: "main" }]],
+  ["/deploy/github/repos", () => [
+    { full_name: "me/my-api", html_url: "https://github.com/me/my-api", private: false, default_branch: "main" },
+    { full_name: "me/blog-server", html_url: "https://github.com/me/blog-server", private: true, default_branch: "main" },
+  ]],
   ["/deploy/github/branches", () => ["main", "dev"]],
   ["/community/blog", () => BLOG],
   ["/community/1", () => COMMUNITY_DETAIL],

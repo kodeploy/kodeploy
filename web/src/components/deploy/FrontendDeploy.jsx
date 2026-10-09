@@ -15,10 +15,11 @@
 // 빌드 환경변수는 서버 환경변수(Secret)와 성격이 다르다 — 빌드 스테이지 ENV로만 쓰여
 // 번들 파일에 그대로 남는다(누구나 열어볼 수 있음). 레일 안내 문구로 그 사실을 알린다.
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { ArrowRight, ArrowUpRight, CircleCheck, CircleX, Plus, Trash2 } from "lucide-react";
 import { createDeploy, getAppStatus, listBuilds } from "../../api/deploy.js";
 import { useAuth } from "../../contexts/AuthContext.jsx";
+import { useOptionalApp } from "../app/AppScope.jsx";
 import { APP_STATUS_STYLES } from "../AppStatusBadge.jsx";
 
 // 백엔드 _validate_static_env와 같은 규칙 — 여기서 먼저 막아 왕복을 아낀다.
@@ -39,6 +40,9 @@ const apiHostOf = (appName) => `${appName}-api.kodeploy.com`;
 export default function FrontendDeploy() {
   const navigate = useNavigate();
   const { user, openLogin, refresh } = useAuth();
+  // 앱 화면(/apps/:id/deploy/frontend) 안이면 그 앱, 밖이면 앱이 아직 없는 사람의 프론트엔드 단독 첫 배포다.
+  const scope = useOptionalApp();
+  const app = scope?.app || null;
 
   // 서버 슬롯 선언(되돌려 보낼 값) + Pod 상태 — 레일의 "연결할 앱" 정보원.
   const [serverBuild, setServerBuild] = useState(null);
@@ -58,7 +62,7 @@ export default function FrontendDeploy() {
 
   // 최신 빌드 2종(서버/정적) + Pod 상태. 정적 빌드가 있으면 재배포라 폼을 그 값으로 채운다.
   useEffect(() => {
-    if (!user?.app_name) {
+    if (!app) {
       setLoaded(true);
       return;
     }
@@ -92,7 +96,7 @@ export default function FrontendDeploy() {
         } else if (server) {
           // 첫 프론트엔드 배포 — 이 화면의 목적이 "API 주소 연결"이라 그 한 줄을 미리 채운다.
           // 값은 지어낸 게 아니라 슬롯 규칙에서 계산한 실제 주소다.
-          setEnvRows([newRow("VITE_API_URL", `https://${apiHostOf(user.app_name)}`)]);
+          setEnvRows([newRow("VITE_API_URL", `https://${apiHostOf(app.name)}`)]);
         }
       } catch {
         // 목록 조회 실패는 폼을 막지 않는다 — 레일만 비고 배포는 그대로 가능.
@@ -103,7 +107,7 @@ export default function FrontendDeploy() {
     return () => {
       cancelled = true;
     };
-  }, [user?.id, user?.app_name]);
+  }, [user?.id, app?.id]);
 
   const patchRow = (id, field, value) =>
     setEnvRows((rows) => rows.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
@@ -137,7 +141,7 @@ export default function FrontendDeploy() {
     // "."은 저장소 루트를 뜻하는 표기라 빈 값으로 보낸다(경로로 그대로 넘기면 /./ 가 된다).
     const projectPath = staticProjectPath.trim().replace(/^\.$/, "").replace(/^\/+|\/+$/g, "");
     try {
-      await createDeploy({
+      const deployed = await createDeploy({
         // 서버 슬롯 — 최신 서버 빌드 선언을 그대로 되돌려 보내 보존. 없으면 정적 단독(runtime "none").
         repoUrl: serverBuild ? serverBuild.repo_url : staticRepoUrl.trim(),
         branch: (serverBuild ? serverBuild.branch : staticBranch.trim()) || "main",
@@ -164,7 +168,8 @@ export default function FrontendDeploy() {
       });
       // site_enabled(+첫 배포면 app_name)가 백엔드에서 바뀌었으니 user 재조회 후 진행 화면으로.
       await refresh();
-      navigate("/deploy/progress");
+      const appId = scope?.app?.id || deployed?.app_id;
+      navigate(appId ? `/apps/${appId}/deploy/progress` : "/apps");
     } catch (err) {
       if (err.status === 401) {
         openLogin?.();
@@ -177,6 +182,9 @@ export default function FrontendDeploy() {
   };
 
   const podStatus = slotStatus?.server?.status || slotStatus?.status || null;
+
+  // 앱이 이미 있는데 앱 밖에서 열렸다 — 어느 앱의 프론트엔드인지 정해야 하므로 목록으로 보낸다.
+  if (!scope && user?.app_count > 0) return <Navigate to="/apps" replace />;
 
   return (
     /* 내용이 짧아도 액션 바는 화면 바닥에 붙는다 — 시안처럼 세로 괘선이 바닥 괘선까지 내려온다 */
@@ -305,7 +313,7 @@ export default function FrontendDeploy() {
                     value={row.value}
                     onChange={(e) => patchRow(row.id, "value", e.target.value)}
                     placeholder={
-                      user?.app_name ? `https://${apiHostOf(user.app_name)}` : "https://api.example.com"
+                      app ? `https://${apiHostOf(app.name)}` : "https://api.example.com"
                     }
                     spellCheck={false}
                     disabled={submitting}
@@ -344,24 +352,24 @@ export default function FrontendDeploy() {
             <div className="kd-t-label" style={{ color: "var(--fg-3)" }}>
               연결할 앱
             </div>
-            {user?.app_name ? (
+            {app ? (
               <>
                 {/* 앱 이름 — 시안 잉크 y195 (굵은 산세리프) */}
                 <div className="kd-t-title truncate" style={{ color: "var(--fg-1)", marginTop: 8 }}>
-                  {user.app_name}
+                  {app.name}
                 </div>
                 <div style={{ marginTop: 10 }}>
                   <PodStatus status={podStatus} />
                 </div>
                 {/* 호스트 — 정적이 켜지면 서버는 {app}-api로 옮겨간다 */}
                 <a
-                  href={`https://${apiHostOf(user.app_name)}`}
+                  href={`https://${apiHostOf(app.name)}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="kd-t-body-s inline-flex items-center gap-1.5 no-underline hover:underline"
                   style={{ color: "var(--fg-2)", marginTop: 10 }}
                 >
-                  <span className="truncate">{apiHostOf(user.app_name)}</span>
+                  <span className="truncate">{apiHostOf(app.name)}</span>
                   <ArrowUpRight size={15} strokeWidth={1.7} style={{ color: "var(--fg-3)" }} />
                 </a>
               </>

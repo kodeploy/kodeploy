@@ -75,7 +75,10 @@ def _mark_failed_after_deploy(build_id: str, reason: str) -> bool:
             return False
         latest = (
             db.query(Build.build_id)
-            .filter(Build.user_id == build.user_id, Build.runtime != "static", Build.kind == "build")
+            .filter(
+                Build.app_id == build.app_id if build.app_id is not None else Build.user_id == build.user_id,
+                Build.runtime != "static", Build.kind == "build",
+            )
             .order_by(Build.created_at.desc())
             .first()
         )

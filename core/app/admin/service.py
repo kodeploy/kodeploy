@@ -13,6 +13,8 @@ from kubernetes.client.exceptions import ApiException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.apps import service as apps_service
+from app.apps.model import App, Tier
 from app.auth.model import User
 from app.deploy.model import Build, BuildRecord
 from app.shared import k8s
@@ -27,9 +29,7 @@ def overview(db: Session) -> dict:
     week_ago = now - timedelta(days=7)
 
     user_count = db.query(func.count(User.id)).scalar() or 0
-    users_with_app = (
-        db.query(func.count(User.id)).filter(User.app_name.isnot(None)).scalar() or 0
-    )
+    users_with_app = db.query(func.count(func.distinct(App.owner_id))).scalar() or 0
     signups_7d = (
         db.query(func.count(User.id)).filter(User.created_at >= week_ago).scalar() or 0
     )
@@ -84,19 +84,27 @@ def list_users(db: Session) -> list[dict]:
     build_stats = {uid: (count, last) for uid, count, last in rows}
 
     users = db.query(User).order_by(User.created_at.desc()).all()
+    app_of = {}   # 유저의 첫 앱 (목록 한 줄에 대표로 보인다)
+    app_counts: dict = {}
+    for a in db.query(App).order_by(App.created_at, App.id).all():
+        app_of.setdefault(a.owner_id, a)
+        app_counts[a.owner_id] = app_counts.get(a.owner_id, 0) + 1
     out = []
     for u in users:
         count, last = build_stats.get(u.id, (0, None))
+        app = app_of.get(u.id)
         out.append({
             "id": str(u.id),
             "login": u.login,
             "email": u.email,
             "avatar_url": u.avatar_url,
             "role": u.role,
-            "app_name": u.app_name,
-            # tenant ns는 user_id 파생 — 앱 있는 유저만 실제 ns 존재 (lazy provisioning)
-            "tenant_id": f"tenant-{u.id.hex[:8]}" if u.app_name else None,
-            "custom_domain": u.custom_domain,
+            "tier": u.tier,
+            "app_count": app_counts.get(u.id, 0),
+            "app_name": app.name if app else None,
+            # 앱 있는 유저만 실제 ns 존재 (lazy provisioning)
+            "tenant_id": app.namespace if app else None,
+            "custom_domain": app.custom_domain if app else None,
             "build_count": count,
             "last_build_at": last.isoformat() if last else None,
             "created_at": u.created_at.isoformat(),
@@ -122,6 +130,39 @@ def set_role(db: Session, target_id: uuid.UUID, role: str, actor: User) -> dict:
     target.role = role
     db.commit()
     return {"id": str(target.id), "login": target.login, "role": target.role}
+
+
+# --- 앱 개수 등급 ---------------------------------------------------------------
+
+# 등급 목록 + 그 등급인 유저 수. max_apps가 None이면 무제한.
+def list_tiers(db: Session) -> list[dict]:
+    counts = dict(db.query(User.tier, func.count(User.id)).group_by(User.tier).all())
+    tiers = db.query(Tier).order_by(Tier.max_apps.is_(None), Tier.max_apps, Tier.name).all()
+    return [{"name": t.name, "max_apps": t.max_apps, "users": counts.get(t.name, 0)} for t in tiers]
+
+
+# 등급의 앱 수 조절 (root 전용 — router가 보장). None=무제한. 이미 한도를 넘게 가진 앱은 지우지 않고 새로 못 만들 뿐이다.
+def set_tier_limit(db: Session, name: str, max_apps: int | None) -> dict:
+    tier = db.get(Tier, name)
+    if not tier:
+        raise ValueError("없는 등급입니다")
+    if max_apps is not None and max_apps < 1:
+        raise ValueError("앱 수는 1 이상이거나 무제한(null)이어야 합니다")
+    tier.max_apps = max_apps
+    db.commit()
+    return {"name": tier.name, "max_apps": tier.max_apps}
+
+
+# 유저의 등급 변경 (root 전용).
+def set_user_tier(db: Session, target_id: uuid.UUID, tier_name: str) -> dict:
+    target = db.query(User).filter_by(id=target_id).first()
+    if not target:
+        raise ValueError("유저를 찾을 수 없습니다")
+    if not db.get(Tier, tier_name):
+        raise ValueError("없는 등급입니다")
+    target.tier = tier_name
+    db.commit()
+    return {"id": str(target.id), "login": target.login, "tier": target.tier}
 
 
 # --- 노드 리소스 ---------------------------------------------------------------
@@ -306,13 +347,15 @@ def user_tenant_detail(db: Session, user_id: uuid.UUID) -> dict:
     user = db.query(User).filter_by(id=user_id).first()
     if not user:
         raise ValueError("유저를 찾을 수 없습니다")
-    tenant_id = f"tenant-{user.id.hex[:8]}"
+    app = apps_service.get_user_app(db, user.id)
+    tenant_id = app.namespace if app else None
 
     latest = (
         db.query(Build)
-        .filter_by(user_id=user.id, kind="build")
+        .filter_by(app_id=app.id, kind="build")
         .order_by(Build.created_at.desc())
         .first()
+        if app else None
     )
     config = None
     if latest:
@@ -331,7 +374,7 @@ def user_tenant_detail(db: Session, user_id: uuid.UUID) -> dict:
         }
 
     pods = []
-    if user.app_name:
+    if app:
         try:
             pod_list = k8s.core_v1().list_namespaced_pod(namespace=tenant_id)
             for p in pod_list.items:
@@ -357,9 +400,9 @@ def user_tenant_detail(db: Session, user_id: uuid.UUID) -> dict:
 
     return {
         "login": user.login,
-        "app_name": user.app_name,
-        "tenant_id": tenant_id if user.app_name else None,
-        "custom_domain": user.custom_domain,
+        "app_name": app.name if app else None,
+        "tenant_id": tenant_id,
+        "custom_domain": app.custom_domain if app else None,
         "config": config,
         "pods": pods,
     }

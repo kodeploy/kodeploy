@@ -137,11 +137,12 @@ const DOC_ORDER = GROUPS.flatMap((group) =>
   }),
 );
 
-// 문서는 단독 화면(/guide)과 대시보드 안(/dashboard/guide) 두 곳에서 같은 컴포넌트로 뜬다.
+// 문서는 단독 화면(/guide)과 앱 안(/apps/:id/guide) 두 곳에서 같은 컴포넌트로 뜬다.
 // 링크는 지금 서 있는 쪽을 따라가야 화면 밖으로 튕기지 않는다.
 function useDocHref() {
   const { pathname } = useLocation();
-  const base = pathname.startsWith("/dashboard") ? "/dashboard/guide" : "/guide";
+  const inApp = pathname.match(/^\/apps\/[^/]+/);
+  const base = inApp ? `${inApp[0]}/guide` : "/guide";
   return (p) => base + p.slice("/guide".length);
 }
 

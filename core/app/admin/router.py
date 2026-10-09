@@ -6,7 +6,10 @@ GET /admin/builds            — 빌드 기록 목록 ("총 빌드" 카드 드�
 GET /admin/nodes             — 노드별 CPU/메모리/디스크 사용량
 GET /admin/nodes/{name}/pods — 그 노드 Pod별 사용량+limit (노드 카드 드릴다운)
 GET /admin/users/{id}/tenant — 유저 테넌트 상세: 선택 스택 + Pod 상태 (유저 row 드릴다운)
-PUT /admin/users/{id}/role   — 등급 변경 (root 전용, user↔admin만)
+PUT /admin/users/{id}/role   — 권한(role) 변경 (root 전용, user↔admin만)
+GET /admin/tiers             — 앱 개수 등급 목록
+PUT /admin/tiers/{name}      — 등급의 앱 수 조절 (root 전용, null=무제한)
+PUT /admin/users/{id}/tier   — 유저의 앱 개수 등급 변경 (root 전용)
 """
 
 import re
@@ -26,6 +29,14 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 
 class RoleRequest(BaseModel):
     role: str  # "user" | "admin" — service.ASSIGNABLE_ROLES가 검증
+
+
+class TierLimitRequest(BaseModel):
+    max_apps: int | None  # None=무제한
+
+
+class UserTierRequest(BaseModel):
+    tier: str
 
 
 @router.get("/overview")
@@ -100,5 +111,39 @@ def set_role(
 ) -> dict:
     try:
         return service.set_role(db, user_id, req.role, actor)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/tiers")
+def list_tiers(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_admin_user),
+) -> list[dict]:
+    return service.list_tiers(db)
+
+
+@router.put("/tiers/{name}")
+def set_tier_limit(
+    name: str,
+    req: TierLimitRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_root_user),
+) -> dict:
+    try:
+        return service.set_tier_limit(db, name, req.max_apps)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/users/{user_id}/tier")
+def set_user_tier(
+    user_id: uuid.UUID,
+    req: UserTierRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(get_root_user),
+) -> dict:
+    try:
+        return service.set_user_tier(db, user_id, req.tier)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

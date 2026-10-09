@@ -16,13 +16,15 @@ from sqlalchemy.orm import Session
 
 from app import config
 from app.auth import github_app
+from app.apps import service as apps_service
+from app.apps.model import App
 from app.auth.model import User
 from app.deploy import crud
 from app.deploy.console import logs as runtime_logs, snapshots
 from app.deploy.stack import env as env_module, manifests, r2
 from app.deploy.build import diagnose, v2
 from app.deploy.build.github import _detect_build, _fetch_github_raw
-from app.deploy.build.naming import _normalize_repo_url, _resolve_app_name
+from app.deploy.build.naming import _normalize_repo_url, _resolve_app
 from app.deploy.build.source import validate_branch, validate_repo_path, validate_repo_url
 from app.deploy.build.validation import (
     _validate_static_env,
@@ -244,9 +246,9 @@ _ACTIVE_STATUSES = {"queued", "building", "built", "deploying"}
 
 # slot="server"|"static" — 그 슬롯의 활성 빌드만 취소.
 # 두 슬롯이 한 제출에서 동시에 빌드되므로 유저 전체 취소면 서로 죽인다.
-def _cancel_stale_builds(db: Session, user_id: uuid.UUID, slot: str) -> None:
+def _cancel_stale_builds(db: Session, app_id: uuid.UUID, slot: str) -> None:
     q = db.query(Build).filter(
-        Build.user_id == user_id,
+        Build.app_id == app_id,
         Build.status.in_(_ACTIVE_STATUSES),
     )
     if slot == "static":
@@ -263,6 +265,13 @@ def _cancel_stale_builds(db: Session, user_id: uuid.UUID, slot: str) -> None:
         else:
             _cleanup_build_job(build.build_id, build.user_id_str)
     db.commit()
+
+
+# 빌드가 속한 앱. app_id가 비어 있는 옛 행은 소유 유저의 앱으로 찾는다.
+def _app_of(db: Session, build: Build) -> App | None:
+    if build.app_id is not None:
+        return apps_service.get_app(db, build.app_id)
+    return apps_service.get_user_app(db, build.user_id) if build.user_id else None
 
 
 def _cleanup_build_job(build_id: str, user_id_str: str) -> None:
@@ -336,7 +345,7 @@ def _cleanup_git_auth(build_id: str) -> None:
 
 
 # 배포 제출 — 원하는 스택(서버 슬롯 + 정적 슬롯)을 선언받아 슬롯별 빌드/teardown을 spawn.
-# user 객체로 받음 — _resolve_app_name이 user.app_name을 읽고/쓰기 위해.
+# user 객체로 받음 — _resolve_app이 유저의 앱을 찾거나 첫 배포면 만들기 위해.
 # 반환: 이 제출이 만든 Build row들 (슬롯당 최대 1개).
 async def start_deploy(
     db: Session,
@@ -364,6 +373,7 @@ async def start_deploy(
     build_cmd: str = "",
     output_dir: str = "",
     static_env: dict[str, str] | None = None,
+    app: App | None = None,                # 배포할 앱. None이면 유저의 앱(없으면 첫 배포로 새로 만든다)
 ) -> list[Build]:
     has_server = runtime != "none"
     if not has_server and not use_static:
@@ -412,7 +422,8 @@ async def start_deploy(
         validate_repo_path(static_project_path.strip("/"), "정적 사이트 경로")
 
     # v2(빌더) 앱 — 조건이 안 맞으면 여기서 400 (아무것도 바꾸기 전). detect면 Dockerfile 경로를 확정한다.
-    use_v2 = v2.is_v2(user)
+    existing_app = app if app is not None else apps_service.get_user_app(db, user.id)
+    use_v2 = existing_app is not None and v2.is_v2(existing_app)
     if use_v2:
         dockerfile_path = await v2.check_submit(
             user, runtime=runtime, repo_url=repo_url, branch=branch, build_mode=build_mode,
@@ -420,20 +431,22 @@ async def start_deploy(
         )
         validate_repo_path(dockerfile_path, "Dockerfile 경로")
         build_mode = "dockerfile"
-    app_name = _resolve_app_name(name, repo_url, user, db)
+    app = existing_app if existing_app is not None else _resolve_app(name, repo_url, user, db)
+    app_name = app.name
+    image_owner = apps_service.namespace_hex(app.namespace)   # GHCR 경로 <hex8>/<app> — 빌더 검증이 ns의 hex8과 맞춘다
 
     # 슬롯 선언 저장 — 라우팅 규칙(_slot_hostnames)의 진실원.
     # 빌드 spawn 전에 확정해서 동시 빌드 둘 다 같은 desired state를 보게 한다.
-    user.site_enabled = use_static
+    app.site_enabled = use_static
     db.commit()
 
     builds: list[Build] = []
 
     # --- 서버 슬롯 ---
-    _cancel_stale_builds(db, user.id, slot="server")
+    _cancel_stale_builds(db, app.id, slot="server")
     if has_server:
         build_id = uuid.uuid4().hex[:8]
-        image = f"ghcr.io/{config.GHCR_USER}/{user.id.hex[:8]}/{app_name}:{build_id}"
+        image = f"ghcr.io/{config.GHCR_USER}/{image_owner}/{app_name}:{build_id}"
         server_build = Build(
             build_id=build_id,
             repo_url=repo_url,
@@ -443,6 +456,8 @@ async def start_deploy(
             port=port,
             runtime=runtime,
             user_id=user.id,
+            app_id=app.id,
+            namespace=app.namespace,
             db_type=db_type,
             use_redis=use_redis,
             use_storage=use_storage,
@@ -462,15 +477,15 @@ async def start_deploy(
     else:
         # 서버 사용 안 함 — 기존 서버 리소스 + deps 정리 (PVC·버킷 보존). 매 제출마다
         # spawn이라 직전 실패도 다음 제출에서 재시도되는 self-healing.
-        spawn_background(_teardown_server, user.id)
+        spawn_background(_teardown_server, app.id)
 
     # --- 정적 슬롯 ---
-    _cancel_stale_builds(db, user.id, slot="static")
+    _cancel_stale_builds(db, app.id, slot="static")
     if use_static:
         site_name = f"{app_name}-static"               # K8s 리소스 이름 (호스트는 {app} — 슬롯 규칙)
         s_repo = _normalize_repo_url(static_repo_url) if static_repo_url.strip() else repo_url
         build_id = uuid.uuid4().hex[:8]
-        image = f"ghcr.io/{config.GHCR_USER}/{user.id.hex[:8]}/{site_name}:{build_id}"
+        image = f"ghcr.io/{config.GHCR_USER}/{image_owner}/{site_name}:{build_id}"
         static_build = Build(
             build_id=build_id,
             repo_url=s_repo,
@@ -480,6 +495,8 @@ async def start_deploy(
             port=8080,                                 # nginx-unprivileged 고정
             runtime="static",
             user_id=user.id,
+            app_id=app.id,
+            namespace=app.namespace,
             db_type="none",
             use_redis=False,
             use_storage=False,
@@ -492,7 +509,7 @@ async def start_deploy(
         builds.append(crud.create_build(db, static_build))
         spawn_background(_run_build, build_id)
     elif not use_v2:  # v2 앱은 route를 Argo가 관리한다 — core가 reconcile하면 서로 되돌린다
-        spawn_background(_teardown_static, user.id)
+        spawn_background(_teardown_static, app.id)
 
     return builds
 
@@ -500,14 +517,14 @@ async def start_deploy(
 # 서버 슬롯 teardown — Deployment/Service/Route 쌍 + deps(mysql/postgres/redis/r2) 정리.
 # PVC·버킷·Secret은 보존 (DB 토글 off와 동일 철학 — 다시 켜면 데이터 복원).
 # best-effort: 실패는 삼킴 — 슬롯 off인 제출마다 다시 spawn되므로 다음 기회에 재시도.
-async def _teardown_server(user_id: uuid.UUID) -> None:
+async def _teardown_server(app_id: uuid.UUID) -> None:
     db = SessionLocal()
     try:
-        user = db.query(User).filter_by(id=user_id).first()
-        if not user or not user.app_name:
+        app = apps_service.get_app(db, app_id)
+        if not app:
             return
-        app_name = user.app_name
-        ns = f"tenant-{user_id.hex[:8]}"
+        app_name = app.name
+        ns = app.namespace
         apps = k8s.apps_v1()
         core = k8s.core_v1()
         custom = k8s.custom()
@@ -537,14 +554,14 @@ async def _teardown_server(user_id: uuid.UUID) -> None:
 
 
 # 정적 슬롯 teardown — 사이트 Deployment/Service/Route 쌍 삭제 + 서버 hostnames 원복.
-async def _teardown_static(user_id: uuid.UUID) -> None:
+async def _teardown_static(app_id: uuid.UUID) -> None:
     db = SessionLocal()
     try:
-        user = db.query(User).filter_by(id=user_id).first()
-        if not user or not user.app_name:
+        app = apps_service.get_app(db, app_id)
+        if not app:
             return
-        site_name = f"{user.app_name}-static"
-        ns = f"tenant-{user_id.hex[:8]}"
+        site_name = f"{app.name}-static"
+        ns = app.namespace
         apps = k8s.apps_v1()
         core = k8s.core_v1()
         custom = k8s.custom()
@@ -564,7 +581,7 @@ async def _teardown_static(user_id: uuid.UUID) -> None:
                 if e.status != 404:
                     raise
         # {app}.kodeploy.com·커스텀 도메인이 서버로 복귀 (site_enabled=false 기준 재계산)
-        _reconcile_route_hostnames(user)
+        _reconcile_route_hostnames(app)
     except ApiException:
         pass
     finally:
@@ -667,6 +684,7 @@ async def _run_build(
         record = BuildRecord(
             build_id=build.build_id,
             user_id=build.user_id,
+            app_id=build.app_id,
             seq=seq,
             app_name=build.app_name,
             runtime=build.runtime,
@@ -855,13 +873,13 @@ async def _run_build(
                         # DB 없는데 토큰만 온 경우 — 임시 파일만 정리.
                         snapshots.discard_staged(init_dump_token)
 
-            # 슬롯 규칙으로 이 빌드 route의 hostnames 계산 (User.site_enabled가 진실원).
-            owner = db.query(User).filter_by(id=build.user_id).first()
-            if not owner:
-                return  # 빌드 도중 유저 삭제 — 배포 의미 없음
-            if build.runtime == "static" and not owner.site_enabled:
+            # 슬롯 규칙으로 이 빌드 route의 hostnames 계산 (App.site_enabled가 진실원).
+            app_row = _app_of(db, build)
+            if not app_row:
+                return  # 빌드 도중 앱 삭제 — 배포 의미 없음
+            if build.runtime == "static" and not app_row.site_enabled:
                 return  # 빌드 도중 정적 슬롯 해제 — teardown이 정리 중, apply하면 부활시킴
-            server_hosts, site_hosts = _slot_hostnames(owner)
+            server_hosts, site_hosts = _slot_hostnames(app_row)
             hostnames = site_hosts if build.runtime == "static" else server_hosts
 
             record.deploy_started_at = datetime.now(timezone.utc)  # Deployment apply 직전
@@ -869,7 +887,7 @@ async def _run_build(
 
             # 전체 route(서버 쌍 + 정적 쌍) hostnames reconcile — 슬롯 전환·커스텀 도메인·
             # 수동 drift가 이 시점에 DB 선언값으로 복원된다.
-            _reconcile_route_hostnames(owner)
+            _reconcile_route_hostnames(app_row)
 
             problem = await _wait_for_rollout(build.app_name, build.tenant_id)
             if _check_cancelled():

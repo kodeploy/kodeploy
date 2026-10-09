@@ -45,7 +45,28 @@ export function getUserTenant(userId) {
   return request(`/admin/users/${userId}/tenant`);
 }
 
-// 등급 변경 (root 전용). role: "user" | "admin". root 등급은 API로 못 바꿈.
+// 앱 개수 등급 목록 — 응답: [{name, max_apps, users}] (max_apps null = 무제한)
+export function listTiers() {
+  return request("/admin/tiers");
+}
+
+// 등급의 앱 수 조절 (root 전용). maxApps: 1 이상의 정수, null이면 무제한.
+export function setTierLimit(name, maxApps) {
+  return request(`/admin/tiers/${encodeURIComponent(name)}`, {
+    method: "PUT",
+    body: JSON.stringify({ max_apps: maxApps }),
+  });
+}
+
+// 유저의 앱 개수 등급 변경 (root 전용)
+export function setUserTier(userId, tier) {
+  return request(`/admin/users/${userId}/tier`, {
+    method: "PUT",
+    body: JSON.stringify({ tier }),
+  });
+}
+
+// 권한(role) 변경 (root 전용). role: "user" | "admin". root는 API로 못 바꿈.
 export function setUserRole(userId, role) {
   return request(`/admin/users/${userId}/role`, {
     method: "PUT",

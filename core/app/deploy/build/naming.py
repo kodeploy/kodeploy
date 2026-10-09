@@ -5,6 +5,8 @@ import uuid
 
 from sqlalchemy.orm import Session
 
+from app.apps import service as apps_service
+from app.apps.model import App
 from app.auth.model import User
 
 # repo URL 정규화 (BuildKit이 요구하는 .git 접미사 보장)
@@ -66,31 +68,39 @@ def _extract_from_repo(repo_url: str) -> str | None:
     return candidate
 
 
-# 1유저=1앱: user.app_name이 있으면 그대로 재사용 (변경 불가). 없으면 첫 배포로 보고
-# 입력값 검증 + 다른 유저와 중복 검사 후 user.app_name에 저장.
-def _resolve_app_name(
+# 유저당 앱 하나(2단계까지): 이미 앱이 있으면 그 앱 그대로 (이름 변경 불가). 없으면 첫 배포로 보고
+# 입력값 검증 + 다른 앱과 중복 검사 후 앱을 만든다.
+def _resolve_app(
     name: str | None,
     repo_url: str,
     user: User,
     db: Session,
-) -> str:
-    # 두 번째 배포 이후 — 이미 고정된 이름 그대로
-    if user.app_name:
-        return user.app_name
+) -> App:
+    # 두 번째 배포 이후 — 이미 고정된 앱 그대로
+    existing_app = apps_service.get_user_app(db, user.id)
+    if existing_app:
+        return existing_app
 
     # 첫 배포 — 입력값 검증 또는 자동 생성
+    return create_named_app(name, repo_url, user, db)
+
+
+# 이름을 검증하고 새 앱을 만든다. 이름이 없으면 repo 이름(없으면 app-<hex8>)으로 자동 생성.
+# 앱 수 상한은 호출하는 쪽이 본다 (첫 배포의 암묵적 생성은 앱이 0개일 때만 오므로 상한에 안 걸린다).
+def create_named_app(
+    name: str | None,
+    repo_url: str,
+    user: User,
+    db: Session,
+) -> App:
     if name:
         _validate_name_format(name)
         candidate = name
     else:
         candidate = _extract_from_repo(repo_url) or f"app-{uuid.uuid4().hex[:8]}"
 
-    # 다른 유저가 이미 쓰고 있는지 확인 (DB unique 제약이 막아주지만 친절한 에러용)
-    existing = db.query(User).filter(User.app_name == candidate).first()
-    if existing:
+    # 다른 앱이 이미 쓰고 있는지 확인 (DB unique 제약이 막아주지만 친절한 에러용)
+    if db.query(App).filter(App.name == candidate).first():
         raise ValueError(f"이미 사용 중인 이름: {candidate}")
 
-    # user에 fix (이후 배포는 자동으로 이 이름 재사용)
-    user.app_name = candidate
-    db.commit()
-    return candidate
+    return apps_service.create_app(db, user.id, candidate)

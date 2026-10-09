@@ -15,6 +15,7 @@ import {
   detectRuntime,
   getEnvVars,
   getReservedKeys,
+  createApp,
   listBuilds,
   listGithubBranches,
   listGithubRepos,
@@ -24,6 +25,7 @@ import {
 } from "../../api/deploy.js";
 import { GITHUB_INSTALL_URL } from "../../api/auth.js";
 import { useAuth } from "../../contexts/AuthContext.jsx";
+import { useOptionalApp } from "../app/AppScope.jsx";
 import StepRepo, { STEP1_W } from "./steps/StepRepo.jsx";
 import StepReview from "./steps/StepReview.jsx";
 import StepRuntime from "./steps/StepRuntime.jsx";
@@ -41,8 +43,14 @@ import { RAIL_W, StepRail, WizardFooter } from "./steps/wizardParts.jsx";
 export default function DeployWizard({ onRequestGuide }) {
   const navigate = useNavigate();
   const { user, openLogin, refresh } = useAuth();
-  // 1유저=1앱 — user.app_name이 있으면 첫 배포가 끝난 상태. 이름은 그때 확정되고 이후 고정된다.
-  const isFirstDeploy = !user?.app_name;
+  // 앱 화면(/apps/:id/deploy) 안이면 그 앱의 재배포, 밖(/deploy)이면 새 앱의 첫 배포다.
+  // 이름은 첫 배포에서 정해지고 이후 고정된다.
+  const scope = useOptionalApp();
+  const scopeApp = scope?.app || null;
+  const isFirstDeploy = !scopeApp;
+  // 새 앱인데 이미 등급 한도만큼 앱이 있다 (첫 앱 만들기는 항상 가능). 서버도 같은 규칙으로 막는다.
+  const atAppLimit =
+    isFirstDeploy && (user?.app_count ?? 0) > 0 && user?.max_apps != null && user.app_count >= user.max_apps;
 
   const [step, setStep] = useState(1);
 
@@ -97,7 +105,7 @@ export default function DeployWizard({ onRequestGuide }) {
 
   // 재배포 시 기존 세팅 복원 — 최신 빌드 + 환경변수를 폼에 채움
   useEffect(() => {
-    if (!user?.app_name) {
+    if (!scopeApp) {
       restoredRef.current = true;
       return;
     }
@@ -127,13 +135,13 @@ export default function DeployWizard({ onRequestGuide }) {
             setProjectPath(serverLatest.project_path);
           }
           setPort(serverLatest.port || DEFAULT_PORTS[serverLatest.runtime] || 80);
-        } else if (user?.site_enabled) {
+        } else if (scopeApp.site_enabled) {
           // 정적 단독 구성 — 서버 "사용 안 함" 복원
           setRuntime("none");
         }
-        // 정적 토글은 user.site_enabled(선언값)가 진실원 — 토글 off 후에도
+        // 정적 토글은 앱의 site_enabled(선언값)가 진실원 — 토글 off 후에도
         // 빌드 히스토리에 static 빌드가 남아 있으므로 히스토리로 판단하면 안 됨.
-        setUseStatic(!!user?.site_enabled);
+        setUseStatic(!!scopeApp.site_enabled);
         if (staticLatest) {
           if (!serverLatest) {
             setStaticRepoUrl(staticLatest.repo_url.replace(/\.git$/, ""));
@@ -164,7 +172,7 @@ export default function DeployWizard({ onRequestGuide }) {
     return () => {
       cancelled = true;
     };
-  }, [user?.app_name, user?.site_enabled]);
+  }, [scopeApp?.id, scopeApp?.site_enabled]);
 
   // repo URL + branch 유효성 확인.
   // 연결된 repo(installation)면 ghRepos/ghBranches로 판정 — unauthenticated 404 오판 방지
@@ -304,11 +312,11 @@ export default function DeployWizard({ onRequestGuide }) {
   const runtimeBlocked =
     !serverNone && !runtimeLocked && detected.state === "done" && !!detected.unsupported;
   // 도메인 안내용 이름 — 첫 배포 입력값/확정 app_name, 없으면 placeholder
-  const appLabel = user?.app_name || name.trim() || "앱이름";
+  const appLabel = scopeApp?.name || name.trim() || "앱이름";
   // 1차 repo — 서버 ON이면 서버 링크, OFF(정적 단독)면 프론트 링크가 곧 repo.
   const primaryRepo = (serverNone ? staticRepoUrl : repoUrl).trim();
   // 서버도 정적도 없으면 배포할 게 없음 / 1차 repo 비면 불가
-  const disabled = !primaryRepo || submitting || (serverNone && !useStatic) || runtimeBlocked;
+  const disabled = !primaryRepo || submitting || (serverNone && !useStatic) || runtimeBlocked || atAppLimit;
 
   // 추정한 런타임을 폼에 채운다 (포트는 runtime effect가 기본값으로 따라온다).
   useEffect(() => {
@@ -375,10 +383,17 @@ export default function DeployWizard({ onRequestGuide }) {
         const staged = await stageDump(initDumpFile);
         initDumpToken = staged.token;
       }
-      await createDeploy({
+      // 이미 앱이 있는 사람의 새 앱은 먼저 빈 앱을 만들어(이름·한도 검증) 그 앱으로 배포한다.
+      // 첫 앱은 배포 요청이 앱을 함께 만든다.
+      const newApp =
+        isFirstDeploy && (user?.app_count ?? 0) > 0
+          ? await createApp(name.trim(), serverNone ? staticRepoUrl.trim() : repoUrl.trim())
+          : null;
+      const deployed = await createDeploy({
+        appId: newApp?.id,
         // 서버 OFF(정적 단독)면 프론트 링크가 곧 repo_url, static_repo_url은 비워 fallback.
         repoUrl: serverNone ? staticRepoUrl.trim() : repoUrl.trim(),
-        // 첫 배포: 사용자가 입력한 이름 또는 자동 생성(서버 측). 두 번째부터는 user.app_name 재사용.
+        // 첫 배포: 사용자가 입력한 이름 또는 자동 생성(서버 측). 재배포는 앱의 이름을 그대로 쓴다.
         name: isFirstDeploy ? name.trim() || undefined : undefined,
         branch: (serverNone ? staticBranch.trim() : branch.trim()) || "main",
         port: Number(port) || 80,
@@ -403,20 +418,21 @@ export default function DeployWizard({ onRequestGuide }) {
         env: serverNone ? {} : envDict,
         initDumpToken,
       });
-      // 첫 배포면 user.app_name이 백엔드에 박혔으니 AuthContext 갱신
+      // 첫 배포면 앱이 하나 늘었으니 AuthContext 갱신 (앱 수 · 등급 한도)
       if (isFirstDeploy) await refresh();
-      // 커스텀 도메인 입력 시 — 배포로 app_name 확정됐으니 이어서 연결 (서브도메인 전용).
+      const targetId = scopeApp?.id || newApp?.id || deployed?.app_id;
+      // 커스텀 도메인 입력 시 — 배포로 앱이 확정됐으니 이어서 연결 (서브도메인 전용).
       const cd = customDomain.trim();
       if (cd) {
         try {
-          await setDomain(cd);
+          await setDomain(cd, targetId);
         } catch (err2) {
           setError(`배포는 시작됐어요. 단, 커스텀 도메인 연결 실패: ${err2.message}`);
           setSubmitting(false);
           return;
         }
       }
-      navigate("/deploy/progress");
+      navigate(targetId ? `/apps/${targetId}/deploy/progress` : "/apps");
     } catch (err) {
       if (err.status === 401) {
         openLogin?.();
@@ -523,7 +539,7 @@ export default function DeployWizard({ onRequestGuide }) {
           {step === 2 && (
             <StepRuntime
               isFirstDeploy={isFirstDeploy}
-              appName={user?.app_name}
+              appName={scopeApp?.name}
               name={name}
               onName={setName}
               port={port}
@@ -583,7 +599,7 @@ export default function DeployWizard({ onRequestGuide }) {
 
           <WizardFooter
             maxWidth={step === 1 ? STEP1_W : undefined}
-            error={error}
+            error={error || (atAppLimit ? `만들 수 있는 앱은 최대 ${user.max_apps}개예요. 앱을 삭제하거나 등급을 올려야 새 앱을 만들 수 있어요.` : null)}
             note={step === 3 ? "소스를 빌드한 뒤 앱 서버를 실행합니다." : undefined}
             back={
               step === 1 ? (

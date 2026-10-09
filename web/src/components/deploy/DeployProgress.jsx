@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { Check, Maximize2, Minimize2, X } from "lucide-react";
 import { getBuild, listBuilds } from "../../api/deploy.js";
+import { useOptionalApp } from "../app/AppScope.jsx";
 import AiDiagnosis, { isDiagnosing } from "../app/AiDiagnosis.jsx";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import { parseDate } from "../../lib/format.js";
@@ -78,6 +79,8 @@ function statusLine(build) {
 
 export default function DeployProgress() {
   const { user, loading: authLoading, openLogin } = useAuth();
+  const scope = useOptionalApp();
+  const base = scope?.base || "/apps";            // 앱 화면 밖이면 목록으로 보낸다
   const [params] = useSearchParams();
   const wanted = params.get("build");
 
@@ -345,7 +348,7 @@ export default function DeployProgress() {
           <div className="flex items-center flex-wrap justify-end" style={{ gap: "8px 16px" }}>
             <span className="kd-t-caption text-fg-3">수정 사항을 반영한 뒤 다시 배포해 주세요.</span>
             <Link
-              to="/deploy"
+              to={scope ? `${base}/deploy` : "/apps"}
               className="kd-btn-primary kd-btn-md inline-flex items-center no-underline"
               style={{ gap: 8 }}
             >
@@ -354,7 +357,7 @@ export default function DeployProgress() {
           </div>
         ) : done ? (
           <Link
-            to="/dashboard/workspace"
+            to={scope ? `${base}/workspace` : "/apps"}
             className="kd-btn-primary kd-btn-md inline-flex items-center"
             style={{ gap: 8 }}
           >

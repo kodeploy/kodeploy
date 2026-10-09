@@ -15,6 +15,7 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session as SASession
 
 from app import config
+from app.apps import service as apps_service
 from app.auth import service as auth_service
 from app.auth.deps import get_current_user
 from app.auth.model import User
@@ -161,8 +162,15 @@ async def github_callback(
 
 
 @router.get("/me", response_model=UserOut)
-def me(user: User = Depends(get_current_user)) -> User:
-    return user
+def me(user: User = Depends(get_current_user), db: SASession = Depends(get_db)) -> UserOut:
+    # 앱 이름·정적 슬롯 선언은 앱의 속성이라 앱에서 채운다 (users의 같은 이름 칸은 더 이상 읽지 않는다)
+    app = apps_service.get_user_app(db, user.id)
+    return UserOut.model_validate(user).model_copy(update={
+        "app_name": app.name if app else None,
+        "site_enabled": bool(app and app.site_enabled),
+        "max_apps": apps_service.app_limit(db, user),
+        "app_count": len(apps_service.list_user_apps(db, user.id)),
+    })
 
 
 @router.post("/logout")

@@ -20,17 +20,22 @@ const NAV_ITEMS = [
 const ADMIN_NAV_ITEM = { label: "관리자", to: "/admin" };
 const ADMIN_ROLES = ["admin", "root"];
 
+// /apps/<id> 로 시작하는 앱 화면. 앱 목록(/apps)은 해당하지 않는다.
+const APP_PATH = /^\/apps\/[^/]+/;
+// 사이드바가 있는 앱 셸 — 앱 화면 중 배포 흐름(/apps/<id>/deploy…)은 제외
+const isAppShell = (pathname) => APP_PATH.test(pathname) && !/^\/apps\/[^/]+\/deploy/.test(pathname);
+
 export default function TopBar({ onLogin }) {
   const { user, loading } = useAuth();
   const { pathname } = useLocation();
   const [menu, setMenu] = useState(false);
   // 현재 페이지 표시 — 시안은 활성 메뉴 글자가 더 진하고 아래 밑줄이 있다.
   const isActive = (to) => pathname === to || pathname.startsWith(`${to}/`);
-  // 대시보드는 목록(/apps)과 앱 상세(/dashboard) 두 경로를 함께 가리킨다
+  // 대시보드는 목록(/apps)과 앱 상세(/apps/:id) 두 경로를 함께 가리킨다
   const onDashboard = isActive("/apps") || isActive("/dashboard");
   // 앱 안(작업 화면)에서는 메뉴를 전부 왼쪽 사이드바가 들고 있다(읽는 화면도 셸 안에서
   // 열린다) — 상단바는 브레드크럼과 테마·프로필만 남긴다.
-  const inApp = /^\/(dashboard|deploy)/.test(pathname);
+  const inApp = APP_PATH.test(pathname) || /^\/(dashboard|deploy)/.test(pathname);
   const links = [
     ...NAV_ITEMS,
     ...(user && ADMIN_ROLES.includes(user.role) ? [ADMIN_NAV_ITEM] : []),
@@ -41,11 +46,11 @@ export default function TopBar({ onLogin }) {
 
   // 상단바와 본문 배경이 같은 색이라 맨 위에서는 괘선이 없는 편이 담백하다.
   // 대신 내용이 바 밑으로 지나가기 시작하면 옅은 선으로 경계를 준다.
-  // 앱 셸(/dashboard/*)만 예외로 괘선을 늘 둔다 — 사이드바 세로 괘선과 만나 작업 화면의 틀을 이룬다.
+  // 앱 셸(/apps/:id/*)만 예외로 괘선을 늘 둔다 — 사이드바 세로 괘선과 만나 작업 화면의 틀을 이룬다.
   // (상단바는 고정이고 스크롤은 라우트 쪽 칸이 한다 — data-kd-scroll="page"로 찾는다.
   //  칸을 붙잡지 않고 문서 전체의 scroll을 캡처 단계에서 받아 표식 달린 칸의 것만 쓴다 —
   //  로딩→본문처럼 경로 변화 없이 칸이 바뀌어도 따라가고, 안쪽 스크롤은 선을 건드리지 않는다.)
-  const softEdge = !isActive("/dashboard");
+  const softEdge = !isAppShell(pathname);
   const [scrolled, setScrolled] = useState(false);
   useEffect(() => {
     if (!softEdge) return;
@@ -243,12 +248,12 @@ function ThemeGlyph({ size = 18 }) {
   );
 }
 
-// 앱 화면(/dashboard…)에서만 보이는 현재 위치 — 상단 메뉴가 비는 자리라 여기가 돌아가는 길이다.
+// 앱 화면(/apps/:id…)에서만 보이는 현재 위치 — 상단 메뉴가 비는 자리라 여기가 돌아가는 길이다.
 function Breadcrumb() {
   const { user } = useAuth();
-  const { podStatus } = useAppShell();
+  const { podStatus, appName } = useAppShell();
   const { pathname } = useLocation();
-  if (!user?.app_name || !/^\/(dashboard|deploy)/.test(pathname)) return null;
+  if (!user || !appName || !APP_PATH.test(pathname)) return null;
   // 앱 화면에서는 "지금 살아 있나"가 항상 보여야 한다 — 작업 공간이 제 화면 안에서 앱 이름과
   // 상태를 다시 적지 않는 대신, 브레드크럼이 그 자리를 맡는다(폴링은 AppLayout 한 곳).
   const st = podStatus ? APP_STATUS_STYLES[podStatus] : null;
@@ -266,7 +271,7 @@ function Breadcrumb() {
         /
       </span>
       <span className="kd-t-label text-fg-1 truncate" style={{ fontWeight: 600 }}>
-        {user.app_name}
+        {appName}
       </span>
       {st && (
         <span

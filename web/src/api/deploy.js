@@ -1,8 +1,26 @@
 // API base는 빌드 시 VITE_API_BASE로 주입 (없으면 같은 origin 사용)
 const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
 
-async function request(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, {
+// 지금 보고 있는 앱. 앱 화면(/apps/:appId/...)이 들어올 때 정하고 나갈 때 비운다 (AppScope).
+// /deploy/... 요청은 이 값이 있으면 /apps/{id}/deploy/... 로 간다 — 서버가 그 앱(내 앱만)에 적용한다.
+// 비어 있으면 옛 경로로 가고, 서버는 그걸 "내 첫 앱"으로 본다.
+let activeAppId = null;
+export function setActiveApp(id) {
+  activeAppId = id || null;
+}
+
+// /deploy/... 경로를 앱 경로로 바꾼다. appId를 직접 주면 그 앱, 아니면 지금 보고 있는 앱.
+export function scoped(path, appId = activeAppId) {
+  return appId && path.startsWith("/deploy") ? `/apps/${appId}${path}` : path;
+}
+
+// WebSocket 경로 (터미널). 같은 규칙을 쓴다.
+export function wsPath(path) {
+  return `${API_BASE.replace(/^http/, "ws")}${scoped(path)}`;
+}
+
+async function request(path, { appId, ...options } = {}) {
+  const res = await fetch(`${API_BASE}${scoped(path, appId)}`, {
     credentials: "include",                       // cookie session 첨부
     headers: { "Content-Type": "application/json", ...(options.headers || {}) },
     ...options,
@@ -28,6 +46,17 @@ export const BUILD_MODES = ["dockerfile", "auto"];
 // 백엔드 schemas.DbType과 sync — 한 앱에 한 DB만
 export const DB_TYPES = ["none", "mysql", "postgres"];
 
+// 내 앱 목록 — 응답: [{ id, name, site_enabled, custom_domain, created_at, role }]
+// role: "owner" | (공유받은 앱이면) "viewer" | "editor"
+export function listApps() {
+  return request("/apps");
+}
+
+// 빈 앱 만들기 (이름·ns만 잡는다). 등급 한도를 넘으면 400.
+export function createApp(name, repoUrl = "") {
+  return request("/apps", { method: "POST", body: JSON.stringify({ name: name || null, repo_url: repoUrl }) });
+}
+
 export function createDeploy({
   repoUrl,
   branch = "main",
@@ -52,8 +81,10 @@ export function createDeploy({
   staticEnv = {},
   env = {},
   initDumpToken = null,
+  appId,                                        // 배포할 앱 (비우면 지금 보고 있는 앱, 그것도 없으면 첫 배포)
 }) {
   return request("/deploy", {
+    appId,
     method: "POST",
     body: JSON.stringify({
       repo_url: repoUrl,
@@ -89,7 +120,7 @@ export function createDeploy({
 export async function stageDump(file) {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API_BASE}/deploy/db/stage-dump`, {
+  const res = await fetch(`${API_BASE}${scoped("/deploy/db/stage-dump")}`, {
     method: "POST",
     credentials: "include",
     body: form,
@@ -111,8 +142,8 @@ export function getBuild(buildId) {
   return request(`/deploy/${buildId}`);
 }
 
-export function listBuilds() {
-  return request("/deploy");
+export function listBuilds(appId) {
+  return request("/deploy", { appId });
 }
 
 // 최근 GitHub 커밋 (public repo만 — backend가 unauthenticated로 호출).
@@ -160,10 +191,10 @@ export function setEnvVars(env) {
   });
 }
 
-// 앱 완전 삭제 — K8s 리소스 + PVC + builds + user.app_name 리셋.
-// 응답 후 AuthContext.refresh()로 user 재조회해야 UI가 empty state로 전환됨.
-export function deleteApp() {
-  return request("/deploy/app", { method: "DELETE" });
+// 앱 완전 삭제 — K8s 리소스 + PVC + builds + 앱 행 삭제.
+// 응답 후 AuthContext.refresh()로 user 재조회해야 앱 수 등이 갱신됨.
+export function deleteApp(appId) {
+  return request("/deploy/app", { method: "DELETE", appId });
 }
 
 // 커스텀 도메인 (CF for SaaS) — 서브도메인 전용 (CNAME). 루트(apex)는 미지원.
@@ -173,8 +204,8 @@ export const CUSTOM_DOMAIN_CNAME_TARGET = "origin.kodeploy.com";
 export function getDomain() {
   return request("/deploy/domain");
 }
-export function setDomain(domain) {
-  return request("/deploy/domain", { method: "PUT", body: JSON.stringify({ domain }) });
+export function setDomain(domain, appId) {
+  return request("/deploy/domain", { method: "PUT", body: JSON.stringify({ domain }), appId });
 }
 export function deleteDomain() {
   return request("/deploy/domain", { method: "DELETE" });
@@ -203,8 +234,8 @@ export function readStorageObject(key) {
 }
 
 // 현재 앱 Pod 상태 — 빌드와 독립. 응답: { status: "running" | "pending" | "crashing" | "missing" }
-export function getAppStatus() {
-  return request("/deploy/app/status");
+export function getAppStatus(appId) {
+  return request("/deploy/app/status", { appId });
 }
 
 // 런타임 로그 스냅샷 (현재 + 이전 인스턴스)
@@ -256,14 +287,14 @@ export function deleteSavedQuery(id) {
 // DB 스냅샷 다운로드 URL — 현재 앱 MySQL을 mysqldump → .sql.gz (cookie 인증).
 // 앵커/창 이동으로 직접 다운로드(스트림 → 디스크, 메모리 안 씀).
 export function dbExportUrl() {
-  return `${API_BASE}/deploy/db/export`;
+  return `${API_BASE}${scoped("/deploy/db/export")}`;
 }
 
 // 업로드한 .sql(.gz)을 현재 앱 MySQL에 적재 (파괴적 — 기존 데이터 덮어씀). multipart 전송.
 export async function restoreDb(file) {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${API_BASE}/deploy/db/restore`, {
+  const res = await fetch(`${API_BASE}${scoped("/deploy/db/restore")}`, {
     method: "POST",
     credentials: "include",
     body: form, // Content-Type은 브라우저가 boundary 포함해 자동 설정

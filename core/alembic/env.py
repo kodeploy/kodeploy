@@ -2,6 +2,7 @@
 
 from alembic import context
 
+from app.apps import model as _apps_model  # noqa: F401
 from app.auth import model as _auth_model  # noqa: F401
 from app.community import model as _community_model  # noqa: F401
 from app.deploy import model as _deploy_model  # noqa: F401

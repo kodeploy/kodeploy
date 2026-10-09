@@ -42,7 +42,7 @@ function resultIcon(status, size = 21) {
 }
 
 export default function AppOverview() {
-  const { builds, serverBuild, envVars } = useOutletContext();
+  const { builds, serverBuild, envVars, base } = useOutletContext();
 
   // 빌드 번호(#N) — env_change는 번호를 안 매긴다(위젯과 같은 규칙).
   const numbered = new Map();
@@ -61,7 +61,7 @@ export default function AppOverview() {
         >
           {/* ─────────── 좌: 본문 ─────────── */}
           <div style={{ paddingRight: 40 }}>
-            <Section title="현재 배포" action={{ label: "배포 상세 보기", to: latest ? `/dashboard/history?build=${latest.build_id}` : "/dashboard/history" }}>
+            <Section title="현재 배포" action={{ label: "배포 상세 보기", to: latest ? `${base}/history?build=${latest.build_id}` : `${base}/history` }}>
               {latest ? (
                 <div className="flex items-center gap-4" style={{ paddingBlock: 17 }}>
                   <span className="shrink-0">{resultIcon(latest.status)}</span>
@@ -133,7 +133,7 @@ export default function AppOverview() {
                   return r.panel ? (
                     <Link
                       key={r.name}
-                      to={`/dashboard/workspace?panel=${r.panel}`}
+                      to={`${base}/workspace?panel=${r.panel}`}
                       className="flex items-center gap-4 no-underline kd-hoverable"
                       style={style}
                     >
@@ -148,7 +148,7 @@ export default function AppOverview() {
               })()}
             </Section>
 
-            <Section title="이전 배포" action={{ label: "전체 이력 보기", to: "/dashboard/history" }}>
+            <Section title="이전 배포" action={{ label: "전체 이력 보기", to: `${base}/history` }}>
               {previous.length ? (
                 <div>
                   <div
@@ -206,7 +206,7 @@ export default function AppOverview() {
               return (
                 <Link
                   key={q.label}
-                  to={`/dashboard/workspace?panel=${q.panel}`}
+                  to={`${base}/workspace?panel=${q.panel}`}
                   className="flex items-center gap-4 no-underline kd-hoverable"
                   style={{
                     height: 37,
@@ -243,7 +243,7 @@ export default function AppOverview() {
             </InfoRow>
             <InfoRow label="환경변수" last>
               <Link
-                to="/dashboard/env"
+                to={`${base}/env`}
                 className="inline-flex items-center gap-1 text-fg-1 no-underline hover:underline"
               >
                 {envVars ? `${Object.keys(envVars).length}개` : "—"}
@@ -251,7 +251,7 @@ export default function AppOverview() {
             </InfoRow>
 
             <div style={{ marginTop: 16 }}>
-              <Link to="/dashboard/settings" className="kd-t-caption text-fg-1 underline underline-offset-4">
+              <Link to={`${base}/settings`} className="kd-t-caption text-fg-1 underline underline-offset-4">
                 설정 보기
               </Link>
             </div>

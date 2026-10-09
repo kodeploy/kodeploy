@@ -5,11 +5,21 @@
 // 폴링은 AppLayout 한 곳에만 두고, 결과만 여기로 올려 보낸다.
 import { createContext, useContext, useMemo, useState } from "react";
 
-const AppShellContext = createContext({ podStatus: null, setPodStatus: () => {} });
+const AppShellContext = createContext({
+  podStatus: null,
+  setPodStatus: () => {},
+  appName: null,
+  setAppName: () => {},
+});
 
+// appName은 지금 보고 있는 앱의 이름 — 상단바 브레드크럼이 쓴다 (AppScope가 채운다).
 export function AppShellProvider({ children }) {
   const [podStatus, setPodStatus] = useState(null);
-  const value = useMemo(() => ({ podStatus, setPodStatus }), [podStatus]);
+  const [appName, setAppName] = useState(null);
+  const value = useMemo(
+    () => ({ podStatus, setPodStatus, appName, setAppName }),
+    [podStatus, appName],
+  );
   return <AppShellContext.Provider value={value}>{children}</AppShellContext.Provider>;
 }
 

@@ -62,67 +62,74 @@ export default function StepRepo({
         </button>
       </div>
 
-      {/* 연결된 저장소 목록 — "불러오기"로 여닫는다. 항목 높이 var(--row-sm), 3개 넘으면 스크롤. */}
+      {/* 연결된 저장소 목록 — "불러오기"로 여닫는다. 항목 높이 var(--row-sm), 3개 넘으면 스크롤.
+          맨 아래 "저장소 추가"는 스크롤 밖에 고정 — 연결된 게 많아도 항상 보인다
+          (GitHub App은 고른 저장소만 접근하므로, 더 쓰려면 설치 화면에서 저장소를 더 골라야 한다). */}
       {repoListOpen && (
         <div
-          className="scroll-thin"
           style={{
             marginTop: 8,
             borderRadius: 4,
             border: "1px solid var(--kd-border)",
             background: "var(--kd-surface)",
-            maxHeight: 96,
-            overflowY: "auto",
           }}
         >
-          {ghRepos.length > 0 ? (
-            ghRepos.map((r) => (
-              <button
-                key={r.full_name}
-                type="button"
-                onClick={() => onPickRepo(r)}
-                disabled={submitting}
-                className="kd-t-body-s kd-hoverable"
-                style={{
-                  width: "100%",
-                  height: "var(--row-sm)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: 8,
-                  padding: "0 12px",
-                  color: "var(--fg-2)",
-                }}
-              >
-                <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {r.full_name}
-                </span>
-                {r.private && (
-                  <span className="kd-t-micro" style={{ color: "var(--fg-4)", flexShrink: 0 }}>
-                    private
+          <div className="scroll-thin" style={{ maxHeight: 96, overflowY: "auto" }}>
+            {ghRepos.length > 0 ? (
+              ghRepos.map((r) => (
+                <button
+                  key={r.full_name}
+                  type="button"
+                  onClick={() => onPickRepo(r)}
+                  disabled={submitting}
+                  className="kd-t-body-s kd-hoverable"
+                  style={{
+                    width: "100%",
+                    height: "var(--row-sm)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    padding: "0 12px",
+                    color: "var(--fg-2)",
+                  }}
+                >
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {r.full_name}
                   </span>
-                )}
-              </button>
-            ))
-          ) : (
-            <div className="kd-t-caption" style={{ padding: "10px 12px", color: "var(--fg-4)" }}>
-              {githubConnected ? (
-                <>
-                  연결된 저장소가 없어요{" "}
-                  <a href={installUrl} className="kd-strong" style={{ color: "var(--accent)", textDecoration: "underline" }}>
-                    저장소 추가
-                  </a>
-                </>
-              ) : (
-                <>
-                  비공개 저장소는 GitHub 연결이 필요해요{" "}
-                  <a href={installUrl} className="kd-strong" style={{ color: "var(--accent)", textDecoration: "underline" }}>
-                    GitHub 연결하기
-                  </a>
-                </>
-              )}
-            </div>
-          )}
+                  {r.private && (
+                    <span className="kd-t-micro" style={{ color: "var(--fg-4)", flexShrink: 0 }}>
+                      private
+                    </span>
+                  )}
+                </button>
+              ))
+            ) : (
+              <div className="kd-t-caption" style={{ padding: "10px 12px", color: "var(--fg-4)" }}>
+                {githubConnected
+                  ? "연결된 저장소가 없어요."
+                  : "비공개 저장소는 GitHub 연결이 필요해요."}
+              </div>
+            )}
+          </div>
+          <a
+            href={installUrl}
+            className="kd-t-body-s kd-hoverable"
+            style={{
+              height: "var(--row-sm)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "0 12px",
+              color: "var(--accent)",
+              borderTop: "1px solid var(--kd-border)",
+              textDecoration: "none",
+              fontWeight: 510,
+            }}
+          >
+            {githubConnected ? "저장소 추가" : "GitHub 연결하기"}
+            <ArrowUpRight aria-hidden size={15} strokeWidth={1.7} />
+          </a>
         </div>
       )}
 

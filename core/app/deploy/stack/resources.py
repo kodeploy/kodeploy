@@ -7,7 +7,7 @@ from kubernetes.client import V1ServicePort
 from kubernetes.client.exceptions import ApiException
 
 from app import config
-from app.auth.model import User
+from app.apps.model import App
 from app.deploy.stack import manifests, r2
 from app.deploy.model import Build
 from app.shared import k8s
@@ -195,11 +195,9 @@ def _read_storage_env(ns: str) -> dict | None:
     return {k: base64.b64decode(v).decode("utf-8") for k, v in data.items()}
 
 
-# 앱 버킷 객체 목록 — router가 호출. tenant ns는 user.id에서 파생되므로 격리 자동.
-def list_storage_objects(user: User, token: str | None = None) -> dict:
-    if not user.app_name:
-        raise ValueError("배포된 앱이 없습니다")
-    env = _read_storage_env(f"tenant-{user.id.hex[:8]}")
+# 앱 버킷 객체 목록 — router가 호출. ns는 앱에서 오므로 격리 자동.
+def list_storage_objects(app: App, token: str | None = None) -> dict:
+    env = _read_storage_env(app.namespace)
     if not env:
         raise ValueError("오브젝트 스토리지가 활성화돼 있지 않습니다")
     try:
@@ -209,10 +207,8 @@ def list_storage_objects(user: User, token: str | None = None) -> dict:
 
 
 # 앱 버킷 객체 1개 삭제 — router가 호출.
-def delete_storage_object(user: User, key: str) -> None:
-    if not user.app_name:
-        raise ValueError("배포된 앱이 없습니다")
-    env = _read_storage_env(f"tenant-{user.id.hex[:8]}")
+def delete_storage_object(app: App, key: str) -> None:
+    env = _read_storage_env(app.namespace)
     if not env:
         raise ValueError("오브젝트 스토리지가 활성화돼 있지 않습니다")
     try:
@@ -225,12 +221,10 @@ def delete_storage_object(user: User, key: str) -> None:
 # 브라우저가 공개 URL로 직접 읽지 않고 core를 거치는 이유: R2 공개 버킷에는 CORS가 걸려
 # 있지 않아 다른 오리진(kodeploy.com)의 fetch가 막힌다. 미리보기를 위해 버킷에 CORS를
 # 여는 것보다, 이미 인가를 거치는 core가 자기 자격증명으로 읽어 넘기는 쪽이 노출면이 작다.
-def read_storage_object(user: User, key: str) -> dict:
-    if not user.app_name:
-        raise ValueError("배포된 앱이 없습니다")
+def read_storage_object(app: App, key: str) -> dict:
     if not key:
         raise ValueError("파일 key가 필요합니다")
-    env = _read_storage_env(f"tenant-{user.id.hex[:8]}")
+    env = _read_storage_env(app.namespace)
     if not env:
         raise ValueError("오브젝트 스토리지가 활성화돼 있지 않습니다")
     try:

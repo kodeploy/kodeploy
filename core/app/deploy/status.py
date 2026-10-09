@@ -5,24 +5,24 @@ import uuid
 from kubernetes.client.exceptions import ApiException
 from sqlalchemy.orm import Session
 
-from app.auth.model import User
+from app.apps.model import App
 from app.deploy import crud
 from app.deploy.routing import domains
 from app.deploy.stack import r2
-from app.deploy.model import Build, SavedQuery
+from app.deploy.model import Build, BuildRecord, SavedQuery
 from app.deploy.stack.resources import _read_r2_token_id
 from app.shared import k8s
 
-# build_id로 단건 빌드 상태 조회 — user_id 주면 본인 빌드만
+# build_id로 단건 빌드 상태 조회 — app_id 주면 그 앱의 빌드만
 def get_state(
-    db: Session, build_id: str, user_id: uuid.UUID | None = None,
+    db: Session, build_id: str, app_id: uuid.UUID | None = None,
 ) -> Build | None:
-    return crud.get_build(db, build_id, user_id=user_id)
+    return crud.get_build(db, build_id, app_id=app_id)
 
 
-# 빌드 목록 (user_id 주면 본인 것만)
-def list_builds(db: Session, user_id: uuid.UUID | None = None) -> list[Build]:
-    return crud.list_builds(db, user_id=user_id)
+# 빌드 목록 (app_id 주면 그 앱 것만)
+def list_builds(db: Session, app_id: uuid.UUID | None = None) -> list[Build]:
+    return crud.list_builds(db, app_id=app_id)
 
 
 # 현재 user 앱의 Pod 상태 — 빌드와 무관한 실시간 표시용.
@@ -89,34 +89,31 @@ def _slot_pod_status(core, tenant_id: str, app_label: str) -> dict:
 #   {status, started_at,            ← 대표 (서버 우선, 없으면 정적 — 위젯 최소화 라벨 등)
 #    server: {status, started_at},  ← 서버 슬롯 (정적 단독이면 "missing")
 #    site:   {status, started_at} | null}  ← site_enabled 아닐 땐 null
-def get_app_status(user: User) -> dict:
-    if not user.app_name:
+def get_app_status(app: App | None) -> dict:
+    if app is None:
         return {"status": "missing", "started_at": None, "server": None, "site": None}
-    tenant_id = f"tenant-{user.id.hex[:8]}"
+    tenant_id = app.namespace
     core = k8s.core_v1()
 
-    server = _slot_pod_status(core, tenant_id, user.app_name)
+    server = _slot_pod_status(core, tenant_id, app.name)
     site = (
-        _slot_pod_status(core, tenant_id, f"{user.app_name}-static")
-        if user.site_enabled
+        _slot_pod_status(core, tenant_id, f"{app.name}-static")
+        if app.site_enabled
         else None
     )
     rep = server if server["status"] != "missing" else (site or server)
     return {**rep, "server": server, "site": site}
 
 
-# 앱 완전 삭제 — tenant namespace 통째로 삭제하면 K8s가 cascade로
+# 앱 완전 삭제 — 앱의 namespace 통째로 삭제하면 K8s가 cascade로
 # 안의 모든 자원(Deployment/Service/HTTPRoute/STS/PVC/Secret/ResourceQuota) 자동 정리.
-# 같은 user_id로 재배포하면 같은 tenant_id 쓰는데, ns가 terminating이면 _ensure_tenant_ns가
+# 같은 유저가 같은 ns 이름으로 재배포하면 ns가 terminating일 수 있는데, _ensure_tenant_ns가
 # 사라질 때까지 잠시 대기 후 새 create. GHCR 이미지는 보존 (별도 정리).
-def delete_app(db: Session, user: User) -> None:
-    if not user.app_name:
-        raise ValueError("삭제할 앱이 없습니다")
-
-    tenant_id = f"tenant-{user.id.hex[:8]}"
+def delete_app(db: Session, app: App) -> None:
+    tenant_id = app.namespace
 
     # R2는 외부(CF) 리소스라 ns 삭제로 정리 안 됨 — ns 지우기 전에 토큰 id를 읽어둔다.
-    app_name = user.app_name
+    app_name = app.name
     r2_token_id = None
     try:
         r2_token_id = _read_r2_token_id(tenant_id)
@@ -142,22 +139,20 @@ def delete_app(db: Session, user: User) -> None:
             pass  # 외부 정리 실패가 DB/응답을 막지 않게 — orphan은 sweeper(백로그)
 
     # 커스텀 도메인 CF custom hostname 정리 (외부 리소스라 ns 삭제로 안 사라짐). best-effort.
-    if user.custom_domain:
+    if app.custom_domain:
         try:
-            domains.delete(user.custom_domain)
+            domains.delete(app.custom_domain)
         except domains.DomainError:
             pass
 
-    # DB: builds 히스토리 + user.app_name/custom_domain/슬롯 선언 리셋. 다음 배포는 첫 배포 흐름.
-    # build_records(빌드 행위 영구 기록)는 운영 분석용 append-only라 의도적으로 보존.
-    # extra_hostnames도 클리어 — 옛 앱용 hostname이 다음(다른) 앱 route에 자동 주입되면 안 됨.
-    db.query(Build).filter(Build.user_id == user.id).delete()
-    # DB 콘솔의 저장된 쿼리도 같이 — 앱이 사라지면 그 앱/DB 스코프는 다시 안 온다
-    # (다음 배포는 새 app_name). 남겨두면 아무도 못 읽는 orphan row만 쌓인다.
-    db.query(SavedQuery).filter(SavedQuery.user_id == user.id).delete()
-    user.app_name = None
-    user.custom_domain = None
-    user.custom_domain_status = None
-    user.extra_hostnames = None
-    user.site_enabled = False
+    # DB: builds 히스토리 + 앱 행 삭제 (도메인·슬롯 선언·extra_hostnames도 앱과 함께 사라진다).
+    # 다음 배포는 첫 배포 흐름 — 새 앱이 만들어진다.
+    # build_records(빌드 행위 영구 기록)는 운영 분석용 append-only라 의도적으로 보존하되,
+    # 사라진 앱을 가리키지 않게 app_id만 비운다.
+    db.query(Build).filter(Build.app_id == app.id).delete()
+    db.query(BuildRecord).filter(BuildRecord.app_id == app.id).update({BuildRecord.app_id: None})
+    # DB 콘솔의 저장된 쿼리도 같이 — 앱이 사라지면 그 앱/DB 스코프는 다시 안 온다.
+    # 남겨두면 아무도 못 읽는 orphan row만 쌓인다.
+    db.query(SavedQuery).filter(SavedQuery.app_id == app.id).delete()
+    db.delete(app)
     db.commit()

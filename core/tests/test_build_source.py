@@ -8,7 +8,7 @@ import pytest
 
 from app.deploy.build.source import validate_branch, validate_repo_path, validate_repo_url
 from app.deploy.stack import manifests
-from tests.test_start_deploy import make_user, run_deploy, spawned  # noqa: F401  (fixture)
+from tests.test_start_deploy import fake_apps, make_user, run_deploy, spawned  # noqa: F401  (fixture)
 
 INJECT_BRANCH = 'main"\n            - name: X\n              value: "y'
 

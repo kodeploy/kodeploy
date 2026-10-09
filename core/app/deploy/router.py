@@ -8,6 +8,8 @@ import re
 import uuid
 from datetime import datetime, timezone
 
+from app.apps import service as apps_service
+from app.apps.model import App
 from app.auth.deps import get_current_user
 from app.auth.model import User
 from app.auth import github_app, service as auth_service
@@ -36,10 +38,32 @@ from app.shared.db import get_db
 router = APIRouter(prefix="/deploy", tags=["deploy"])
 
 
+# 요청이 가리키는 앱. /apps/{app_id}/deploy/... 로 들어오면 그 앱(내 앱이 아니면 404 — 존재 여부를 알리지 않는다),
+# 옛 경로 /deploy/... 는 app_id가 없어서 유저의 첫 앱이다 (없으면 None).
+# 이 라우터는 두 경로에 모두 붙는다 (main.py).
+def current_app_or_none(
+    app_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> App | None:
+    if app_id is None:
+        return apps_service.get_user_app(db, user.id)
+    app = apps_service.get_owned_app(db, user.id, app_id)
+    if app is None:
+        raise HTTPException(status_code=404, detail="app not found")
+    return app
+
+
+def current_app(app: App | None = Depends(current_app_or_none)) -> App:
+    if app is None:
+        raise HTTPException(status_code=400, detail="배포된 앱이 없습니다")
+    return app
+
+
 # v2(빌더·Argo) 앱은 core가 리소스를 직접 바꾸면 Argo가 되돌린다(env·route).
 # config 요청이 빌더에 연결되기 전까지 막는다.
-def _reject_v2(user: User, what: str) -> None:
-    if user.pipeline == "v2":
+def _reject_v2(app: App, what: str) -> None:
+    if v2.is_v2(app):
         raise HTTPException(status_code=501, detail=f"새 경로(v2)에서 아직 지원하지 않습니다: {what}")
 
 
@@ -91,11 +115,13 @@ async def create_deploy(
     req: DeployRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    app: App | None = Depends(current_app_or_none),
 ) -> DeployResponse:
     try:
         builds = await pipeline.start_deploy(
             db,
             user=user,
+            app=app,
             repo_url=str(req.repo_url),
             runtime=req.runtime,
             name=req.name,
@@ -122,8 +148,10 @@ async def create_deploy(
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    deployed_app = app if app is not None else apps_service.get_user_app(db, user.id)
     return DeployResponse(
-        app_name=user.app_name,
+        app_id=deployed_app.id if deployed_app else None,
+        app_name=deployed_app.name if deployed_app else "",
         builds=[
             DeployBuildRef(build_id=b.build_id, runtime=b.runtime, status=b.status)
             for b in builds
@@ -134,11 +162,10 @@ async def create_deploy(
 # 사용자 앱의 환경변수 조회. 첫 배포 전이거나 한 번도 설정 안 했으면 빈 dict.
 # /{build_id} GET 핸들러보다 위에 등록해야 "env"가 build_id로 잡히지 않음.
 @router.get("/env", response_model=EnvVarsResponse)
-def env_get(user: User = Depends(get_current_user)) -> EnvVarsResponse:
-    if not user.app_name:
+def env_get(app: App | None = Depends(current_app_or_none)) -> EnvVarsResponse:
+    if app is None:
         return EnvVarsResponse(env={})
-    tenant_id = f"tenant-{user.id.hex[:8]}"
-    return EnvVarsResponse(env=env.get_env(tenant_id, user.app_name))
+    return EnvVarsResponse(env=env.get_env(app.namespace, app.name))
 
 
 # 환경변수 전체 replace. 저장 직후 rolling update 트리거로 새 값 즉시 반영.
@@ -148,15 +175,16 @@ async def env_put(
     req: EnvVarsRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    app: App | None = Depends(current_app_or_none),
 ) -> EnvVarsResponse:
-    if not user.app_name:
+    if app is None:
         raise HTTPException(status_code=400, detail="첫 배포 완료 후 환경변수 설정 가능")
-    _reject_v2(user, "환경변수 변경")
-    tenant_id = f"tenant-{user.id.hex[:8]}"
+    _reject_v2(app, "환경변수 변경")
+    tenant_id = app.namespace
     # 변경 전 현재 env (Secret) 조회 — set_env 전에 받아둬야 diff 계산 가능
-    old_env = env.get_env(tenant_id, user.app_name)
+    old_env = env.get_env(tenant_id, app.name)
     try:
-        env.set_env(tenant_id, user.app_name, req.env)
+        env.set_env(tenant_id, app.name, req.env)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -179,7 +207,7 @@ async def env_put(
     # 환경변수 변경 이벤트를 히스토리에 기록 — kind="env_change"라 #N 번호 안 매김.
     # 직전 build에서 repo/branch/runtime/image 컨텍스트 복사 (none이면 빈 값).
     latest = (
-        db.query(Build).filter_by(user_id=user.id)
+        db.query(Build).filter_by(app_id=app.id)
         .order_by(Build.created_at.desc()).first()
     )
     event = Build(
@@ -187,10 +215,12 @@ async def env_put(
         repo_url=latest.repo_url if latest else "",
         branch=latest.branch if latest else "",
         image=latest.image if latest else "",
-        app_name=user.app_name,
+        app_name=app.name,
         port=latest.port if latest else 80,
         runtime=latest.runtime if latest else "",
         user_id=user.id,
+        app_id=app.id,
+        namespace=app.namespace,
         db_type=latest.db_type if latest else "none",
         use_redis=latest.use_redis if latest else False,
         use_storage=latest.use_storage if latest else False,
@@ -208,7 +238,7 @@ async def env_put(
     # 동기 K8s 클라이언트를 쓰므로 메인 루프 대신 전용 스레드에서 (pipeline.spawn_background).
     pipeline.spawn_background(
         pipeline.watch_env_change_rollout,
-        user.id, user.app_name, tenant_id, event.build_id,
+        user.id, app.name, tenant_id, event.build_id,
     )
     return EnvVarsResponse(env=req.env)
 
@@ -216,28 +246,22 @@ async def env_put(
 # 현재 user 앱의 Pod 상태 — 빌드와 독립. 프론트가 폴링.
 # 응답: {"status": "running" | "pending" | "crashing" | "missing"}
 @router.get("/app/status")
-def app_status(user: User = Depends(get_current_user)) -> dict:
-    return status.get_app_status(user)
+def app_status(app: App | None = Depends(current_app_or_none)) -> dict:
+    return status.get_app_status(app)
 
 
 # 런타임 로그 스냅샷 — 현재 + 이전 인스턴스 로그 JSON. 프론트 30초 폴링.
 @router.get("/app/logs")
-def app_logs(user: User = Depends(get_current_user)):
-    if not user.app_name:
-        raise HTTPException(status_code=400, detail="배포된 앱이 없습니다")
-    tenant_id = f"tenant-{user.id.hex[:8]}"
-    return logs.fetch_app_logs(tenant_id, user.app_name)
+def app_logs(app: App = Depends(current_app)):
+    return logs.fetch_app_logs(app.namespace, app.name)
 
 
 @router.get("/app/metrics")
 def app_metrics(
     range: str = "1h",
-    user: User = Depends(get_current_user),
+    app: App = Depends(current_app),
 ):
-    if not user.app_name:
-        raise HTTPException(status_code=400, detail="배포된 앱이 없습니다")
-    tenant_id = f"tenant-{user.id.hex[:8]}"
-    return metrics.fetch_app_metrics(tenant_id, user.app_name, range)
+    return metrics.fetch_app_metrics(app.namespace, app.name, range)
 
 
 # WebSocket은 CORS·SameSite 보호 밖이라(브라우저가 자동 차단 안 함) Origin을 서버가
@@ -246,6 +270,17 @@ def app_metrics(
 # Origin 없음(비-브라우저)도 거절 — 이 WS는 web 프론트 전용.
 def _ws_origin_allowed(ws: WebSocket) -> bool:
     return ws.headers.get("origin") in config.ALLOWED_ORIGINS
+
+
+# WebSocket이 가리키는 앱 — /apps/{app_id}/deploy/... 면 그 앱(내 것만), 옛 경로면 유저의 첫 앱.
+def _ws_app(db: Session, ws: WebSocket, user_id: uuid.UUID) -> App | None:
+    raw = ws.path_params.get("app_id")
+    if raw is None:
+        return apps_service.get_user_app(db, user_id)
+    try:
+        return apps_service.get_owned_app(db, user_id, uuid.UUID(raw))
+    except ValueError:
+        return None
 
 
 # Pod exec WebSocket — xterm.js 프론트와 양방향. cookie로 인증.
@@ -265,12 +300,12 @@ async def app_terminal(ws: WebSocket):
         if not sess:
             await ws.close(code=4001, reason="세션 만료")
             return
-        user = db.query(User).filter_by(id=sess.user_id).first()
-        if not user or not user.app_name:
+        app = _ws_app(db, ws, sess.user_id)
+        if not app:
             await ws.close(code=4002, reason="앱 없음")
             return
-        tenant_id = f"tenant-{user.id.hex[:8]}"
-        app_name = user.app_name
+        tenant_id = app.namespace
+        app_name = app.name
     finally:
         db.close()
     await terminal.handle_terminal(ws, tenant_id, app_name)
@@ -293,11 +328,11 @@ async def app_db_terminal(ws: WebSocket):
         if not sess:
             await ws.close(code=4001, reason="세션 만료")
             return
-        user = db.query(User).filter_by(id=sess.user_id).first()
-        if not user or not user.app_name:
+        app = _ws_app(db, ws, sess.user_id)
+        if not app:
             await ws.close(code=4002, reason="앱 없음")
             return
-        tenant_id = f"tenant-{user.id.hex[:8]}"
+        tenant_id = app.namespace
     finally:
         db.close()
     await terminal.handle_db_terminal(ws, tenant_id)
@@ -320,11 +355,11 @@ async def app_redis_terminal(ws: WebSocket):
         if not sess:
             await ws.close(code=4001, reason="세션 만료")
             return
-        user = db.query(User).filter_by(id=sess.user_id).first()
-        if not user or not user.app_name:
+        app = _ws_app(db, ws, sess.user_id)
+        if not app:
             await ws.close(code=4002, reason="앱 없음")
             return
-        tenant_id = f"tenant-{user.id.hex[:8]}"
+        tenant_id = app.namespace
     finally:
         db.close()
     await terminal.handle_redis_terminal(ws, tenant_id)
@@ -336,13 +371,10 @@ async def app_redis_terminal(ws: WebSocket):
 @router.post("/app/db/query")
 async def db_query(
     req: DbQueryRequest,
-    user: User = Depends(get_current_user),
+    app: App = Depends(current_app),
 ) -> dict:
-    if not user.app_name:
-        raise HTTPException(status_code=400, detail="배포된 앱이 없습니다")
-    tenant_id = f"tenant-{user.id.hex[:8]}"
     try:
-        return await dbquery.run_query(tenant_id, req.sql, offset=req.offset)
+        return await dbquery.run_query(app.namespace, req.sql, offset=req.offset)
     except dbquery.QueryError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -355,20 +387,18 @@ async def db_query(
 MAX_SAVED_QUERIES = 100
 
 
-# DB 콘솔의 스코프 — (앱, DB 종류). 클라이언트 입력을 전혀 받지 않고 세션 user와 최신
+# DB 콘솔의 스코프 — (앱, DB 종류). 클라이언트 입력을 전혀 받지 않고 세션 유저의 앱과 최신
 # 서버 빌드에서만 뽑는다. 저장된 쿼리의 모든 핸들러가 첫 줄에서 이걸 부르고, 그 값이
 # 그대로 WHERE에 들어가므로 "남의 앱/DB 칸"이 애초에 표현 불가능하다.
-def _db_scope(db: Session, user: User) -> tuple[str, str]:
-    if not user.app_name:
-        raise HTTPException(status_code=400, detail="배포된 앱이 없습니다")
-    build = crud.get_server_build(db, user.id)
+def _db_scope(db: Session, app: App) -> str:
+    build = crud.get_server_build(db, app.id)
     db_type = (build.db_type if build else None) or "none"
     if db_type == "none":
         raise HTTPException(
             status_code=400,
             detail="DB가 활성화돼 있지 않습니다 — DB(MySQL/PostgreSQL)를 추가한 앱에서만 쓸 수 있습니다.",
         )
-    return user.app_name, db_type
+    return db_type
 
 
 def _to_saved_query(row: SavedQuery) -> SavedQueryOut:
@@ -406,11 +436,11 @@ def _clean_sql(sql: str) -> str:
 
 @router.get("/app/db/queries")
 def saved_queries_list(
-    user: User = Depends(get_current_user),
+    app: App = Depends(current_app),
     db: Session = Depends(get_db),
 ) -> list[SavedQueryOut]:
-    app_name, db_type = _db_scope(db, user)
-    rows = crud.list_saved_queries(db, user.id, app_name, db_type)
+    db_type = _db_scope(db, app)
+    rows = crud.list_saved_queries(db, app.id, db_type)
     return [_to_saved_query(r) for r in rows]
 
 
@@ -418,17 +448,18 @@ def saved_queries_list(
 def saved_queries_create(
     req: SavedQueryCreate,
     user: User = Depends(get_current_user),
+    app: App = Depends(current_app),
     db: Session = Depends(get_db),
 ) -> SavedQueryOut:
-    app_name, db_type = _db_scope(db, user)
+    db_type = _db_scope(db, app)
     name, sql = _clean_name(req.name), _clean_sql(req.sql)
-    if crud.count_saved_queries(db, user.id, app_name, db_type) >= MAX_SAVED_QUERIES:
+    if crud.count_saved_queries(db, app.id, db_type) >= MAX_SAVED_QUERIES:
         raise HTTPException(
             status_code=400,
             detail=f"저장한 쿼리가 너무 많습니다 (최대 {MAX_SAVED_QUERIES}개) — 쓰지 않는 쿼리를 지워주세요",
         )
     row = crud.create_saved_query(
-        db, user_id=user.id, app_name=app_name, db_type=db_type, name=name, sql=sql,
+        db, user_id=user.id, app_id=app.id, app_name=app.name, db_type=db_type, name=name, sql=sql,
     )
     return _to_saved_query(row)
 
@@ -438,11 +469,11 @@ def saved_queries_create(
 def saved_queries_update(
     query_id: int,
     req: SavedQueryUpdate,
-    user: User = Depends(get_current_user),
+    app: App = Depends(current_app),
     db: Session = Depends(get_db),
 ) -> SavedQueryOut:
-    app_name, db_type = _db_scope(db, user)
-    row = crud.get_saved_query(db, query_id, user.id, app_name, db_type)
+    db_type = _db_scope(db, app)
+    row = crud.get_saved_query(db, query_id, app.id, db_type)
     if not row:
         raise HTTPException(status_code=404, detail="저장된 쿼리를 찾을 수 없습니다")
     name = _clean_name(req.name) if req.name is not None else None
@@ -455,11 +486,11 @@ def saved_queries_update(
 @router.delete("/app/db/queries/{query_id}")
 def saved_queries_delete(
     query_id: int,
-    user: User = Depends(get_current_user),
+    app: App = Depends(current_app),
     db: Session = Depends(get_db),
 ) -> dict:
-    app_name, db_type = _db_scope(db, user)
-    row = crud.get_saved_query(db, query_id, user.id, app_name, db_type)
+    db_type = _db_scope(db, app)
+    row = crud.get_saved_query(db, query_id, app.id, db_type)
     if not row:
         raise HTTPException(status_code=404, detail="저장된 쿼리를 찾을 수 없습니다")
     crud.delete_saved_query(db, row)
@@ -471,10 +502,10 @@ def saved_queries_delete(
 @router.get("/app/storage/objects")
 def storage_list(
     token: str | None = None,
-    user: User = Depends(get_current_user),
+    app: App = Depends(current_app),
 ) -> dict:
     try:
-        return resources.list_storage_objects(user, token)
+        return resources.list_storage_objects(app, token)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -483,10 +514,10 @@ def storage_list(
 @router.get("/app/storage/object")
 def storage_read(
     key: str,
-    user: User = Depends(get_current_user),
+    app: App = Depends(current_app),
 ) -> dict:
     try:
-        return resources.read_storage_object(user, key)
+        return resources.read_storage_object(app, key)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -495,10 +526,10 @@ def storage_read(
 @router.delete("/app/storage/objects")
 def storage_delete(
     key: str,
-    user: User = Depends(get_current_user),
+    app: App = Depends(current_app),
 ) -> dict:
     try:
-        resources.delete_storage_object(user, key)
+        resources.delete_storage_object(app, key)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "deleted"}
@@ -509,9 +540,12 @@ def storage_delete(
 @router.get("/domain")
 def get_domain(
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    app: App | None = Depends(current_app_or_none),
 ) -> dict:
-    result = hostnames.refresh_custom_domain_status(db, user)
+    if app is None:   # 앱 전엔 연결된 도메인이 없다
+        result = {"domain": None, "status": None, "ssl_status": None}
+    else:
+        result = hostnames.refresh_custom_domain_status(db, app)
     result["cname_target"] = config.CUSTOM_DOMAIN_CNAME_TARGET
     return result
 
@@ -521,11 +555,13 @@ def get_domain(
 def put_domain(
     req: DomainRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    app: App | None = Depends(current_app_or_none),
 ) -> dict:
-    _reject_v2(user, "도메인 변경")
+    if app is None:
+        raise HTTPException(status_code=400, detail="먼저 앱을 배포한 후 커스텀 도메인을 연결할 수 있습니다")
+    _reject_v2(app, "도메인 변경")
     try:
-        result = hostnames.set_custom_domain(db, user, req.domain)
+        result = hostnames.set_custom_domain(db, app, req.domain)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     result["cname_target"] = config.CUSTOM_DOMAIN_CNAME_TARGET
@@ -536,25 +572,30 @@ def put_domain(
 @router.delete("/domain")
 def delete_domain(
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    app: App | None = Depends(current_app_or_none),
 ) -> dict:
-    _reject_v2(user, "도메인 변경")
-    hostnames.clear_custom_domain(db, user)
+    if app is None:
+        return {"status": "cleared"}
+    _reject_v2(app, "도메인 변경")
+    hostnames.clear_custom_domain(db, app)
     return {"status": "cleared"}
 
 
-# 앱 완전 삭제 — K8s 리소스 + PVC + builds + user.app_name 리셋.
+# 앱 완전 삭제 — K8s 리소스 + PVC + builds + 앱 행 삭제.
 # v2 앱은 먼저 빌더가 values를 지우고 Application이 사라지길 기다린다 (그 전에 ns를 지우면 Argo가 되살린다).
 # /{build_id} 핸들러보다 위에 등록해야 path param이 "app"을 잡지 않음.
 @router.delete("/app")
 async def delete_app(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    app: App | None = Depends(current_app_or_none),
 ):
+    if app is None:
+        raise HTTPException(status_code=400, detail="삭제할 앱이 없습니다")
     try:
-        if v2.is_v2(user):
-            await v2.request_delete(user)
-        await asyncio.to_thread(status.delete_app, db, user)   # K8s·R2 호출이 동기라 메인 루프를 막지 않게
+        if v2.is_v2(app):
+            await v2.request_delete(user, app)
+        await asyncio.to_thread(status.delete_app, db, app)   # K8s·R2 호출이 동기라 메인 루프를 막지 않게
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "deleted"}
@@ -566,9 +607,11 @@ async def delete_app(
 @router.get("/commits")
 def list_recent_commits(
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    app: App | None = Depends(current_app_or_none),
 ) -> list[dict]:
-    builds = status.list_builds(db, user_id=user.id)
+    if app is None:
+        return []
+    builds = status.list_builds(db, app_id=app.id)
     if not builds:
         return []
     latest = builds[0]
@@ -607,16 +650,14 @@ def github_detect(
 # DB 스냅샷 추출 — 현재 앱 MySQL을 mysqldump → .sql.gz 다운로드 스트림.
 # /{build_id} GET 핸들러보다 위에 등록해야 "db"가 build_id로 잡히지 않음.
 @router.get("/db/export")
-async def db_export(user: User = Depends(get_current_user)):
-    if not user.app_name:
-        raise HTTPException(status_code=400, detail="배포된 앱이 없습니다")
-    tenant_id = f"tenant-{user.id.hex[:8]}"
+async def db_export(app: App = Depends(current_app)):
+    tenant_id = app.namespace
     try:
         await snapshots.ensure_db(tenant_id)             # 스트리밍 시작 전 검증
     except snapshots.SnapshotError as e:
         raise HTTPException(status_code=400, detail=str(e))
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    filename = f"{user.app_name}-{ts}.sql.gz"
+    filename = f"{app.name}-{ts}.sql.gz"
     return StreamingResponse(
         snapshots.export_stream(tenant_id),
         media_type="application/gzip",
@@ -646,11 +687,9 @@ async def db_stage_dump(
 @router.post("/db/restore")
 async def db_restore(
     file: UploadFile = File(...),
-    user: User = Depends(get_current_user),
+    app: App = Depends(current_app),
 ):
-    if not user.app_name:
-        raise HTTPException(status_code=400, detail="배포된 앱이 없습니다")
-    tenant_id = f"tenant-{user.id.hex[:8]}"
+    tenant_id = app.namespace
 
     async def _chunks():
         while True:
@@ -677,9 +716,9 @@ def reserved_keys(user: User = Depends(get_current_user)) -> dict:
 def get_status(
     build_id: str,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    app: App | None = Depends(current_app_or_none),
 ) -> StatusResponse:
-    build = status.get_state(db, build_id, user_id=user.id)
+    build = status.get_state(db, build_id, app_id=app.id) if app else None
     if not build:
         raise HTTPException(status_code=404, detail="build not found")
     timings = pipeline.get_build_timings(db, [build.build_id])
@@ -690,8 +729,8 @@ def get_status(
 @router.get("", response_model=list[StatusResponse])
 def list_builds(
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    app: App | None = Depends(current_app_or_none),
 ) -> list[StatusResponse]:
-    builds = status.list_builds(db, user_id=user.id)
+    builds = status.list_builds(db, app_id=app.id) if app else []
     timings = pipeline.get_build_timings(db, [b.build_id for b in builds])
     return [_to_status(b, timings.get(b.build_id)) for b in builds]

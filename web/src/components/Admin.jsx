@@ -17,6 +17,9 @@ import {
   listBuildRecords,
   listUsers,
   setUserRole,
+  listTiers,
+  setTierLimit,
+  setUserTier,
 } from "../api/admin.js";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { relativeTime } from "../lib/format.js";
@@ -63,6 +66,7 @@ export default function Admin() {
   const { user, loading: authLoading, openLogin } = useAuth();
   const [overview, setOverview] = useState(null);
   const [users, setUsers] = useState([]);
+  const [tiers, setTiers] = useState([]);                  // 앱 개수 등급 [{name, max_apps, users}]
   const [nodes, setNodes] = useState(null);               // null=로딩
   const [error, setError] = useState(null);
   // "총 빌드" 카드 드릴다운 — 열 때 1회 fetch 후 캐시 (닫았다 열어도 재요청 X)
@@ -90,10 +94,11 @@ export default function Admin() {
   // 통계 + 유저 목록 — 마운트 시 1회 (수동 새로고침은 노드 영역 버튼).
   useEffect(() => {
     if (!isAdmin) return;
-    Promise.all([getOverview(), listUsers()])
-      .then(([ov, us]) => {
+    Promise.all([getOverview(), listUsers(), listTiers()])
+      .then(([ov, us, ts]) => {
         setOverview(ov);
         setUsers(us);
+        setTiers(ts);
         setError(null);
       })
       .catch((e) => setError(e.message || "조회 실패"));
@@ -156,6 +161,26 @@ export default function Admin() {
       );
     } catch (e) {
       setError(e.message || "등급 변경 실패");
+    }
+  };
+
+  const handleTierChange = async (target, tier) => {
+    try {
+      await setUserTier(target.id, tier);
+      setUsers((prev) => prev.map((u) => (u.id === target.id ? { ...u, tier } : u)));
+      setTiers(await listTiers());                         // 등급별 유저 수 갱신
+    } catch (e) {
+      setError(e.message || "앱 등급 변경 실패");
+    }
+  };
+
+  const handleLimitChange = async (name, maxApps) => {
+    try {
+      await setTierLimit(name, maxApps);
+      setTiers(await listTiers());
+      setError(null);
+    } catch (e) {
+      setError(e.message || "앱 수 변경 실패");
     }
   };
 
@@ -227,13 +252,17 @@ export default function Admin() {
         ))}
       </div>
 
+      {/* 앱 개수 등급 — 등급별로 만들 수 있는 앱 수. root만 고친다 */}
+      <SectionTitle title="앱 개수 등급" />
+      <TierTable tiers={tiers} me={user} onLimit={handleLimitChange} />
+
       {/* 가입자 테이블 */}
       <SectionTitle title="가입자" />
       <div className="kd-table-wrap" style={{ marginTop: 14 }}>
         <table className="w-full kd-t-body-s" style={{ borderCollapse: "collapse" }}>
           <thead>
             <tr className="kd-t-micro text-fg-3 text-left">
-              {["유저", "등급", "앱 / 테넌트", "도메인", "빌드", "마지막 빌드", "가입"].map(
+              {["유저", "등급", "앱 등급", "앱 / 테넌트", "도메인", "빌드", "마지막 빌드", "가입"].map(
                 (h) => (
                   <th
                     key={h}
@@ -256,11 +285,13 @@ export default function Admin() {
                 detail={tenantDetails[u.id]}
                 onToggle={() => toggleUser(u)}
                 onRoleChange={handleRoleChange}
+                tiers={tiers}
+                onTierChange={handleTierChange}
               />
             ))}
             {users.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center kd-t-caption text-fg-3">
+                <td colSpan={8} className="px-4 py-8 text-center kd-t-caption text-fg-3">
                   가입자가 없어요.
                 </td>
               </tr>
@@ -385,7 +416,7 @@ function BuildRecordsTable({ records }) {
 }
 
 // 가입자 row + 클릭 펼침 (테넌트 상세). 등급 select·앱 링크 클릭은 토글에 안 걸리게 차단.
-function UserRow({ u, me, expanded, detail, onToggle, onRoleChange }) {
+function UserRow({ u, me, expanded, detail, onToggle, onRoleChange, tiers, onTierChange }) {
   return (
     <>
       <tr
@@ -422,6 +453,9 @@ function UserRow({ u, me, expanded, detail, onToggle, onRoleChange }) {
         <td className="px-4" style={{ height: "var(--row-lg)" }} onClick={(e) => e.stopPropagation()}>
           <RoleCell user={u} me={me} onChange={onRoleChange} />
         </td>
+        <td className="px-4" style={{ height: "var(--row-lg)" }} onClick={(e) => e.stopPropagation()}>
+          <TierCell user={u} me={me} tiers={tiers} onChange={onTierChange} />
+        </td>
         <td className="px-4" style={{ height: "var(--row-lg)" }}>
           {u.app_name ? (
             <div className="min-w-0">
@@ -454,7 +488,7 @@ function UserRow({ u, me, expanded, detail, onToggle, onRoleChange }) {
       </tr>
       {expanded && (
         <tr style={{ borderBottom: "1px solid var(--kd-border)" }}>
-          <td colSpan={7} className="px-4 py-4" style={{ background: "var(--sel-soft)" }}>
+          <td colSpan={8} className="px-4 py-4" style={{ background: "var(--sel-soft)" }}>
             <TenantDetail detail={detail} />
           </td>
         </tr>
@@ -598,6 +632,103 @@ function RoleCell({ user: target, me, onChange }) {
       <option value="user">user</option>
       <option value="admin">admin</option>
     </select>
+  );
+}
+
+// 앱 등급 표시/변경 — 권한(RoleCell)과 같은 규칙: root만 select, 아니면 배지. 옆에 지금 앱 수/한도.
+function TierCell({ user: target, me, tiers, onChange }) {
+  const limit = tiers.find((t) => t.name === target.tier)?.max_apps;
+  const count = `${target.app_count ?? 0}/${limit == null ? "∞" : limit}`;
+  if (me.role !== "root") {
+    return (
+      <span className="inline-flex items-center gap-2">
+        <span className="kd-chip">{target.tier}</span>
+        <span className="kd-t-caption text-fg-3 tabular-nums">{count}</span>
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-2">
+      <select
+        value={target.tier}
+        onChange={(e) => onChange(target, e.target.value)}
+        className="kd-input"
+        style={{ width: 104, height: 30 }}
+      >
+        {tiers.map((t) => (
+          <option key={t.name} value={t.name}>
+            {t.name}
+          </option>
+        ))}
+      </select>
+      <span className="kd-t-caption text-fg-3 tabular-nums">{count}</span>
+    </span>
+  );
+}
+
+// 등급 표 — 이름 · 만들 수 있는 앱 수 · 그 등급 유저 수. root는 앱 수를 고친다(빈 칸 = 무제한).
+function TierTable({ tiers, me, onLimit }) {
+  if (tiers.length === 0) return <Hint>등급 정보를 불러오는 중…</Hint>;
+  return (
+    <div className="kd-table-wrap" style={{ marginTop: 14 }}>
+      <table className="w-full kd-t-body-s" style={{ borderCollapse: "collapse" }}>
+        <thead>
+          <tr className="kd-t-micro text-fg-3 text-left">
+            {["등급", "앱 수", "유저"].map((h) => (
+              <th
+                key={h}
+                className="px-4"
+                style={{ height: "var(--row-md)", borderBottom: "1px solid var(--kd-border)", fontWeight: 500 }}
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {tiers.map((t) => (
+            <tr key={t.name} style={{ borderBottom: "1px solid var(--kd-border)" }}>
+              <td className="px-4 kd-strong" style={{ height: "var(--row-md)", color: "var(--fg-1)" }}>
+                {t.name}
+              </td>
+              <td className="px-4">
+                <LimitInput tier={t} editable={me.role === "root"} onSave={onLimit} />
+              </td>
+              <td className="px-4 tabular-nums text-fg-3">{t.users}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// 앱 수 입력 — 포커스를 잃거나 Enter면 저장한다. 비우면 무제한(null).
+function LimitInput({ tier, editable, onSave }) {
+  const shown = tier.max_apps == null ? "" : String(tier.max_apps);
+  const [value, setValue] = useState(shown);
+  useEffect(() => setValue(shown), [shown]);
+  if (!editable) return <span className="tabular-nums">{tier.max_apps == null ? "무제한" : tier.max_apps}</span>;
+  const commit = () => {
+    if (value === shown) return;
+    const n = value.trim() === "" ? null : Number(value);
+    if (n !== null && (!Number.isInteger(n) || n < 1)) {
+      setValue(shown);                                    // 1 이상의 정수만 — 아니면 되돌린다
+      return;
+    }
+    onSave(tier.name, n);
+  };
+  return (
+    <input
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+      placeholder="무제한"
+      inputMode="numeric"
+      className="kd-input tabular-nums"
+      style={{ width: 96, height: 30 }}
+    />
   );
 }
 

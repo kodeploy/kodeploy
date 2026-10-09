@@ -26,6 +26,8 @@ class User(Base):
     # 빌드 시점에 이 installation의 access token(1h, repo-scoped)을 발급해 private repo를 clone한다.
     # None이면 App 미설치 → public repo만. 토큰이 이 installation에 스코프되므로 남의 private repo는 못 받음.
     github_installation_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # ⚠️ 앱 속성(app_name·site_enabled·custom_domain*·extra_hostnames·pipeline)은 apps 테이블로 옮겼다 (023부터 core는
+    # apps만 읽고 쓴다). 아래 칸들은 더는 읽지 않는 옛 값이라 정리 마이그레이션이 지우기 전까지 남아 있을 뿐이다.
     # 1유저=1앱 — 첫 배포 시 결정되어 fix. 서브도메인이라 unique. None이면 아직 배포 안 함.
     app_name: Mapped[str | None] = mapped_column(
         String(50), nullable=True, unique=True
@@ -46,6 +48,8 @@ class User(Base):
     # root는 코드에 하드코딩 안 함 — 운영자가 DB에서 직접 지정(재시작에도 안 덮어씀).
     # admin은 root가 /admin에서 부여.
     role: Mapped[str] = mapped_column(String(10), default="user")
+    # 앱 개수 등급 (tiers.name). role(권한)과 별개다 — 만들 수 있는 앱 수만 정한다.
+    tier: Mapped[str] = mapped_column(String(20), default="basic", server_default="basic")
     # 플랫폼 기능 밖의 추가 hostname (콤마 구분) — 운영자가 DB에서 직접 등록 (role과 동일 방침).
     # 예: apex 도메인(Dailo의 dailoapp.com — 커스텀 도메인 기능은 서브도메인 전용이라 거부).
     # HTTPRoute hostnames reconcile 시 기본 서브도메인·커스텀 도메인과 함께 통째로 주입되므로

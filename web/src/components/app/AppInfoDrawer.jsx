@@ -43,7 +43,7 @@ export default function AppInfoDrawer({ ctx, onClose }) {
     };
   }, [onClose]);
 
-  const { user, builds = [], serverBuild, slotStatus, appHost } = ctx || {};
+  const { user, app, base, builds = [], serverBuild, slotStatus, appHost } = ctx || {};
 
   // 배포 번호(#N) — env_change는 번호를 안 매긴다(개요·위젯과 같은 규칙).
   const numbered = new Map();
@@ -105,7 +105,7 @@ export default function AppInfoDrawer({ ctx, onClose }) {
 
           {/* ── 신원: 앱 이름 + 지금 상태, 그 아래 주소 ── */}
           <div className="flex items-center" style={{ marginTop: 20, gap: 16 }}>
-            <span className="kd-t-subtitle text-fg-1 truncate">{user?.app_name || "—"}</span>
+            <span className="kd-t-subtitle text-fg-1 truncate">{app?.name || "—"}</span>
             <PodStatus status={podStatus} />
           </div>
 
@@ -190,11 +190,11 @@ export default function AppInfoDrawer({ ctx, onClose }) {
             className="flex items-center"
             style={{ paddingBlock: 20, gap: 24, borderTop: "1px solid var(--kd-border)" }}
           >
-            <FooterLink to="/dashboard/history" onClose={onClose}>
+            <FooterLink to={`${base}/history`} onClose={onClose}>
               배포 이력 보기
             </FooterLink>
             <span style={{ width: 1, height: 23, background: "var(--kd-border)" }} />
-            <FooterLink to="/dashboard/settings" onClose={onClose}>
+            <FooterLink to={`${base}/settings`} onClose={onClose}>
               설정 열기
             </FooterLink>
           </div>

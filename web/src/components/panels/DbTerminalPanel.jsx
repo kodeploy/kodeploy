@@ -6,8 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { TERM_FONT_FAMILY, xtermTheme } from "../../lib/xtermTheme.js";
 import { useTheme } from "../../contexts/ThemeContext.jsx";
 
-const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
-const WS_URL = API_BASE.replace(/^http/, "ws") + "/deploy/app/db-terminal";
+import { wsPath } from "../../api/deploy.js";
 
 // bare=true면 자체 헤더를 숨김 — DbConsolePanel의 [표|터미널] 토글 안에 끼울 때 헤더 중복 방지.
 export default function DbTerminalPanel({ bare = false }) {
@@ -39,7 +38,7 @@ export default function DbTerminalPanel({ bare = false }) {
       if (!disposed) fitAddon.fit();
     });
 
-    const ws = new WebSocket(WS_URL);
+    const ws = new WebSocket(wsPath("/deploy/app/db-terminal"));
 
     // 현재 xterm 크기를 백엔드로 보내 파드 pty 크기를 맞춤 → mysql 등이 실제 폭으로 출력 정렬
     const sendResize = () => {

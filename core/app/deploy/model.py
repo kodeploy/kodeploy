@@ -57,6 +57,10 @@ class Build(Base):
     # 빌더 콜백에서 마지막으로 처리한 seq. v1 빌드는 None, v2 빌드는 만들 때 0 (v2 표시 겸용).
     last_event_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
+    # 이 빌드가 돈 K8s ns (apps.namespace의 사본). NULL인 옛 행은 tenant-<user hex8>이다 (tenant_id 참고).
+    namespace: Mapped[str | None] = mapped_column(String(63), nullable=True)
+    # 이 빌드가 속한 앱 (apps.id). 1단계에서 칸만 추가했고 아직 쓰지 않는다 — NULL이면 백필 전·삭제된 앱의 기록.
+    app_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
     # timezone-aware UTC 저장 — Pydantic이 응답 시 timezone offset 포함 ISO 출력 (B 컨벤션)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
@@ -67,10 +71,12 @@ class Build(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
 
-    # tenant_id: user_id에서 파생되는 ns 이름. None이면 default ns로 fallback.
-    # 컬럼이 아닌 property — user_id 진실원, 파생값 중복 저장 X.
+    # tenant_id: 이 빌드가 도는 ns 이름. 저장된 namespace가 있으면 그것, 없는 옛 행은 user_id에서 파생,
+    # user_id도 None이면 default ns로 fallback.
     @property
     def tenant_id(self) -> str:
+        if self.namespace:
+            return self.namespace
         if self.user_id is None:
             return config.DEFAULT_TENANT_NS
         return f"tenant-{self.user_id.hex[:8]}"
@@ -91,6 +97,7 @@ class BuildRecord(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     build_id: Mapped[str] = mapped_column(String(8))     # builds row와 느슨한 연결 (FK 아님 — builds는 삭제될 수 있음)
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
+    app_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)  # 앱 삭제 뒤에도 남는 기록이라 삭제된 앱이면 NULL
     seq: Mapped[int] = mapped_column(Integer)            # 그 유저의 N번째 빌드 (1부터, 이 테이블 카운트 기준 — 앱 삭제에도 이어짐)
     app_name: Mapped[str] = mapped_column(String(50))
     runtime: Mapped[str] = mapped_column(String(20))
@@ -168,6 +175,7 @@ class SavedQuery(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     user_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    app_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True, index=True)
     app_name: Mapped[str] = mapped_column(String(50))
     db_type: Mapped[str] = mapped_column(String(20))      # "mysql" | "postgres" ("none"은 저장 불가)
     name: Mapped[str] = mapped_column(String(100))

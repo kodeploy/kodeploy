@@ -16,15 +16,17 @@ from app.auth.model import User
 from app.builder import client as builder
 from app.deploy.build import pipeline, v2
 from app.deploy.model import Build
-from tests.test_start_deploy import make_user, run_deploy, spawned, spawned_fns  # noqa: F401  (fixture)
+from app.apps.model import App
+from tests.test_start_deploy import APPS, fake_apps, make_user, run_deploy, spawned, spawned_fns  # noqa: F401  (fixture)
 
 UID = uuid.UUID("d6d8b759-8552-4d6f-9a90-00665e7ca0da")
 
 
+APP_ID = uuid.UUID("11111111-2222-4333-8444-555555555555")
+
+
 def v2_user(**kw):
-    u = make_user(user_id=UID, **kw)
-    u.pipeline = "v2"
-    return u
+    return make_user(user_id=UID, pipeline="v2", **kw)
 
 
 @pytest.fixture
@@ -78,11 +80,11 @@ def test_v2_explicit_dockerfile_mode_skips_detect(spawned, github):  # noqa: F81
 def test_v2_rejects_before_any_change(spawned, github, kwargs, setup, reason):  # noqa: F811
     if setup:
         setup(github)
-    user = v2_user(app_name=None)
+    user = v2_user()
     db = MagicMock()
     with pytest.raises(ValueError, match=reason):
         run_deploy(db, user, **kwargs)
-    assert spawned == [] and user.app_name is None and not db.commit.called
+    assert spawned == [] and APPS[user.id].site_enabled is False and not db.commit.called
 
 
 def test_v2_without_builder_secret(spawned, github, monkeypatch):  # noqa: F811
@@ -110,7 +112,7 @@ def make_build(**kw):
     b = Build(build_id="3f9a2c1d", repo_url="https://github.com/u/repo.git", branch="main",
               image=f"ghcr.io/yuntyu01/{UID.hex[:8]}/demo:3f9a2c1d", app_name="demo", port=8080,
               runtime="java", db_type="mysql", use_redis=False, volume_mount_path="",
-              build_mode="dockerfile", dockerfile_path="docker/Dockerfile", user_id=UID, last_event_seq=0)
+              build_mode="dockerfile", dockerfile_path="docker/Dockerfile", user_id=UID, app_id=APP_ID, last_event_seq=0)
     for k, v in kw.items():
         setattr(b, k, v)
     return b
@@ -158,8 +160,10 @@ def runner(monkeypatch):
                              finished_at=None, total_seconds=None)
     steps = []
     db = MagicMock()
-    db.query.return_value.filter_by.return_value.first.return_value = User(id=UID, app_name="demo", site_enabled=False)
+    db.query.return_value.filter_by.return_value.first.return_value = User(id=UID)
     monkeypatch.setattr(v2, "SessionLocal", lambda: db)
+    monkeypatch.setattr(v2.apps_service, "get_app", lambda d, app_id: App(
+        id=app_id, owner_id=UID, name="demo", namespace=f"tenant-{UID.hex[:8]}", site_enabled=False, pipeline="v2"))
     monkeypatch.setattr(v2.crud, "get_build", lambda d, bid: build)
     monkeypatch.setattr(v2, "_new_record", lambda d, b: record)
     for name in ("_ensure_tenant_ns", "ensure_dep_secrets", "_apply_storage", "_apply_volume"):
@@ -264,7 +268,7 @@ def test_ensure_dep_secrets_creates_only_secrets(monkeypatch):
 
 # --- 앱 삭제: 빌더에 맡기고 deleted를 기다린다 ---
 
-def _delete_flow(monkeypatch, events, *, app_name="demo"):
+def _delete_flow(monkeypatch, events):
     """request_delete를 돌린다. submit이 받아지면 events를 (build_id마다) 콜백처럼 흘려보낸다."""
     sent = []
 
@@ -275,53 +279,53 @@ def _delete_flow(monkeypatch, events, *, app_name="demo"):
 
     monkeypatch.setattr(v2.builder, "submit", submit)
     user = v2_user()
-    user.app_name = app_name
-    return user, sent
+    return user, APPS[user.id], sent
 
 
 def test_delete_payload_is_namespace_only():
-    p = v2.delete_payload(v2_user(), "aabbccdd")
+    user = v2_user()
+    p = v2.delete_payload(user, APPS[user.id], "aabbccdd")
     assert p == {"build_id": "aabbccdd", "actor": "d6d8b759", "namespace": "tenant-d6d8b759", "kind": "delete"}
 
 
-def test_request_delete_returns_when_builder_reports_deleted(monkeypatch):
-    user, sent = _delete_flow(monkeypatch, [{"seq": 1, "type": "deleted"}])
-    asyncio.run(v2.request_delete(user))
+def test_delete_payload_uses_app_namespace():
+    user = v2_user()
+    app = APPS[user.id]
+    app.namespace = "app-9abcdef0"
+    assert v2.delete_payload(user, app, "aabbccdd")["namespace"] == "app-9abcdef0"
+
+
+def test_request_delete_returns_when_builder_reports_deleted(monkeypatch, fake_apps):  # noqa: F811
+    user, app, sent = _delete_flow(monkeypatch, [{"seq": 1, "type": "deleted"}])
+    asyncio.run(v2.request_delete(user, app))
     assert len(sent) == 1 and sent[0]["kind"] == "delete"
     assert v2._deleting == {}
 
 
-def test_request_delete_fails_when_builder_reports_failed(monkeypatch):
-    user, _ = _delete_flow(monkeypatch, [{"seq": 1, "type": "failed", "stage": "timeout", "reason": "still exists"}])
+def test_request_delete_fails_when_builder_reports_failed(monkeypatch, fake_apps):  # noqa: F811
+    user, app, _ = _delete_flow(monkeypatch, [{"seq": 1, "type": "failed", "stage": "timeout", "reason": "still exists"}])
     with pytest.raises(ValueError, match="timeout: still exists"):
-        asyncio.run(v2.request_delete(user))
+        asyncio.run(v2.request_delete(user, app))
     assert v2._deleting == {}
 
 
-def test_request_delete_times_out(monkeypatch):
-    user, _ = _delete_flow(monkeypatch, [])
+def test_request_delete_times_out(monkeypatch, fake_apps):  # noqa: F811
+    user, app, _ = _delete_flow(monkeypatch, [])
     monkeypatch.setattr(v2, "DELETE_TIMEOUT", 0.01)
     with pytest.raises(ValueError, match="다시 시도"):
-        asyncio.run(v2.request_delete(user))
+        asyncio.run(v2.request_delete(user, app))
     assert v2._deleting == {}
 
 
-def test_request_delete_rejected_by_builder(monkeypatch):
-    user, _ = _delete_flow(monkeypatch, [])
+def test_request_delete_rejected_by_builder(monkeypatch, fake_apps):  # noqa: F811
+    user, app, _ = _delete_flow(monkeypatch, [])
 
     async def refuse(payload):
         raise builder.BuilderError("signature")
 
     monkeypatch.setattr(v2.builder, "submit", refuse)
     with pytest.raises(ValueError, match="받지 않았습니다"):
-        asyncio.run(v2.request_delete(user))
-
-
-def test_request_delete_without_app(monkeypatch):
-    user, sent = _delete_flow(monkeypatch, [], app_name=None)
-    with pytest.raises(ValueError, match="삭제할 앱이 없습니다"):
-        asyncio.run(v2.request_delete(user))
-    assert sent == []
+        asyncio.run(v2.request_delete(user, app))
 
 
 def test_other_build_events_are_not_delete_events():

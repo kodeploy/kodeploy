@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 from app import config
+from app.apps.model import App
 from app.auth.deps import get_current_user_optional
 from app.auth.model import User
 from app.deploy import router as deploy_router
@@ -23,8 +24,26 @@ from app.deploy.build import pipeline
 from app.shared.db import get_db
 
 
-def make_user(app_name="foo"):
-    return User(id=uuid.uuid4(), app_name=app_name, site_enabled=False)
+APPS: dict[uuid.UUID, App] = {}   # 유저 id → 앱. fake_apps가 router의 앱 조회를 이걸로 대신한다
+
+
+def make_user(app_name="foo", pipeline="v1"):
+    """유저와 (app_name이 있으면) 그 유저의 앱. 앱은 APPS[user.id]."""
+    user = User(id=uuid.uuid4())
+    if app_name:
+        APPS[user.id] = App(
+            id=uuid.uuid4(), owner_id=user.id, name=app_name, namespace=f"tenant-{user.id.hex[:8]}",
+            site_enabled=False, pipeline=pipeline,
+        )
+    return user
+
+
+@pytest.fixture(autouse=True)
+def fake_apps(monkeypatch):
+    APPS.clear()
+    monkeypatch.setattr(deploy_router.apps_service, "get_user_app", lambda db, owner_id: APPS.get(owner_id))
+    yield
+    APPS.clear()
 
 
 def make_client(user=None):
@@ -72,7 +91,7 @@ def test_reserved_keys_route_not_captured_by_build_id():
 
 
 def test_commits_route_not_captured_by_build_id(monkeypatch):
-    monkeypatch.setattr(status, "list_builds", lambda db, user_id=None: [])
+    monkeypatch.setattr(status, "list_builds", lambda db, app_id=None: [])
     client = make_client(user=make_user())
     res = client.get("/deploy/commits")
     assert res.status_code == 200
@@ -81,7 +100,7 @@ def test_commits_route_not_captured_by_build_id(monkeypatch):
 
 def test_unknown_build_id_is_404(monkeypatch):
     # 정적 경로가 아닌 진짜 build_id 세그먼트는 get_state로 — 없으면 404 마스킹
-    monkeypatch.setattr(status, "get_state", lambda db, bid, user_id=None: None)
+    monkeypatch.setattr(status, "get_state", lambda db, bid, app_id=None: None)
     client = make_client(user=make_user())
     assert client.get("/deploy/zzzzzzzz").status_code == 404
 
@@ -167,8 +186,7 @@ def test_v2_app_changes_are_501(monkeypatch, method, path, body, target):
     monkeypatch.setattr(deploy_router.env, "set_env", lambda *a: called.append("set_env"))
     monkeypatch.setattr(deploy_router.hostnames, "set_custom_domain", lambda *a: called.append("set_custom_domain"))
     monkeypatch.setattr(deploy_router.hostnames, "clear_custom_domain", lambda *a: called.append("clear_custom_domain"))
-    user = make_user()
-    user.pipeline = "v2"
+    user = make_user(pipeline="v2")
     client = make_client(user)
     r = getattr(client, method)(path, json=body) if body else getattr(client, method)(path)
     assert r.status_code == 501 and "새 경로(v2)" in r.json()["detail"]
@@ -178,34 +196,31 @@ def test_v2_app_changes_are_501(monkeypatch, method, path, body, target):
 def test_v1_app_delete_still_works(monkeypatch):
     called = []
     monkeypatch.setattr(status, "delete_app", lambda *a: called.append("delete_app"))
-    user = make_user()
-    user.pipeline = "v1"
+    user = make_user(pipeline="v1")
     assert make_client(user).delete("/deploy/app").status_code == 200 and called == ["delete_app"]
 
 
 def test_v2_app_delete_waits_for_builder_then_deletes(monkeypatch):
     order = []
 
-    async def request_delete(user):
+    async def request_delete(user, app):
         order.append("builder")
 
     monkeypatch.setattr(deploy_router.v2, "request_delete", request_delete)
     monkeypatch.setattr(status, "delete_app", lambda *a: order.append("delete_app"))
-    user = make_user()
-    user.pipeline = "v2"
+    user = make_user(pipeline="v2")
     assert make_client(user).delete("/deploy/app").status_code == 200
     assert order == ["builder", "delete_app"]          # Application이 사라진 뒤에야 ns를 지운다
 
 
 def test_v2_app_delete_keeps_app_when_builder_fails(monkeypatch):
-    async def request_delete(user):
+    async def request_delete(user, app):
         raise ValueError("삭제하지 못했습니다 (timeout: still exists)")
 
     called = []
     monkeypatch.setattr(deploy_router.v2, "request_delete", request_delete)
     monkeypatch.setattr(status, "delete_app", lambda *a: called.append("delete_app"))
-    user = make_user()
-    user.pipeline = "v2"
+    user = make_user(pipeline="v2")
     r = make_client(user).delete("/deploy/app")
     assert r.status_code == 400 and "삭제하지 못했습니다" in r.json()["detail"]
     assert called == []

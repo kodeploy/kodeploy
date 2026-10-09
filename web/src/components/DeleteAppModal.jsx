@@ -1,10 +1,14 @@
 import { useEffect, useState } from "react";
 import { X } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { deleteApp } from "../api/deploy.js";
 import { useAuth } from "../contexts/AuthContext.jsx";
 
-export default function DeleteAppModal({ appName, onClose }) {
+// app: { id, name } — 지우는 앱. 끝나면 대시보드 목록으로 간다 (그 앱의 화면은 이제 없다).
+export default function DeleteAppModal({ app, onClose }) {
   const { refresh } = useAuth();
+  const navigate = useNavigate();
+  const appName = app.name;
   const [typed, setTyped] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -26,9 +30,10 @@ export default function DeleteAppModal({ appName, onClose }) {
     setSubmitting(true);
     setError(null);
     try {
-      await deleteApp();
-      await refresh();
+      await deleteApp(app.id);
+      await refresh();                           // 앱 수(등급 한도) 갱신
       onClose();
+      navigate("/apps", { replace: true });
     } catch (err) {
       setError(err.message || "삭제 실패");
       setSubmitting(false);

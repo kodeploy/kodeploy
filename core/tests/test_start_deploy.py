@@ -12,17 +12,42 @@ from unittest.mock import MagicMock
 import pytest
 
 from app import config
+from app.apps import service as apps_service
+from app.apps.model import App
 from app.auth.model import User
 from app.deploy.build import pipeline
 
+APPS: dict[uuid.UUID, App] = {}   # 유저 id → 앱. 아래 가짜 apps 서비스(fake_apps)가 읽고 쓴다
 
-def make_user(app_name="foo", user_id=None):
+
+def make_user(app_name="foo", user_id=None, pipeline="v1"):
+    """유저와 (app_name이 있으면) 그 유저의 앱. 앱은 APPS[user.id]로 꺼낸다."""
     # SQLAlchemy 컬럼 default는 INSERT 시점 적용이라 인스턴스 생성 시 명시 세팅 필수
-    return User(
-        id=user_id or uuid.uuid4(),
-        app_name=app_name,
-        site_enabled=False,
-    )
+    user = User(id=user_id or uuid.uuid4())
+    if app_name:
+        APPS[user.id] = App(
+            id=uuid.uuid4(), owner_id=user.id, name=app_name, namespace=f"tenant-{user.id.hex[:8]}",
+            site_enabled=False, pipeline=pipeline,
+        )
+    return user
+
+
+@pytest.fixture
+def fake_apps(monkeypatch):
+    """DB 없이 앱 조회·생성 — start_deploy는 MagicMock 세션으로 도니 apps 서비스를 갈아끼운다."""
+    APPS.clear()
+    monkeypatch.setattr(apps_service, "get_user_app", lambda db, owner_id: APPS.get(owner_id))
+
+    def create_app(db, owner_id, name):
+        APPS[owner_id] = App(
+            id=uuid.uuid4(), owner_id=owner_id, name=name, namespace=f"tenant-{owner_id.hex[:8]}",
+            site_enabled=False, pipeline="v1",
+        )
+        return APPS[owner_id]
+
+    monkeypatch.setattr(apps_service, "create_app", create_app)
+    yield APPS
+    APPS.clear()
 
 
 def run_deploy(db, user, **kwargs):
@@ -32,7 +57,7 @@ def run_deploy(db, user, **kwargs):
 
 
 @pytest.fixture
-def spawned(monkeypatch):
+def spawned(monkeypatch, fake_apps):
     """spawn_background 호출을 (함수, 인자들)로 기록 — 실제 스레드/빌드는 안 뜸."""
     calls = []
     monkeypatch.setattr(
@@ -117,7 +142,7 @@ def test_server_only_spawns_build_and_static_teardown(spawned):
 
     assert [b.runtime for b in builds] == ["python"]
     assert spawned_fns(spawned) == [pipeline._run_build, pipeline._teardown_static]
-    assert user.site_enabled is False  # 슬롯 선언 저장 (라우팅 진실원)
+    assert APPS[user.id].site_enabled is False  # 슬롯 선언 저장 (라우팅 진실원)
 
 
 def test_static_only_spawns_server_teardown_and_build(spawned):
@@ -126,7 +151,7 @@ def test_static_only_spawns_server_teardown_and_build(spawned):
 
     assert [b.runtime for b in builds] == ["static"]
     assert spawned_fns(spawned) == [pipeline._teardown_server, pipeline._run_build]
-    assert user.site_enabled is True
+    assert APPS[user.id].site_enabled is True
 
 
 def test_both_slots_spawn_two_builds(spawned):
@@ -151,6 +176,25 @@ def test_server_build_fields(spawned):
     assert b.image.startswith(
         f"ghcr.io/{config.GHCR_USER}/{user.id.hex[:8]}/foo:"
     )
+
+
+def test_builds_carry_app_id_and_namespace(spawned):
+    user = make_user()
+    app = APPS[user.id]
+    app.namespace = "app-9abcdef0"             # 두 번째 앱 이후의 ns 규칙
+    builds = run_deploy(MagicMock(), user, use_static=True)
+    assert [(b.app_id, b.namespace) for b in builds] == [(app.id, "app-9abcdef0")] * 2
+    assert all(b.tenant_id == "app-9abcdef0" for b in builds)
+    # 이미지 경로의 hex8은 ns 기준 — 빌더 검증이 ns의 hex8과 맞춘다
+    assert builds[0].image.startswith(f"ghcr.io/{config.GHCR_USER}/9abcdef0/foo:")
+
+
+def test_deploy_to_given_app_ignores_users_first_app(spawned):
+    user = make_user(app_name="first")
+    second = App(id=uuid.uuid4(), owner_id=user.id, name="second", namespace="app-9abcdef0", site_enabled=False, pipeline="v1")
+    builds = run_deploy(MagicMock(), user, name="ignored", app=second)
+    assert [(b.app_name, b.app_id, b.namespace) for b in builds] == [("second", second.id, "app-9abcdef0")]
+    assert second.site_enabled is False and APPS[user.id].name == "first"     # 첫 앱은 건드리지 않는다
 
 
 def test_static_build_falls_back_to_server_repo_and_branch(spawned):
@@ -191,7 +235,7 @@ def test_object_storage_sets_use_storage(spawned, monkeypatch):
     assert b.volume_mount_path == ""
 
 
-# --- 앱 이름 고정 (1유저=1앱) ---
+# --- 앱 이름 고정 (유저당 앱 하나인 동안) ---
 
 def _db_with_no_name_conflict():
     db = MagicMock()
@@ -202,7 +246,7 @@ def _db_with_no_name_conflict():
 def test_first_deploy_fixes_app_name(spawned):
     user = make_user(app_name=None)
     builds = run_deploy(_db_with_no_name_conflict(), user, name="myapp")
-    assert user.app_name == "myapp"
+    assert APPS[user.id].name == "myapp"
     assert builds[0].app_name == "myapp"
 
 
@@ -216,5 +260,5 @@ def test_first_deploy_rejects_taken_name(spawned):
 def test_app_name_immutable_after_first_deploy(spawned):
     user = make_user(app_name="fixed")
     builds = run_deploy(MagicMock(), user, name="other")
-    assert user.app_name == "fixed"            # 이름 변경 무시 — 첫 배포에 고정
+    assert APPS[user.id].name == "fixed"       # 이름 변경 무시 — 첫 배포에 고정
     assert builds[0].app_name == "fixed"

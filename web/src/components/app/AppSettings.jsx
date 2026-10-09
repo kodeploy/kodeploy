@@ -67,7 +67,7 @@ const LABEL_W = 114;
 const INPUT_W = 518;
 
 export default function AppSettings() {
-  const { user, serverBuild, appHost } = useOutletContext();
+  const { user, app, base, serverBuild, appHost } = useOutletContext();
   const [params, setParams] = useSearchParams();
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -146,7 +146,7 @@ export default function AppSettings() {
 
       {/* 앱 삭제는 반드시 확인 단계를 거친다 — 앱 이름을 타이핑해야 버튼이 열린다 */}
       {deleteOpen && (
-        <DeleteAppModal appName={user.app_name} onClose={() => setDeleteOpen(false)} />
+        <DeleteAppModal app={app} onClose={() => setDeleteOpen(false)} />
       )}
     </div>
   );
@@ -486,7 +486,7 @@ function GeneralSection({ build }) {
         실행 설정은 이 화면에서 바꿀 수 없어요. 값을 바꾸려면 같은 저장소로 다시 배포하세요.
       </p>
       <Link
-        to="/deploy"
+        to={`${base}/deploy`}
         className="kd-btn-secondary kd-btn-sm inline-flex items-center no-underline"
         style={{ marginTop: 12 }}
       >

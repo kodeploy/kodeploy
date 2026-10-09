@@ -1,5 +1,6 @@
 """deploy 도메인 입출력 스키마."""
 
+import uuid
 from datetime import datetime
 from typing import Literal
 
@@ -57,6 +58,7 @@ class DeployBuildRef(BaseModel):
 
 
 class DeployResponse(BaseModel):
+    app_id: uuid.UUID | None = None                      # 배포가 속한 앱 — 첫 배포에서 생긴 앱의 화면으로 가는 데 쓴다
     app_name: str
     builds: list[DeployBuildRef]
 

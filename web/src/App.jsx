@@ -2,6 +2,8 @@ import { useState } from "react";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Admin from "./components/Admin.jsx";
 import AppLayout from "./components/app/AppLayout.jsx";
+import AppScope from "./components/app/AppScope.jsx";
+import LegacyDashboard from "./components/app/LegacyDashboard.jsx";
 import AppOverview from "./components/app/AppOverview.jsx";
 import AppWorkspace from "./components/app/AppWorkspace.jsx";
 import AppHistory from "./components/app/AppHistory.jsx";
@@ -78,25 +80,34 @@ export default function App() {
               <Route path="/" element={<Home />} />
               <Route path="/deploy" element={<FormView />} />
               <Route path="/deploy/frontend" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><FrontendDeploy /></div>} />
-              <Route path="/deploy/progress" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><DeployProgress /></div>} />
+              {/* 진행 화면은 앱 안(/apps/:id/deploy/progress)에서만 뜬다 — 옛 주소는 목록으로 */}
+              <Route path="/deploy/progress" element={<Navigate to="/apps" replace />} />
               <Route path="/apps" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><AppsList /></div>} />
               <Route path="/how" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><HowTo /></div>} />
               <Route path="/blog" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><Blog /></div>} />
               {/* 앱 상세 — 셸(탭바)이 데이터를 폴링하고 탭 화면은 Outlet context로 받는다 */}
-              <Route path="/dashboard" element={<AppLayout />}>
-                <Route index element={<AppOverview />} />
-                <Route path="workspace" element={<AppWorkspace />} />
-                <Route path="history" element={<AppHistory />} />
-                <Route path="env" element={<AppEnv />} />
-                <Route path="settings" element={<AppSettings />} />
-                {/* 읽는 화면도 앱 셸 안에서 그대로 본다 — 사이드바에서 눌러도 작업 화면을
-                    벗어나지 않는다(같은 컴포넌트, 감싸는 셸만 다르다).
-                    이용 방법은 첫 배포 전 안내라 셸 안에 두지 않는다(/how 단독으로만). */}
-                <Route path="guide" element={<DocPane><Guide /></DocPane>} />
-                <Route path="guide/:section" element={<DocPane><Guide /></DocPane>} />
-                <Route path="blog" element={<DocPane><Blog /></DocPane>} />
-                <Route path="community" element={<DocPane><Community /></DocPane>} />
+              <Route path="/apps/:appId" element={<AppScope />}>
+                {/* 배포 흐름 — 이 앱의 재배포 · 프론트엔드 · 진행 (사이드바 셸 밖) */}
+                <Route path="deploy" element={<FormView />} />
+                <Route path="deploy/frontend" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><FrontendDeploy /></div>} />
+                <Route path="deploy/progress" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><DeployProgress /></div>} />
+                <Route element={<AppLayout />}>
+                  <Route index element={<AppOverview />} />
+                  <Route path="workspace" element={<AppWorkspace />} />
+                  <Route path="history" element={<AppHistory />} />
+                  <Route path="env" element={<AppEnv />} />
+                  <Route path="settings" element={<AppSettings />} />
+                  {/* 읽는 화면도 앱 셸 안에서 그대로 본다 — 사이드바에서 눌러도 작업 화면을
+                      벗어나지 않는다(같은 컴포넌트, 감싸는 셸만 다르다).
+                      이용 방법은 첫 배포 전 안내라 셸 안에 두지 않는다(/how 단독으로만). */}
+                  <Route path="guide" element={<DocPane><Guide /></DocPane>} />
+                  <Route path="guide/:section" element={<DocPane><Guide /></DocPane>} />
+                  <Route path="blog" element={<DocPane><Blog /></DocPane>} />
+                  <Route path="community" element={<DocPane><Community /></DocPane>} />
+                </Route>
               </Route>
+              {/* 옛 주소(/dashboard/…)는 첫 앱의 같은 화면으로 — 북마크 호환 */}
+              <Route path="/dashboard/*" element={<LegacyDashboard />} />
               <Route path="/admin" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><Admin /></div>} />
               <Route path="/community" element={<div className="flex-1 overflow-auto scroll-thin" data-kd-scroll="page"><Community /></div>} />
               <Route path="/guide" element={<GuideView />} />

@@ -96,11 +96,18 @@ for (const sc of scenarios) {
   await page.route(`${API}/**`, async (route) => {
     const req = route.request();
     const url = new URL(req.url());
-    const p = url.pathname;
+    // /apps/<id>/deploy/... 는 옛 /deploy/... 와 같은 스텁으로 응답한다 (앱 id만 다르다)
+    const p = url.pathname.replace(/^\/apps\/[^/]+(?=\/deploy)/, "");
+    const appPath = url.pathname;
     if (req.method() !== "GET") {
       let body = null;
       try { body = req.postDataJSON(); } catch {}
-      writes.push({ method: req.method(), path: p, body });
+      writes.push({ method: req.method(), path: appPath, body });
+      // 새 앱 만들기 — 만들어진 앱을 돌려준다 (이어서 그 앱의 /apps/<id>/deploy 로 배포가 간다)
+      if (req.method() === "POST" && p === "/apps")
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+          id: "dddddddd-4444-4444-8444-dddddddddddd", name: body?.name || "new-app", site_enabled: false,
+          custom_domain: null, created_at: "2026-10-11T00:00:00+00:00", role: "owner" }) });
       const hit = ROUTES.find(([pre]) => p.startsWith(pre));
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(hit ? hit[1]() : {}) });
     }

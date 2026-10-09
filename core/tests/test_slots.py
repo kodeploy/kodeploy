@@ -7,16 +7,16 @@ tenant_id 파생은 P1(신원 경계)의 공식 — 다른 곳에서 절대 다�
 import uuid
 
 from app import config
-from app.auth.model import User
+from app.apps.model import App
 from app.deploy.build import pipeline
 from app.deploy.routing import hostnames
 from app.deploy.model import Build
 
 
-def make_user(app_name="foo", site_enabled=False, custom_domain=None, extra_hostnames=None):
+def make_app(name="foo", site_enabled=False, custom_domain=None, extra_hostnames=None):
     # SQLAlchemy 컬럼 default는 INSERT 시점 적용이라 인스턴스 생성 시 명시 세팅 필수
-    return User(
-        app_name=app_name,
+    return App(
+        name=name,
         site_enabled=site_enabled,
         custom_domain=custom_domain,
         extra_hostnames=extra_hostnames,
@@ -26,20 +26,20 @@ def make_user(app_name="foo", site_enabled=False, custom_domain=None, extra_host
 # --- _slot_hostnames — (서버 호스트들, 정적 호스트들) ---
 
 def test_server_only_gets_both_hosts():
-    server, site = hostnames._slot_hostnames(make_user(site_enabled=False))
+    server, site = hostnames._slot_hostnames(make_app(site_enabled=False))
     assert server == ["foo.kodeploy.com", "foo-api.kodeploy.com"]
     assert site == []
 
 
 def test_static_enabled_splits_hosts():
-    server, site = hostnames._slot_hostnames(make_user(site_enabled=True))
+    server, site = hostnames._slot_hostnames(make_app(site_enabled=True))
     assert server == ["foo-api.kodeploy.com"]   # -api는 정적 유무와 무관하게 항상 서버
     assert site == ["foo.kodeploy.com"]
 
 
 def test_custom_domain_goes_to_server_when_no_static():
     server, site = hostnames._slot_hostnames(
-        make_user(site_enabled=False, custom_domain="x.example.com")
+        make_app(site_enabled=False, custom_domain="x.example.com")
     )
     assert server == ["foo.kodeploy.com", "foo-api.kodeploy.com", "x.example.com"]
     assert site == []
@@ -47,7 +47,7 @@ def test_custom_domain_goes_to_server_when_no_static():
 
 def test_custom_domain_goes_to_static_when_enabled():
     server, site = hostnames._slot_hostnames(
-        make_user(site_enabled=True, custom_domain="x.example.com")
+        make_app(site_enabled=True, custom_domain="x.example.com")
     )
     assert server == ["foo-api.kodeploy.com"]
     assert site == ["foo.kodeploy.com", "x.example.com"]
@@ -55,7 +55,7 @@ def test_custom_domain_goes_to_static_when_enabled():
 
 def test_extra_hostnames_ordering_before_custom_domain():
     server, _ = hostnames._slot_hostnames(
-        make_user(custom_domain="x.example.com", extra_hostnames="a.com,b.com")
+        make_app(custom_domain="x.example.com", extra_hostnames="a.com,b.com")
     )
     assert server == [
         "foo.kodeploy.com", "foo-api.kodeploy.com", "a.com", "b.com", "x.example.com",
@@ -65,17 +65,22 @@ def test_extra_hostnames_ordering_before_custom_domain():
 # --- _extra_hostnames — 콤마 구분 텍스트 파싱 (운영자 DB 직접 등록 값) ---
 
 def test_extra_hostnames_none_is_empty():
-    assert hostnames._extra_hostnames(make_user(extra_hostnames=None)) == []
+    assert hostnames._extra_hostnames(make_app(extra_hostnames=None)) == []
 
 
 def test_extra_hostnames_strips_lowers_drops_empty():
-    u = make_user(extra_hostnames=" A.com , ,b.COM ")
+    u = make_app(extra_hostnames=" A.com , ,b.COM ")
     assert hostnames._extra_hostnames(u) == ["a.com", "b.com"]
 
 
 # --- Build.tenant_id / user_id_str — P1 파생 공식 ---
 
-def test_tenant_id_derived_from_user_id():
+def test_tenant_id_uses_stored_namespace():
+    uid = uuid.UUID("12345678-0000-0000-0000-000000000000")
+    assert Build(user_id=uid, namespace="app-9abcdef0").tenant_id == "app-9abcdef0"
+
+
+def test_tenant_id_derived_from_user_id_for_old_rows():
     uid = uuid.UUID("12345678-0000-0000-0000-000000000000")
     assert Build(user_id=uid).tenant_id == "tenant-12345678"
 

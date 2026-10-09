@@ -67,6 +67,7 @@ import {
   readStorageObject,
   runDbQuery,
   updateSavedQuery,
+  wsPath as scopedWs,
 } from "../../api/deploy.js";
 import { parseDate } from "../../lib/format.js";
 import {
@@ -83,9 +84,7 @@ import { useTheme } from "../../contexts/ThemeContext.jsx";
 import StatusBadge from "../StatusBadge.jsx";
 import DbTerminalPanel from "../panels/DbTerminalPanel.jsx";
 import MetricsView from "./MetricsView.jsx";
-
-const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
-const WS_BASE = API_BASE.replace(/^http/, "ws");
+import { useCurrentApp } from "./AppScope.jsx";
 
 const ACTIVE = new Set(["queued", "building", "built", "deploying"]);
 const DB_LABEL = { mysql: "MySQL", postgres: "PostgreSQL" };
@@ -546,7 +545,7 @@ function WorkspaceTerminal({ wsPath, onStatus }) {
       if (!disposed) fitAddon.fit();
     });
 
-    const ws = new WebSocket(WS_BASE + wsPath);
+    const ws = new WebSocket(scopedWs(wsPath));
 
     // 현재 xterm 크기를 백엔드로 보내 파드 pty 크기를 맞춤 → 쉘 출력이 실제 폭으로 정렬
     const sendResize = () => {
@@ -986,6 +985,7 @@ function historyTime(iso) {
 
 function SqlConsole({ dbType }) {
   const { user } = useAuth();
+  const { app } = useCurrentApp();
 
   const [sql, setSql] = useState("");
   const [result, setResult] = useState(null);
@@ -1007,8 +1007,8 @@ function SqlConsole({ dbType }) {
   // 최근 실행의 보관 스코프 — 유저·앱·DB. 저장된 쿼리의 서버측 스코프와 같은 세 축이라
   // 계정을 바꾸거나 DB를 갈아탄 뒤 남의 이력이 보이지 않는다.
   const scope = useMemo(
-    () => ({ userId: user?.id, appName: user?.app_name, dbType }),
-    [user?.id, user?.app_name, dbType],
+    () => ({ userId: user?.id, appName: app?.name, dbType }),
+    [user?.id, app?.name, dbType],
   );
   const scopeKey = historyKey(scope);
 
@@ -1021,7 +1021,7 @@ function SqlConsole({ dbType }) {
   // 저장된 쿼리 — 스코프는 서버가 정하므로 요청에 아무것도 싣지 않는다.
   // DB 없는 앱이면 API가 400이라 아예 부르지 않고 빈 목록으로 둔다.
   useEffect(() => {
-    if (!dbType || !user?.app_name) {
+    if (!dbType || !app) {
       setSaved([]);
       return;
     }
@@ -1032,7 +1032,7 @@ function SqlConsole({ dbType }) {
     return () => {
       cancelled = true;
     };
-  }, [dbType, user?.app_name, user?.id]);
+  }, [dbType, app?.id, user?.id]);
 
   // 실행 1건 기록. 저장은 setState 안에서 — 스코프가 바뀌는 순간과 엇갈려 옛 이력이
   // 새 칸에 덮어써지는 일이 없도록, 항상 "지금 읽은 그 목록"과 함께 쓴다.

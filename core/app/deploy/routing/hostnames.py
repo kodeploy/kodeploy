@@ -6,13 +6,13 @@ from kubernetes.client.exceptions import ApiException
 from publicsuffixlist import PublicSuffixList
 from sqlalchemy.orm import Session
 
-from app.auth.model import User
+from app.apps.model import App
 from app.deploy.routing import domains
 from app.shared import k8s
 
 # --- 커스텀 도메인 (CF for SaaS custom hostname) -----------------------------
 # domains.py(CF API)와 K8s HTTPRoute를 잇는 오케스트레이션 (r2/_apply_storage와 같은 위치).
-# User엔 도메인+status만 저장(컬럼 2개), CF id는 매번 이름으로 lookup(domains.find).
+# App엔 도메인+status만 저장(컬럼 2개), CF id는 매번 이름으로 lookup(domains.find).
 
 _DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)([a-z0-9](?:[-a-z0-9]*[a-z0-9])?\.)+[a-z]{2,}$"
@@ -34,9 +34,9 @@ def _normalize_domain(domain: str) -> str:
     return d
 
 
-# User.extra_hostnames(콤마 구분 텍스트) → 리스트. 운영자가 DB에 직접 등록하는 값.
-def _extra_hostnames(user: User) -> list[str]:
-    raw = user.extra_hostnames or ""
+# App.extra_hostnames(콤마 구분 텍스트) → 리스트. 운영자가 DB에 직접 등록하는 값.
+def _extra_hostnames(app: App) -> list[str]:
+    raw = app.extra_hostnames or ""
     return [h.strip().lower() for h in raw.split(",") if h.strip()]
 
 
@@ -45,34 +45,32 @@ def _extra_hostnames(user: User) -> list[str]:
 # 정적 없음: 서버가 {app}+{app}-api(+커스텀 도메인+extra), 정적은 빈 리스트
 # -api를 정적 유무와 무관하게 항상 걸어두는 이유: 나중에 정적을 켜서 {app}이 정적으로
 # 넘어가도 서버 주소({app}-api)는 처음부터 유효했던 주소라 API 소비자가 안 깨진다.
-def _slot_hostnames(user: User) -> tuple[list[str], list[str]]:
-    app = user.app_name
-    extras = _extra_hostnames(user)
-    custom_domain = [user.custom_domain] if user.custom_domain else []
-    if user.site_enabled:
+def _slot_hostnames(app: App) -> tuple[list[str], list[str]]:
+    name = app.name
+    extras = _extra_hostnames(app)
+    custom_domain = [app.custom_domain] if app.custom_domain else []
+    if app.site_enabled:
         return (
-            [f"{app}-api.kodeploy.com"],
-            [f"{app}.kodeploy.com", *extras, *custom_domain],
+            [f"{name}-api.kodeploy.com"],
+            [f"{name}.kodeploy.com", *extras, *custom_domain],
         )
     return (
-        [f"{app}.kodeploy.com", f"{app}-api.kodeploy.com", *extras, *custom_domain],
+        [f"{name}.kodeploy.com", f"{name}-api.kodeploy.com", *extras, *custom_domain],
         [],
     )
 
 
 # 앱의 모든 route(서버 쌍 + 정적 쌍) hostnames를 슬롯 규칙으로 통째 set (authoritative
-# reconcile). DB(User)가 유일한 진실원 — kubectl 수동 drift는 다음 갱신 때 복원된다.
+# reconcile). DB(App)가 유일한 진실원 — kubectl 수동 drift는 다음 갱신 때 복원된다.
 # 특수 hostname이 필요하면 patch가 아니라 extra_hostnames에 등록할 것.
 # 없는 route는 404 skip (해당 슬롯 미배포/teardown 중 — 정상).
-def _reconcile_route_hostnames(user: User) -> None:
-    if not user.app_name:
-        return
-    tenant_id = f"tenant-{user.id.hex[:8]}"
-    server_hosts, site_hosts = _slot_hostnames(user)
-    site_name = f"{user.app_name}-static"
+def _reconcile_route_hostnames(app: App) -> None:
+    tenant_id = app.namespace
+    server_hosts, site_hosts = _slot_hostnames(app)
+    site_name = f"{app.name}-static"
     targets = [
-        (user.app_name, server_hosts),
-        (f"{user.app_name}-redirect", server_hosts),
+        (app.name, server_hosts),
+        (f"{app.name}-redirect", server_hosts),
         (site_name, site_hosts),
         (f"{site_name}-redirect", site_hosts),
     ]
@@ -94,10 +92,8 @@ def _reconcile_route_hostnames(user: User) -> None:
                 raise
 
 
-# 커스텀 도메인 연결/변경 — CF custom hostname 생성 + User 저장 + 앱 route에 hostname 주입.
-def set_custom_domain(db: Session, user: User, domain: str) -> dict:
-    if not user.app_name:
-        raise ValueError("먼저 앱을 배포한 후 커스텀 도메인을 연결할 수 있습니다")
+# 커스텀 도메인 연결/변경 — CF custom hostname 생성 + App 저장 + 앱 route에 hostname 주입.
+def set_custom_domain(db: Session, app: App, domain: str) -> dict:
     if not domains.is_configured():
         raise ValueError("커스텀 도메인이 서버에 설정되지 않았습니다")
     domain = _normalize_domain(domain)
@@ -112,69 +108,68 @@ def set_custom_domain(db: Session, user: User, domain: str) -> dict:
         raise ValueError("서브도메인만 연결할 수 있어요 (예: app.example.com). 루트 도메인은 미지원입니다")
 
     other = (
-        db.query(User)
-        .filter(User.custom_domain == domain, User.id != user.id)
+        db.query(App)
+        .filter(App.custom_domain == domain, App.id != app.id)
         .first()
     )
     if other:
         raise ValueError(f"이미 사용 중인 도메인: {domain}")
 
     # 도메인 변경이면 옛 CF custom hostname 정리
-    if user.custom_domain and user.custom_domain != domain:
-        domains.delete(user.custom_domain)
+    if app.custom_domain and app.custom_domain != domain:
+        domains.delete(app.custom_domain)
 
     try:
         summary = domains.create(domain)
     except domains.DomainError as e:
         raise ValueError(str(e))
 
-    user.custom_domain = domain
-    user.custom_domain_status = "active" if summary.get("status") == "active" else "pending"
+    app.custom_domain = domain
+    app.custom_domain_status = "active" if summary.get("status") == "active" else "pending"
     db.commit()
 
     # DB 갱신 후 reconcile — 슬롯 규칙대로 정적(있으면) 또는 서버 route에 주입.
     # 옛 도메인은 리스트에서 빠지는 걸로 자연 제거됨.
-    _reconcile_route_hostnames(user)
+    _reconcile_route_hostnames(app)
     return {
-        "domain": user.custom_domain,
-        "status": user.custom_domain_status,
+        "domain": app.custom_domain,
+        "status": app.custom_domain_status,
         "ssl_status": summary.get("ssl_status"),
     }
 
 
-# CF에서 검증/cert 상태를 다시 읽어 User.custom_domain_status 갱신 (UI 폴링).
-def refresh_custom_domain_status(db: Session, user: User) -> dict:
-    if not user.custom_domain:
+# CF에서 검증/cert 상태를 다시 읽어 App.custom_domain_status 갱신 (UI 폴링).
+def refresh_custom_domain_status(db: Session, app: App) -> dict:
+    if not app.custom_domain:
         return {"domain": None, "status": None, "ssl_status": None}
     summary = None
     try:
-        summary = domains.get_status(user.custom_domain)
+        summary = domains.get_status(app.custom_domain)
     except domains.DomainError:
         pass
     if summary:
         new_status = "active" if summary.get("status") == "active" else "pending"
-        if new_status != user.custom_domain_status:
-            user.custom_domain_status = new_status
+        if new_status != app.custom_domain_status:
+            app.custom_domain_status = new_status
             db.commit()
     return {
-        "domain": user.custom_domain,
-        "status": user.custom_domain_status,
+        "domain": app.custom_domain,
+        "status": app.custom_domain_status,
         "ssl_status": summary.get("ssl_status") if summary else None,
     }
 
 
-# 커스텀 도메인 해제 — User 클리어 후 reconcile(route에서 자연 제거) + CF custom hostname 삭제.
-def clear_custom_domain(db: Session, user: User) -> None:
-    if not user.custom_domain:
+# 커스텀 도메인 해제 — App 클리어 후 reconcile(route에서 자연 제거) + CF custom hostname 삭제.
+def clear_custom_domain(db: Session, app: App) -> None:
+    if not app.custom_domain:
         return
-    domain = user.custom_domain
-    user.custom_domain = None
-    user.custom_domain_status = None
+    domain = app.custom_domain
+    app.custom_domain = None
+    app.custom_domain_status = None
     db.commit()
-    if user.app_name:
-        try:
-            _reconcile_route_hostnames(user)
-        except ApiException:
-            pass
+    try:
+        _reconcile_route_hostnames(app)
+    except ApiException:
+        pass
     domains.delete(domain)
 

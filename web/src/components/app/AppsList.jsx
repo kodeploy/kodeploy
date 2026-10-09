@@ -1,11 +1,12 @@
-// 내 앱 — design/라이트모드-시안/03_내_앱_목록.png 기준. 로그인 후 앱으로 들어가는 관문 화면.
+// 대시보드 — design/라이트모드-시안/03_내_앱_목록.png 기준. 로그인 후 앱으로 들어가는 관문 화면.
 //
-// 이 서비스는 1유저 = 1앱이고 슬롯이 둘(서버 / 정적)이라 "목록"이라기보다 슬롯 두 칸이다.
-// 그래서 카드 격자 대신 시안처럼 섹션 세 개(앱 서버 / 프론트엔드 / 최근 배포)를 세로로 쌓고,
-// 각 섹션은 굵은 제목 + 괘선 + 행 하나로 끝낸다.
+// 슬롯이 둘(서버 / 정적)이라 카드 격자 대신 시안처럼 섹션 세 개(앱 서버 / 프론트엔드 / 최근 배포)를
+// 세로로 쌓고, 각 섹션은 굵은 제목 + 괘선 + 행으로 끝낸다. 앱이 여러 개면 섹션 안의 행이 앱 수만큼 늘어난다
+// (새 카드·배지를 만들지 않고 같은 행 문법을 반복한다). 남이 공유해 준 앱은 이름 줄 메타에
+// "공유받음 · 주인"이 붙는 것만 다르다.
 //
 // 이 라우트는 AppLayout(탭 셸) 밖이라 폴링해 줄 부모가 없다 — 여기서 직접 폴링한다.
-// 빌드와 앱 상태를 한 tick에서 같이 받고, 진행 중인 빌드가 있으면 주기를 줄인다(위젯과 같은 규칙).
+// 앱 목록을 받고 앱마다 빌드와 앱 상태를 한 tick에서 같이 받고, 진행 중인 빌드가 있으면 주기를 줄인다(위젯과 같은 규칙).
 //
 // 슬롯 판별·호스트 규칙은 CommitListWidget / AppLayout과 동일하게 맞췄다:
 //   - 서버 빌드 = runtime !== "static" && kind !== "env_change" 중 최신
@@ -26,7 +27,7 @@ import {
   MoreHorizontal,
   SquareTerminal,
 } from "lucide-react";
-import { getAppStatus, listBuilds } from "../../api/deploy.js";
+import { getAppStatus, listApps, listBuilds } from "../../api/deploy.js";
 import { APP_STATUS_STYLES } from "../AppStatusBadge.jsx";
 import { STYLES_BUILD, STYLES_ENV } from "../StatusBadge.jsx";
 import DeleteAppModal from "../DeleteAppModal.jsx";
@@ -81,20 +82,55 @@ function dayTime(iso) {
   return formatFull(iso);
 }
 
+// 앱 하나의 화면용 값 — 슬롯 판별과 호스트 규칙을 한 곳에서 계산한다.
+function viewOf(app, builds, slotStatus) {
+  const serverBuild = builds.find((b) => b.runtime !== "static" && b.kind !== "env_change");
+  const staticBuild = builds.find((b) => b.runtime === "static");
+  // 정적 슬롯 유무 — site_enabled가 진실원이고, 옛 응답을 위해 슬롯 상태/빌드로 보강한다.
+  const hasSite = Boolean(app.site_enabled || slotStatus?.site || staticBuild);
+  // Pod이 아직 없는 슬롯(missing)이라도 그 슬롯 빌드가 돌고 있으면 "빌드 중"으로 —
+  // 빌드가 긴 런타임에서 행이 "중지"로 보이는 오해 방지 (위젯과 같은 규칙).
+  const activeServerBuild = builds.some((b) => b.runtime !== "static" && ACTIVE.has(b.status));
+  const activeStaticBuild = builds.some((b) => b.runtime === "static" && ACTIVE.has(b.status));
+  const rawServerStatus = slotStatus?.server?.status || slotStatus?.status || null;
+  const rawSiteStatus = slotStatus?.site?.status || null;
+  const latest = builds[0] || null;
+  return {
+    app,
+    serverBuild,
+    staticBuild,
+    serverHost: hasSite ? `${app.name}-api.kodeploy.com` : `${app.name}.kodeploy.com`,
+    siteHost: `${app.name}.kodeploy.com`,
+    serverStatus: rawServerStatus === "missing" && activeServerBuild ? "building" : rawServerStatus,
+    siteStatus: rawSiteStatus === "missing" && activeStaticBuild ? "building" : rawSiteStatus,
+    latest,
+    // #N은 kind="build"만 카운트(env_change는 번호 없음). 목록은 최신순.
+    latestNumber:
+      latest && (latest.kind || "build") !== "env_change"
+        ? builds.filter((b) => (b.kind || "build") !== "env_change").length
+        : null,
+    active: builds.some((b) => ACTIVE.has(b.status)),
+  };
+}
+
+// 남이 공유해 준 앱 표시 — 내 앱이면 없다. 주인 아이디는 서버가 owner_login으로 줄 때만 붙는다.
+function sharedMark(app) {
+  if (!app.role || app.role === "owner") return null;
+  return app.owner_login ? `공유받음 · ${app.owner_login}` : "공유받음";
+}
+
 export default function AppsList() {
   const { user, loading, openLogin } = useAuth();
-  const [builds, setBuilds] = useState([]);
-  // { status, started_at, server:{status}, site:{status}|null } — 슬롯별 상태의 진실원
-  const [slotStatus, setSlotStatus] = useState(null);
-  const [showDelete, setShowDelete] = useState(false);
+  const [apps, setApps] = useState([]);
+  // 앱 id → { builds, status } — 앱마다 한 tick에서 같이 받는다
+  const [byApp, setByApp] = useState({});
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
-  const deployed = Boolean(user?.app_name);
-
-  // 빌드 + 앱 상태 한 tick 폴링. 진행 중 빌드가 있으면 2.5s, 없으면 10s.
+  // 앱 목록 + 앱별 빌드/상태 한 tick 폴링. 진행 중 빌드가 있으면 2.5s, 없으면 10s.
   useEffect(() => {
-    if (!deployed) {
-      setBuilds([]);
-      setSlotStatus(null);
+    if (loading || !user) {
+      setApps([]);
+      setByApp({});
       return;
     }
     let cancelled = false;
@@ -102,11 +138,20 @@ export default function AppsList() {
     const tick = async () => {
       let active = false;
       try {
-        const [list, status] = await Promise.all([listBuilds(), getAppStatus()]);
+        const list = (await listApps()) || [];
+        const pairs = await Promise.all(
+          list.map(async (a) => {
+            const [builds, status] = await Promise.all([
+              listBuilds(a.id).catch(() => []),
+              getAppStatus(a.id).catch(() => null),
+            ]);
+            return [a.id, { builds: builds || [], status }];
+          }),
+        );
         if (!cancelled) {
-          setBuilds(list || []);
-          setSlotStatus(status || null);
-          active = (list || []).some((b) => ACTIVE.has(b.status));
+          setApps(list);
+          setByApp(Object.fromEntries(pairs));
+          active = pairs.some(([, v]) => v.builds.some((b) => ACTIVE.has(b.status)));
         }
       } catch {
         // 배경 폴링 — 화면에 빨간 에러를 띄우지 않는다 (다음 tick에서 회복)
@@ -118,35 +163,18 @@ export default function AppsList() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [deployed, user?.id, user?.app_name]);
+  }, [loading, user?.id]);
 
-  // 슬롯별 최신 빌드 — AppLayout과 같은 판별식
-  const serverBuild = builds.find((b) => b.runtime !== "static" && b.kind !== "env_change");
-  const staticBuild = builds.find((b) => b.runtime === "static");
+  const views = useMemo(
+    () => apps.map((a) => viewOf(a, byApp[a.id]?.builds || [], byApp[a.id]?.status || null)),
+    [apps, byApp],
+  );
+  const serverViews = views.filter((v) => v.serverBuild);
+  const siteViews = views.filter((v) => v.staticBuild);
+  const firstOwned = apps.find((a) => !a.role || a.role === "owner") || null;
 
-  // 정적 슬롯 유무 — site_enabled가 진실원이고, 옛 응답을 위해 슬롯 상태/빌드로 보강한다.
-  const hasSite = Boolean(user?.site_enabled || slotStatus?.site || staticBuild);
-  const appName = user?.app_name;
-  const serverHost = hasSite ? `${appName}-api.kodeploy.com` : `${appName}.kodeploy.com`;
-  const siteHost = `${appName}.kodeploy.com`;
-
-  // Pod이 아직 없는 슬롯(missing)이라도 그 슬롯 빌드가 돌고 있으면 "빌드 중"으로 —
-  // 빌드가 긴 런타임에서 행이 "중지"로 보이는 오해 방지 (위젯과 같은 규칙).
-  const activeServerBuild = builds.some((b) => b.runtime !== "static" && ACTIVE.has(b.status));
-  const activeStaticBuild = builds.some((b) => b.runtime === "static" && ACTIVE.has(b.status));
-  const rawServerStatus = slotStatus?.server?.status || slotStatus?.status || null;
-  const serverStatus =
-    rawServerStatus === "missing" && activeServerBuild ? "building" : rawServerStatus;
-  const rawSiteStatus = slotStatus?.site?.status || null;
-  const siteStatus =
-    rawSiteStatus === "missing" && activeStaticBuild ? "building" : rawSiteStatus;
-
-  // 최근 배포 — #N은 kind="build"만 카운트(env_change는 번호 없음). 목록은 최신순.
-  const latest = builds[0] || null;
-  const latestNumber = useMemo(() => {
-    if (!latest || (latest.kind || "build") === "env_change") return null;
-    return builds.filter((b) => (b.kind || "build") !== "env_change").length;
-  }, [builds, latest]);
+  // 새 앱을 만들 수 있나 — 등급 한도(max_apps, null=무제한). 서버도 같은 규칙으로 막는다.
+  const canCreate = user?.max_apps == null || (user?.app_count ?? 0) < user.max_apps;
 
   if (loading) return null;                          // /auth/me 첫 응답 전 깜빡임 방지
 
@@ -158,42 +186,53 @@ export default function AppsList() {
         배포한 앱과 프론트엔드를 관리하세요.
       </p>
 
-      {!deployed ? (
+      {!user || views.length === 0 ? (
         <FirstDeploy loggedIn={Boolean(user)} onLogin={openLogin} />
       ) : (
         <>
           {/* ── 앱 서버 (시안 제목 y285 · 괘선 y327 · 행 y360-422 · 마감 괘선 y453) ── */}
-          <Section title="앱 서버" first>
-            {serverBuild ? (
-              <SlotRow
-                to="/dashboard"
-                icon={SquareTerminal}
-                name={appName}
-                status={serverStatus}
-                meta={[
-                  RUNTIME_LABEL[serverBuild.runtime] || serverBuild.runtime,
-                  serverBuild.branch,
-                ]}
-                host={serverHost}
-                action={
-                  <>
-                    <Link
-                      to="/dashboard/workspace"
-                      className="kd-btn-primary kd-btn-lg inline-flex items-center gap-2 no-underline"
-                    >
-                      작업 공간 열기
-                    </Link>
-                    <AppMenu onDelete={() => setShowDelete(true)} />
-                  </>
-                }
-              />
+          <Section
+            title="앱 서버"
+            first
+            aside={<NewAppAction canCreate={canCreate} user={user} />}
+          >
+            {serverViews.length > 0 ? (
+              serverViews.map((v) => (
+                <SlotRow
+                  key={v.app.id}
+                  to={`/apps/${v.app.id}`}
+                  icon={SquareTerminal}
+                  name={v.app.name}
+                  status={v.serverStatus}
+                  meta={[
+                    RUNTIME_LABEL[v.serverBuild.runtime] || v.serverBuild.runtime,
+                    v.serverBuild.branch,
+                    sharedMark(v.app),
+                  ]}
+                  host={v.serverHost}
+                  action={
+                    <>
+                      <Link
+                        to={`/apps/${v.app.id}/workspace`}
+                        className="kd-btn-primary kd-btn-lg inline-flex items-center gap-2 no-underline"
+                      >
+                        작업 공간 열기
+                      </Link>
+                      <AppMenu
+                        base={`/apps/${v.app.id}`}
+                        onDelete={!v.app.role || v.app.role === "owner" ? () => setDeleteTarget(v.app) : null}
+                      />
+                    </>
+                  }
+                />
+              ))
             ) : (
               /* 정적 단독 배포(runtime "none") — 서버 슬롯이 비어 있는 경우 */
               <EmptyRow
                 icon={SquareTerminal}
                 title="앱 서버가 아직 없어요."
                 desc="깃허브 저장소를 연결해 서버를 배포할 수 있어요."
-                to="/deploy"
+                to={firstOwned ? `/apps/${firstOwned.id}/deploy` : "/deploy"}
                 cta="앱 서버 배포"
               />
             )}
@@ -201,29 +240,32 @@ export default function AppsList() {
 
           {/* ── 프론트엔드 (시안 제목 y527 · 괘선 y569 · 행 y603-653 · 마감 괘선 y687) ── */}
           <Section title="프론트엔드">
-            {staticBuild ? (
-              <SlotRow
-                to="/dashboard"
-                icon={AppWindow}
-                name={appName}
-                status={siteStatus}
-                meta={[RUNTIME_LABEL.static, staticBuild.branch]}
-                host={siteHost}
-                action={
-                  <Link
-                    to="/deploy/frontend"
-                    className="kd-btn-secondary kd-btn-lg inline-flex items-center no-underline"
-                  >
-                    프론트엔드 다시 배포
-                  </Link>
-                }
-              />
+            {siteViews.length > 0 ? (
+              siteViews.map((v) => (
+                <SlotRow
+                  key={v.app.id}
+                  to={`/apps/${v.app.id}`}
+                  icon={AppWindow}
+                  name={v.app.name}
+                  status={v.siteStatus}
+                  meta={[RUNTIME_LABEL.static, v.staticBuild.branch, sharedMark(v.app)]}
+                  host={v.siteHost}
+                  action={
+                    <Link
+                      to={`/apps/${v.app.id}/deploy/frontend`}
+                      className="kd-btn-secondary kd-btn-lg inline-flex items-center no-underline"
+                    >
+                      프론트엔드 다시 배포
+                    </Link>
+                  }
+                />
+              ))
             ) : (
               <EmptyRow
                 icon={AppWindow}
                 title="프론트엔드가 아직 없어요."
                 desc="앱과 연결할 웹 화면을 배포할 수 있어요."
-                to="/deploy/frontend"
+                to={firstOwned ? `/apps/${firstOwned.id}/deploy/frontend` : "/deploy/frontend"}
                 cta="프론트엔드 배포"
               />
             )}
@@ -231,38 +273,44 @@ export default function AppsList() {
 
           {/* ── 최근 배포 (시안 제목 y758 · 괘선 y799 · 행 y825-841 · 마감 괘선 y867) ── */}
           <Section title="최근 배포">
-            <div
-              className="flex items-center gap-3 flex-wrap"
-              style={{
-                paddingBlock: 21,
-                paddingLeft: 8,
-                borderBottom: "1px solid var(--kd-border)",
-              }}
-            >
-              {latest ? (
-                <>
-                  {latestNumber != null && (
-                    <span className="kd-t-body kd-strong text-fg-1 tabular-nums">
-                      #{latestNumber}
-                    </span>
-                  )}
-                  <span className="kd-t-body text-fg-2">{buildLabel(latest)}</span>
-                  <span className="kd-t-body text-fg-4">·</span>
-                  <span className="kd-t-body text-fg-2 tabular-nums">
-                    {dayTime(latest.created_at)}
-                  </span>
-                </>
-              ) : (
-                <span className="kd-t-body text-fg-2">아직 배포 기록이 없어요.</span>
-              )}
-              <Link
-                to="/dashboard/history"
-                className="kd-t-body text-fg-2 hover:text-fg-1 transition-colors no-underline
-                           ml-auto inline-flex items-center gap-2 shrink-0"
+            {views.map((v) => (
+              <div
+                key={v.app.id}
+                className="flex items-center gap-3 flex-wrap"
+                style={{
+                  paddingBlock: 21,
+                  paddingLeft: 8,
+                  borderBottom: "1px solid var(--kd-border)",
+                }}
               >
-                배포 이력 보기
-              </Link>
-            </div>
+                {views.length > 1 && (
+                  <span className="kd-t-body kd-strong text-fg-1">{v.app.name}</span>
+                )}
+                {v.latest ? (
+                  <>
+                    {v.latestNumber != null && (
+                      <span className="kd-t-body kd-strong text-fg-1 tabular-nums">
+                        #{v.latestNumber}
+                      </span>
+                    )}
+                    <span className="kd-t-body text-fg-2">{buildLabel(v.latest)}</span>
+                    <span className="kd-t-body text-fg-4">·</span>
+                    <span className="kd-t-body text-fg-2 tabular-nums">
+                      {dayTime(v.latest.created_at)}
+                    </span>
+                  </>
+                ) : (
+                  <span className="kd-t-body text-fg-2">아직 배포 기록이 없어요.</span>
+                )}
+                <Link
+                  to={`/apps/${v.app.id}/history`}
+                  className="kd-t-body text-fg-2 hover:text-fg-1 transition-colors no-underline
+                             ml-auto inline-flex items-center gap-2 shrink-0"
+                >
+                  배포 이력 보기
+                </Link>
+              </div>
+            ))}
           </Section>
         </>
       )}
@@ -284,8 +332,27 @@ export default function AppsList() {
         </Link>
       </div>
 
-      {showDelete && (
-        <DeleteAppModal appName={appName} onClose={() => setShowDelete(false)} />
+      {deleteTarget && (
+        <DeleteAppModal app={deleteTarget} onClose={() => setDeleteTarget(null)} />
+      )}
+    </div>
+  );
+}
+
+// 새 앱 만들기 — 앱 서버 섹션 제목 줄 오른쪽. 지금 앱 수와 등급 한도를 늘 보여 주고(무제한이면 ∞),
+// 한도에 닿으면 버튼 대신 한도 안내만 남는다.
+function NewAppAction({ canCreate, user }) {
+  const limit = user.max_apps == null ? "∞" : user.max_apps;
+  return (
+    <div className="flex items-center gap-3.5">
+      <span className="kd-t-body-s text-fg-2 tabular-nums">
+        앱 {user.app_count ?? 0}/{limit}
+        {!canCreate && " · 한도에 도달했어요"}
+      </span>
+      {canCreate && (
+        <Link to="/deploy" className="kd-btn-secondary kd-btn-md inline-flex items-center no-underline">
+          새 앱 배포
+        </Link>
       )}
     </div>
   );
@@ -302,10 +369,13 @@ function buildLabel(build) {
 // 섹션 = 굵은 제목 + 바로 아래 괘선 + 행. 괘선 폭은 콘텐츠 폭 그대로(시안 227-1309).
 // 첫 섹션만 조금 좁다 — 위가 설명 문단이라 line-height 여백이 이미 붙어 있다
 // (시안: 설명 잉크→제목 잉크 68 / 앞 섹션 마감 괘선→제목 잉크 74).
-function Section({ title, first, children }) {
+function Section({ title, first, aside, children }) {
   return (
     <section style={{ marginTop: first ? 52 : 66 }}>
-      <h2 className="kd-t-display-s text-fg-1">{title}</h2>
+      <div className="flex items-end justify-between gap-4 flex-wrap">
+        <h2 className="kd-t-display-s text-fg-1">{title}</h2>
+        {aside}
+      </div>
       <div style={{ borderTop: "1px solid var(--kd-border)", marginTop: 12 }} />
       {children}
     </section>
@@ -432,7 +502,7 @@ function EmptyRow({ icon: Icon, title, desc, to, cta }) {
 }
 
 // 앱 단위 동작 묶음 — 시안의 "…" 사각 버튼. 새 화면을 만들지 않고 기존 라우트/모달로만 보낸다.
-function AppMenu({ onDelete }) {
+function AppMenu({ base, onDelete }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
 
@@ -465,24 +535,26 @@ function AppMenu({ onDelete }) {
           className="absolute right-0 kd-card overflow-hidden"
           style={{ top: 54, minWidth: 168, zIndex: 20 }}
         >
-          <MenuLink to="/dashboard" label="앱 개요" onDone={() => setOpen(false)} />
-          <MenuLink to="/dashboard/history" label="배포 이력" onDone={() => setOpen(false)} />
-          <MenuLink to="/dashboard/env" label="환경변수" onDone={() => setOpen(false)} />
-          <MenuLink to="/dashboard/settings" label="설정" onDone={() => setOpen(false)} />
-          <button
-            onClick={() => {
-              setOpen(false);
-              onDelete();
-            }}
-            className="w-full text-left kd-t-body-s px-3.5 flex items-center"
-            style={{
-              height: "var(--row-md)",
-              color: "var(--err-fg)",
-              borderTop: "1px solid var(--kd-border)",
-            }}
-          >
-            앱 삭제
-          </button>
+          <MenuLink to={base} label="앱 개요" onDone={() => setOpen(false)} />
+          <MenuLink to={`${base}/history`} label="배포 이력" onDone={() => setOpen(false)} />
+          <MenuLink to={`${base}/env`} label="환경변수" onDone={() => setOpen(false)} />
+          <MenuLink to={`${base}/settings`} label="설정" onDone={() => setOpen(false)} />
+          {onDelete && (
+            <button
+              onClick={() => {
+                setOpen(false);
+                onDelete();
+              }}
+              className="w-full text-left kd-t-body-s px-3.5 flex items-center"
+              style={{
+                height: "var(--row-md)",
+                color: "var(--err-fg)",
+                borderTop: "1px solid var(--kd-border)",
+              }}
+            >
+              앱 삭제
+            </button>
+          )}
         </div>
       )}
     </div>
