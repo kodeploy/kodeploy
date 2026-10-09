@@ -74,7 +74,7 @@ def test_v2_explicit_dockerfile_mode_skips_detect(spawned, github):  # noqa: F81
     ({"init_dump_token": "t"}, None, "초기 DB 복원"),
     ({"build_mode": "auto"}, None, "Dockerfile 빌드만"),
     ({"build_mode": "detect"}, lambda g: setattr(g, "detected", ("auto", "")), "Dockerfile을 찾지 못했습니다"),
-    ({}, lambda g: setattr(g, "public", False), "public 저장소만"),
+    ({}, lambda g: setattr(g, "public", False), "찾을 수 없거나 접근할 수 없어요"),   # 비공개인데 GitHub 연결에도 없다
     ({}, lambda g: setattr(g, "public", None), "확인하지 못했습니다"),
 ])
 def test_v2_rejects_before_any_change(spawned, github, kwargs, setup, reason):  # noqa: F811
@@ -162,6 +162,8 @@ def runner(monkeypatch):
     db = MagicMock()
     db.query.return_value.filter_by.return_value.first.return_value = User(id=UID)
     monkeypatch.setattr(v2, "SessionLocal", lambda: db)
+    dropped = []
+    monkeypatch.setattr(v2, "_drop_git_auth", lambda bid: dropped.append(bid))     # 실제 K8s 호출 대신 기록
     monkeypatch.setattr(v2.apps_service, "get_app", lambda d, app_id: App(
         id=app_id, owner_id=UID, name="demo", namespace=f"tenant-{UID.hex[:8]}", site_enabled=False, pipeline="v2"))
     monkeypatch.setattr(v2.crud, "get_build", lambda d, bid: build)
@@ -177,7 +179,7 @@ def runner(monkeypatch):
         sent.append((payload, build.status))
 
     monkeypatch.setattr(v2.builder, "submit", submit)
-    return SimpleNamespace(build=build, record=record, steps=steps, sent=sent, db=db, monkeypatch=monkeypatch)
+    return SimpleNamespace(build=build, record=record, steps=steps, sent=sent, db=db, monkeypatch=monkeypatch, dropped=dropped)
 
 
 def test_run_provisions_then_submits(runner):
@@ -486,3 +488,67 @@ def test_apply_hostnames_sends_the_slot_rule_list(monkeypatch):
     p = sent[0]
     assert p["kind"] == "config" and p["namespace"] == app.namespace
     assert p["values"] == {"hostnames": ["demo.kodeploy.com", "demo-api.kodeploy.com", "www.example.com"]}
+
+
+# --- 비공개 저장소 ---
+
+def test_private_repo_is_accepted_when_the_owners_installation_has_it(spawned, github, monkeypatch):  # noqa: F811
+    github.public = False
+    monkeypatch.setattr(v2.github_app, "list_installation_repos", lambda iid: [{"full_name": "U/Repo"}] if iid == 111 else [])
+    monkeypatch.setattr(pipeline.apps_service, "repo_installation_id", lambda db, app: 111)
+    builds = run_deploy(MagicMock(), v2_user(), runtime="java", port=8080, build_mode="dockerfile")
+    assert len(builds) == 1 and spawned_fns(spawned) == [v2.run_v2_build]
+
+
+def test_private_repo_is_rejected_when_the_installation_lacks_it(spawned, github, monkeypatch):  # noqa: F811
+    github.public = False
+    monkeypatch.setattr(v2.github_app, "list_installation_repos", lambda iid: [{"full_name": "u/other"}])
+    monkeypatch.setattr(pipeline.apps_service, "repo_installation_id", lambda db, app: 111)
+    with pytest.raises(ValueError, match="접근할 수 없어요"):
+        run_deploy(MagicMock(), v2_user(), runtime="java", port=8080, build_mode="dockerfile")
+    assert spawned == []
+
+
+def test_private_repo_is_rejected_without_any_github_connection(spawned, github, monkeypatch):  # noqa: F811
+    github.public = False
+    monkeypatch.setattr(pipeline.apps_service, "repo_installation_id", lambda db, app: None)
+    with pytest.raises(ValueError, match="접근할 수 없어요"):
+        run_deploy(MagicMock(), v2_user(), runtime="java", port=8080, build_mode="dockerfile")
+
+
+def test_installation_has_repo_matches_in_any_spelling(monkeypatch):
+    monkeypatch.setattr(v2.github_app, "list_installation_repos", lambda iid: [{"full_name": "Me/Shop"}])
+    assert v2._installation_has_repo(1, "https://github.com/me/shop.git")
+    assert not v2._installation_has_repo(1, "https://github.com/me/shop-two")
+    assert not v2._installation_has_repo(None, "https://github.com/me/shop")
+
+
+def test_payload_names_the_git_auth_secret_only_for_private_builds(monkeypatch):
+    monkeypatch.setattr(config, "BUILD_REGISTRY_CACHE_ENABLED", False)
+    plain = v2.build_payload(make_build(), User(id=UID), ["demo.kodeploy.com"])
+    assert "git_auth_secret" not in plain["build"]
+    private = v2.build_payload(make_build(), User(id=UID), ["demo.kodeploy.com"], "git-auth-3f9a2c1d")
+    assert private["build"]["git_auth_secret"] == "git-auth-3f9a2c1d"
+    assert "GIT_AUTH_TOKEN" not in str(private)                 # 토큰 값 자체는 요청에 안 싣는다 (Secret 이름만)
+
+
+def test_run_provisions_the_token_secret_and_sends_its_name(runner):
+    import app.deploy.build.pipeline as pl
+
+    runner.monkeypatch.setattr(pl, "_provision_git_auth", lambda b: f"git-auth-{b.build_id}")
+    asyncio.run(v2.run_v2_build("3f9a2c1d"))
+    assert runner.sent[0][0]["build"]["git_auth_secret"] == "git-auth-3f9a2c1d"
+    assert runner.dropped == []                                  # 성공 제출이면 빌드가 끝날 때(콜백)까지 둔다
+
+
+def test_run_drops_the_token_secret_when_submit_fails(runner):
+    import app.deploy.build.pipeline as pl
+
+    runner.monkeypatch.setattr(pl, "_provision_git_auth", lambda b: "git-auth-3f9a2c1d")
+
+    async def refuse(payload):
+        raise builder.BuilderError("down")
+
+    runner.monkeypatch.setattr(v2.builder, "submit", refuse)
+    asyncio.run(v2.run_v2_build("3f9a2c1d"))
+    assert runner.dropped == ["3f9a2c1d"]                        # 제출이 실패하면 토큰이 남지 않게 바로 지운다

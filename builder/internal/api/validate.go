@@ -153,8 +153,10 @@ func (v Validator) validateBuild(r *contract.DeployRequest, nsHex string) error 
 	if b.Mode != "dockerfile" {
 		return notSupported(fmt.Sprintf("build.mode %q", b.Mode))
 	}
-	if b.GitAuthSecret != "" {
-		return notSupported("build.git_auth_secret")
+	// private repo용 Secret은 core가 이 빌드를 위해 만든 것만 쓴다 — 같은 ns의 다른 Secret을 가리킬 수 없게
+	// 이름을 build_id에 묶는다.
+	if b.GitAuthSecret != "" && b.GitAuthSecret != "git-auth-"+r.BuildID {
+		return invalid("build.git_auth_secret must be git-auth-<build_id>")
 	}
 	if b.ProjectPath != "" {
 		return notSupported("build.project_path")

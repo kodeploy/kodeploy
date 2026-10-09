@@ -184,6 +184,7 @@ func (r *run) createJob() error {
 		DockerfileSubdir:      b.DockerfileDir,
 		DockerfileFilename:    b.DockerfileName,
 		CacheRef:              b.CacheRef,
+		GitAuthSecret:         b.GitAuthSecret,
 		BuildKitImage:         r.m.d.Cfg.BuildKitImage,
 		ActiveDeadlineSeconds: r.m.d.Cfg.BuildActiveDeadlineSeconds,
 		RequestJSON:           string(reqJSON),

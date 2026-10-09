@@ -42,8 +42,8 @@ const (
 	AnnAckedLogLines = "kodeploy.io/acked-log-lines"
 )
 
-// 원본 init 컨테이너 스크립트 그대로. git_auth(private repo)는 이번 범위 밖이라 GIT_AUTH_TOKEN이
-// 주입되지 않지만, 스크립트는 원본과 같게 두어 나중에 Secret만 붙이면 되게 한다.
+// 원본 init 컨테이너 스크립트 그대로. private repo면 GitAuthSecret의 GIT_AUTH_TOKEN이 clone 컨테이너에만
+// 주입되고(main 컨테이너엔 안 간다), 없으면 public clone이다.
 const cloneScript = `set -eu
 echo "[1/1] cloning ${REPO_URL} (${BRANCH})..."
 # private repo: 토큰을 URL rewrite(insteadOf)로 주입 — REPO_URL/로그엔 토큰 안 보임(set -x 꺼짐)
@@ -64,6 +64,7 @@ type Params struct {
 	DockerfileSubdir      string
 	DockerfileFilename    string // 비면 Dockerfile
 	CacheRef              string // 비면 캐시 플래그 생략
+	GitAuthSecret         string // private repo: GIT_AUTH_TOKEN 키를 가진 Secret 이름. 비면 public clone
 	BuildKitImage         string
 	ActiveDeadlineSeconds int64
 	RequestJSON           string // kodeploy.io/request 어노테이션 (재개용)
@@ -104,6 +105,19 @@ func Build(p Params) *batchv1.Job {
 		)
 	}
 
+	cloneEnv := []corev1.EnvVar{
+		{Name: "REPO_URL", Value: p.RepoURL},
+		{Name: "BRANCH", Value: p.Branch},
+	}
+	if p.GitAuthSecret != "" {
+		cloneEnv = append(cloneEnv, corev1.EnvVar{Name: "GIT_AUTH_TOKEN", ValueFrom: &corev1.EnvVarSource{
+			SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: p.GitAuthSecret},
+				Key:                  "GIT_AUTH_TOKEN",
+			},
+		}})
+	}
+
 	workspace := corev1.VolumeMount{Name: "workspace", MountPath: "/workspace"}
 	annotations := map[string]string{}
 	if p.RequestJSON != "" {
@@ -135,13 +149,10 @@ func Build(p Params) *batchv1.Job {
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
 					InitContainers: []corev1.Container{{
-						Name:    InitContainer,
-						Image:   cloneImage,
-						Command: []string{"sh", "-c"},
-						Env: []corev1.EnvVar{
-							{Name: "REPO_URL", Value: p.RepoURL},
-							{Name: "BRANCH", Value: p.Branch},
-						},
+						Name:         InitContainer,
+						Image:        cloneImage,
+						Command:      []string{"sh", "-c"},
+						Env:          cloneEnv,
 						Args:         []string{cloneScript},
 						VolumeMounts: []corev1.VolumeMount{workspace},
 					}},

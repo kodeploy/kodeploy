@@ -5,12 +5,13 @@ core가 하는 일: 제출 조건 검사 → 네임스페이스·Secret·PVC 준
 계약: docs/go-builder-plan.md 3절, docs/builder-e2e.md "4부 할 일".
 
 v2가 아직 받지 않는 것 (빌더가 400으로 거부하거나, 한 앱이 v1·v2로 갈라지는 것):
-  서버 없는 앱, 정적 사이트, nixpacks 자동 빌드, private repo, 초기 DB 복원.
+  서버 없는 앱, 정적 사이트, nixpacks 자동 빌드, 초기 DB 복원.
 """
 
 import asyncio
 import logging
 import os.path
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from sqlalchemy import func
 from app import config
 from app.apps import service as apps_service
 from app.apps.model import App
+from app.auth import github_app
 from app.auth.model import User
 from app.builder import client as builder
 from app.deploy import crud
@@ -55,6 +57,8 @@ async def check_submit(
     dockerfile_path: str,
     use_static: bool,
     init_dump_token: str | None,
+    app: App | None = None,                # 이미 있는 앱이면 그 앱 (저장소 접근은 앱 주인의 GitHub 연결로 한다)
+    installation_id: int | None = None,    # 저장소를 받을 GitHub 연결 (비공개 저장소 확인용)
 ) -> str:
     if not config.BUILDER_HMAC_SECRET:
         raise ValueError("새 경로(v2) 빌더 연결이 설정되지 않았습니다")
@@ -71,10 +75,18 @@ async def check_submit(
     if public is None:
         raise ValueError("GitHub에서 저장소를 확인하지 못했습니다. 잠시 후 다시 시도하세요")
     if not public:
-        raise ValueError(f"{NOT_YET} public 저장소만 지원합니다")
+        # public이 아니면 비공개이거나 없는 저장소다 — 연결된 GitHub App(앱 주인의 것)이 접근할 수 있으면 비공개로 받는다.
+        # 빌드 Job이 그 연결의 토큰으로 clone한다 (run_v2_build가 빌드별 Secret을 만든다).
+        if not await asyncio.to_thread(_installation_has_repo, installation_id, repo_url):
+            raise ValueError(
+                "저장소를 찾을 수 없거나 접근할 수 없어요. 비공개 저장소라면 GitHub 연결에서 이 저장소를 추가해 주세요"
+            )
 
     if build_mode == "detect":
-        probe = Build(repo_url=repo_url, branch=branch, project_path="", runtime=runtime, user_id=user.id)
+        probe = Build(
+            repo_url=repo_url, branch=branch, project_path="", runtime=runtime, user_id=user.id,
+            app_id=app.id if app is not None else None,
+        )
         mode, path = await asyncio.to_thread(_detect_build, probe)
         if mode != "dockerfile":
             raise ValueError(f"{NOT_YET} Dockerfile 빌드만 지원합니다 (저장소에서 Dockerfile을 찾지 못했습니다)")
@@ -83,7 +95,18 @@ async def check_submit(
 
 
 # 빌더 요청 본문 (계약 3-1). values에는 core 소유 칸만 — image·runtime·port는 빌더 소유라 넣으면 400.
-def build_payload(build: Build, owner: User, hostnames: list[str]) -> dict:
+# 이 GitHub 연결(installation)이 접근할 수 있는 저장소인가 — 비공개 저장소를 받아도 되는지 본다.
+def _installation_has_repo(installation_id: int | None, repo_url: str) -> bool:
+    if not installation_id:
+        return False
+    m = re.search(r"github\.com[/:]([^/]+)/([^/]+?)(?:\.git)?/?$", repo_url.strip())
+    if not m:
+        return False
+    slug = f"{m.group(1)}/{m.group(2)}".lower()
+    return any((r.get("full_name") or "").lower() == slug for r in github_app.list_installation_repos(installation_id))
+
+
+def build_payload(build: Build, owner: User, hostnames: list[str], git_auth_secret: str = "") -> dict:
     subdir, filename = os.path.split(build.dockerfile_path or "Dockerfile")
     image_repo = build.image.rsplit(":", 1)[0]
     spec = {
@@ -97,6 +120,8 @@ def build_payload(build: Build, owner: User, hostnames: list[str]) -> dict:
     }
     if config.BUILD_REGISTRY_CACHE_ENABLED:
         spec["cache_ref"] = f"{image_repo}:buildcache"
+    if git_auth_secret:
+        spec["git_auth_secret"] = git_auth_secret       # 비공개 저장소: clone 컨테이너에만 토큰이 간다
     return {
         "build_id": build.build_id,
         "actor": owner.id.hex[:8],
@@ -190,19 +215,36 @@ async def run_v2_build(build_id: str, initial_env: dict[str, str] | None = None)
             db.commit()
             return
         server_hosts, _ = _slot_hostnames(app_row)
+        # 비공개 저장소: 앱 주인의 GitHub 연결로 토큰을 발급해 빌드별 Secret에 담는다 ("" = public clone).
+        # 빌드가 끝나면(콜백의 finished·failed·cancelled) 지운다.
+        from app.deploy.build import pipeline
+
+        git_auth = await asyncio.to_thread(pipeline._provision_git_auth, build)
         build.status = "building"         # 이벤트가 먼저 와도 뒤로 돌리지 않게 전송 전에 바꾼다
         db.commit()
-        await builder.submit(build_payload(build, owner, server_hosts))
+        await builder.submit(build_payload(build, owner, server_hosts, git_auth))
         logger.info("build %s submitted to builder", build_id)
     except builder.BuilderError as e:
         db.rollback()
+        _drop_git_auth(build_id)
         _fail(db, build, record, f"빌더가 받지 않았습니다: {e}")
     except Exception as e:
         db.rollback()
+        _drop_git_auth(build_id)
         if build is not None:
             _fail(db, build, record, f"오케스트레이션 에러: {e}")
     finally:
         db.close()
+
+
+# 빌드별 git-auth Secret 정리 — 못 지워도 빌드를 막지 않는다 (토큰은 1시간 뒤 어차피 만료된다).
+def _drop_git_auth(build_id: str) -> None:
+    try:
+        from app.deploy.build import pipeline
+
+        pipeline._cleanup_git_auth(build_id)
+    except Exception as e:
+        logger.warning("build %s: git-auth cleanup failed — %s", build_id, e)
 
 
 # 재배포가 옛 v2 빌드를 대체할 때 빌더에도 취소를 보낸다 (best-effort — 새 제출의 409 처리가 한 번 더 막는다).

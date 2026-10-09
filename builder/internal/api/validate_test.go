@@ -153,7 +153,18 @@ func TestValidate(t *testing.T) {
 		// build 칸
 		{"static build", func() *contract.DeployRequest { r := validBuild(); r.Slot = "static"; return r }, "not supported yet"},
 		{"mode auto", func() *contract.DeployRequest { r := validBuild(); r.Build.Mode = "auto"; return r }, "not supported yet"},
-		{"git_auth_secret", func() *contract.DeployRequest { r := validBuild(); r.Build.GitAuthSecret = "git-auth-x"; return r }, "not supported yet"},
+		{"git_auth_secret ok", func() *contract.DeployRequest {
+			r := validBuild()
+			r.Build.GitAuthSecret = "git-auth-3f9a2c1d"
+			return r
+		}, ""},
+		// 같은 ns의 다른 Secret을 가리키면 안 된다 — 이 빌드의 것(git-auth-<build_id>)만
+		{"git_auth_secret other build", func() *contract.DeployRequest {
+			r := validBuild()
+			r.Build.GitAuthSecret = "git-auth-aa11bb22"
+			return r
+		}, "git-auth-<build_id>"},
+		{"git_auth_secret other secret", func() *contract.DeployRequest { r := validBuild(); r.Build.GitAuthSecret = "ghcr-auth"; return r }, "git-auth-<build_id>"},
 		{"project_path", func() *contract.DeployRequest { r := validBuild(); r.Build.ProjectPath = "backend"; return r }, "not supported yet"},
 		{"build missing", func() *contract.DeployRequest { r := validBuild(); r.Build = nil; return r }, "build is required"},
 		{"build with image", func() *contract.DeployRequest { r := validBuild(); r.Image = validSetImage().Image; return r }, "image is not allowed"},

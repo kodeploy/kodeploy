@@ -11,6 +11,7 @@ import logging
 from datetime import datetime, timezone
 
 from app.deploy.build import diagnose, pipeline, postwatch
+from app.deploy.build import v2 as v2_module
 from app.deploy.build.v2 import close_record
 from app.deploy.model import Build, BuildRecord
 from app.shared.db import SessionLocal
@@ -104,6 +105,10 @@ def apply(build_id: str, ev: dict) -> str:
             if record is not None:
                 close_record(record, "cancelled")
         db.commit()
+
+        # 비공개 저장소 빌드의 토큰 Secret은 빌드가 끝나면(성공·실패·취소) 지운다
+        if kind in ("finished", "failed", "cancelled") and (build.kind or "build") == "build":
+            v2_module._drop_git_auth(build_id)
 
         if diagnosis and build.ai_status == "pending":
             pipeline.spawn_background(_diagnose, build_id, diagnosis)

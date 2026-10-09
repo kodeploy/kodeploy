@@ -41,7 +41,9 @@ def env(monkeypatch):
     monkeypatch.setattr(events, "SessionLocal", Session)
     monkeypatch.setattr(config, "BUILDER_HMAC_SECRET", SECRET)
     spawned = []
+    dropped = []
     monkeypatch.setattr(events.pipeline, "spawn_background", lambda fn, *a: spawned.append((fn, a)))
+    monkeypatch.setattr(events.v2_module, "_drop_git_auth", lambda bid: dropped.append(bid))   # 실제 K8s 호출 대신 기록
     monkeypatch.setattr(events.pipeline.diagnose, "is_configured", lambda: True)
     monkeypatch.setattr(events.pipeline, "_llm_budget_exceeded", lambda db, r: False)
 
@@ -69,7 +71,7 @@ def env(monkeypatch):
         with Session() as s:
             return s.get(Build, BID), s.query(BuildRecord).filter_by(build_id=BID).one()
 
-    return type("E", (), {"post": staticmethod(post), "row": staticmethod(row), "spawned": spawned})
+    return type("E", (), {"post": staticmethod(post), "row": staticmethod(row), "spawned": spawned, "dropped": dropped})
 
 
 # --- 보호 ---
@@ -250,3 +252,31 @@ def test_regular_build_still_goes_deploying_then_watched(env):
     assert env.row()[0].status == "deploying"
     env.post({"seq": 2, "type": "deployed"})
     assert env.row()[0].status == "running" and len(env.spawned) == 1
+
+
+# --- 비공개 저장소 빌드의 토큰 Secret 정리 ---
+
+@pytest.mark.parametrize("ev", [
+    {"seq": 1, "type": "finished", "job_ended_at": None, "job_succeeded": True, "export_failed": False},
+    {"seq": 1, "type": "failed", "stage": "build", "reason": "x"},
+    {"seq": 1, "type": "cancelled"},
+])
+def test_git_auth_secret_is_dropped_when_the_build_ends(env, ev):
+    env.post(ev)
+    assert env.dropped == [BID]
+
+
+@pytest.mark.parametrize("ev", [
+    {"seq": 1, "type": "log", "lines": ["x"]},
+    {"seq": 1, "type": "committed", "image": "i"},
+    {"seq": 1, "type": "deployed"},
+])
+def test_git_auth_secret_is_kept_while_the_job_may_still_need_it(env, ev):
+    env.post(ev)
+    assert env.dropped == []
+
+
+def test_env_change_rows_never_touch_build_secrets(env):
+    _add_env_change()
+    env.post({"seq": 1, "type": "failed", "stage": "sync", "reason": "x"}, build_id="e1e1e1e1")
+    assert env.dropped == []

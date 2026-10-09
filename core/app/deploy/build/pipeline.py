@@ -441,6 +441,9 @@ async def start_deploy(
         dockerfile_path = await v2.check_submit(
             user, runtime=runtime, repo_url=repo_url, branch=branch, build_mode=build_mode,
             dockerfile_path=dockerfile_path, use_static=use_static, init_dump_token=init_dump_token,
+            app=existing_app,
+            # 저장소는 앱 주인의 GitHub 연결로 받는다 (편집 권한 멤버가 배포해도 주인의 비공개 저장소를 받는다)
+            installation_id=apps_service.repo_installation_id(db, existing_app),
         )
         validate_repo_path(dockerfile_path, "Dockerfile 경로")
         build_mode = "dockerfile"

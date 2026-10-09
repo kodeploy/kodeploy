@@ -5,6 +5,8 @@ import (
 	"os"
 	"reflect"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 // hack/render-original-job.py와 같은 매개변수
@@ -125,5 +127,49 @@ func TestNoRequestAnnotationWhenEmpty(t *testing.T) {
 	p.RequestJSON = ""
 	if _, ok := Build(p).Annotations[AnnRequest]; ok {
 		t.Fatal("empty request should not be stored")
+	}
+}
+
+// private repo: 토큰은 clone 컨테이너에만 Secret 참조로 주입된다 (main 컨테이너와 Job 어노테이션엔 안 간다).
+func TestGitAuthSecretIsInjectedOnlyIntoTheCloneContainer(t *testing.T) {
+	p := goldenParams(false)
+	p.GitAuthSecret = "git-auth-" + p.BuildID
+	j := Build(p)
+
+	var clone *corev1.Container
+	for i := range j.Spec.Template.Spec.InitContainers {
+		if j.Spec.Template.Spec.InitContainers[i].Name == InitContainer {
+			clone = &j.Spec.Template.Spec.InitContainers[i]
+		}
+	}
+	if clone == nil {
+		t.Fatal("clone container missing")
+	}
+	var token *corev1.EnvVar
+	for i := range clone.Env {
+		if clone.Env[i].Name == "GIT_AUTH_TOKEN" {
+			token = &clone.Env[i]
+		}
+	}
+	if token == nil || token.ValueFrom == nil || token.ValueFrom.SecretKeyRef == nil ||
+		token.ValueFrom.SecretKeyRef.Name != p.GitAuthSecret || token.ValueFrom.SecretKeyRef.Key != "GIT_AUTH_TOKEN" {
+		t.Fatalf("clone token env: %+v", token)
+	}
+	for _, e := range j.Spec.Template.Spec.Containers[0].Env {
+		if e.Name == "GIT_AUTH_TOKEN" {
+			t.Fatal("token must not reach the buildkit container")
+		}
+	}
+	if token.Value != "" {
+		t.Fatal("token must be a secret reference, never a literal value")
+	}
+}
+
+func TestNoTokenEnvForPublicRepos(t *testing.T) {
+	j := Build(goldenParams(false))
+	for _, e := range j.Spec.Template.Spec.InitContainers[0].Env {
+		if e.Name == "GIT_AUTH_TOKEN" {
+			t.Fatal("public clone must not reference a git-auth secret")
+		}
 	}
 }

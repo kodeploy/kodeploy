@@ -49,7 +49,7 @@ type BuildSpec struct {
 	ImageRepo      string `json:"image_repo"`
 	ImageTag       string `json:"image_tag"`
 	CacheRef       string `json:"cache_ref,omitempty"`
-	GitAuthSecret  string `json:"git_auth_secret,omitempty"` // 예약 (private repo)
+	GitAuthSecret  string `json:"git_auth_secret,omitempty"` // private repo: core가 만든 빌드별 Secret 이름 (git-auth-<build_id>)
 	ProjectPath    string `json:"project_path,omitempty"`    // 예약 (nixpacks)
 }
 
