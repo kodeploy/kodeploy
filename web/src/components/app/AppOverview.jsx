@@ -55,6 +55,11 @@ export default function AppOverview() {
   const latest = builds[0] || null;
   const previous = builds.slice(1, 3);
 
+  // 배포 행을 누르면 그 내용을 다루는 화면으로 간다: 환경변수 변경은 환경변수 화면(편집 권한이 있을 때),
+  // 나머지는 배포 이력의 그 배포. 환경변수를 못 보는 사람(보기 권한)은 이력으로 보낸다.
+  const targetOf = (b) =>
+    b.kind === "env_change" && canEnv ? `${base}/env` : `${base}/history?build=${b.build_id}`;
+
   return (
     <div className="flex-1 overflow-auto scroll-thin">
       <div className="kd-page" style={{ paddingTop: 28, paddingBottom: 72 }}>
@@ -64,9 +69,19 @@ export default function AppOverview() {
         >
           {/* ─────────── 좌: 본문 ─────────── */}
           <div style={{ paddingRight: 40 }}>
-            <Section title="현재 배포" action={{ label: "배포 상세 보기", to: latest ? `${base}/history?build=${latest.build_id}` : `${base}/history` }}>
+            <Section
+              title="현재 배포"
+              action={{
+                label: latest?.kind === "env_change" && canEnv ? "환경변수 보기" : "배포 상세 보기",
+                to: latest ? targetOf(latest) : `${base}/history`,
+              }}
+            >
               {latest ? (
-                <div className="flex items-center gap-4" style={{ paddingBlock: 17 }}>
+                <Link
+                  to={targetOf(latest)}
+                  className="flex items-center gap-4 no-underline kd-hoverable"
+                  style={{ paddingBlock: 17 }}
+                >
                   <span className="shrink-0">{resultIcon(latest.status)}</span>
                   <div className="min-w-0">
                     <div className="kd-t-body kd-strong text-fg-1 truncate">
@@ -85,7 +100,7 @@ export default function AppOverview() {
                   <span className="ml-auto shrink-0">
                     <ResultChip build={latest} />
                   </span>
-                </div>
+                </Link>
               ) : (
                 <Empty>아직 배포 기록이 없어요.</Empty>
               )}
@@ -166,9 +181,10 @@ export default function AppOverview() {
                     <span>시간</span>
                   </div>
                   {previous.map((b, i) => (
-                    <div
+                    <Link
                       key={b.build_id}
-                      className="kd-history-row kd-t-caption text-fg-2 items-center"
+                      to={targetOf(b)}
+                      className="kd-history-row kd-t-caption text-fg-2 items-center no-underline kd-hoverable"
                       style={{
                         height: 32,
                         // 마지막 줄은 섹션 마감 괘선과 겹치지 않게 비운다
@@ -185,7 +201,7 @@ export default function AppOverview() {
                       <span className="font-mono text-fg-2 truncate">{b.build_id}</span>
                       <span className="truncate">{b.branch || "—"}</span>
                       <span className="text-fg-3">{relativeTime(b.created_at)}</span>
-                    </div>
+                    </Link>
                   ))}
                 </div>
               ) : (

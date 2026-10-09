@@ -12,6 +12,7 @@
 //   {fill: "셀렉터", value: "값"}          입력
 //   {expect: "셀렉터"}                     보이는지 확인
 //   {expectText: "문자열"}                 본문에 해당 문자열이 있는지 확인
+//   {expectUrl: "/env"}                   현재 주소가 해당 문자열을 포함하는지 확인
 //   {absent: "문자열"}                     본문에 없어야 하는 문자열
 //   {wait: 800}                           대기(ms)
 //   {shot: "이름"}                         스크린샷
@@ -134,6 +135,8 @@ for (const sc of scenarios) {
       } else if (step.expectText) {
         const body = await page.innerText("body");
         if (!body.includes(step.expectText)) throw new Error(`본문에 "${step.expectText}" 없음`);
+      } else if (step.expectUrl) {
+        if (!page.url().includes(step.expectUrl)) throw new Error(`URL이 ${step.expectUrl} 를 포함하지 않음: ${page.url()}`);
       } else if (step.absent) {
         const body = await page.innerText("body");
         if (body.includes(step.absent)) throw new Error(`본문에 "${step.absent}" 가 있으면 안 됨`);
