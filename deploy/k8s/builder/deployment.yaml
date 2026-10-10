@@ -35,7 +35,7 @@ spec:
                   - { key: kubernetes.io/hostname, operator: In, values: [worker2] }
       containers:
         - name: builder
-          image: ghcr.io/kodeploy/kodeploy-builder:sha-dc133f9@sha256:50f6f60f1491a52c451521a79693af9e5fb100bbd18d5ce863183c036ff07aee
+          image: ghcr.io/kodeploy/kodeploy-builder:sha-05c42af@sha256:b802475f381518797c6372d1533e832590a920439a6daf2108da21b743706de0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
