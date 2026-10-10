@@ -58,6 +58,10 @@ export default function Privacy() {
           배포 설정 저장소의 변경 이력: 앱 이름, 주소, 내부 식별자 같은 배포 설정 이력이 남을 수 있습니다.
           환경변수와 비밀 값은 담기지 않습니다.
         </Bullet>
+        <Bullet>
+          운영자 조치 기록: 운영자가 이용자의 앱이나 계정에 조치한 기록(앱 이름, GitHub 아이디, 조치 내용, 시각)은
+          운영 확인을 위해 보관합니다.
+        </Bullet>
         <Bullet>관계 법령에 따라 보관해야 하는 정보는 해당 기간 동안 보관합니다.</Bullet>
       </Section>
 
@@ -92,7 +96,11 @@ export default function Privacy() {
 
       <Section title="7. 안전성 확보 조치">
         <Bullet>전송 구간 암호화(HTTPS)와 로그인 세션의 서버 측 관리</Bullet>
-        <Bullet>이용자별 실행 환경 분리, 앱 소유자만 접근할 수 있는 접근 통제</Bullet>
+        <Bullet>이용자별 실행 환경 분리, 앱 소유자와 초대한 멤버만 접근할 수 있는 접근 통제</Bullet>
+        <Bullet>
+          운영자는 장애 대응과 서비스 운영을 위해 이용자의 앱(설정, 로그, 실행 환경, 데이터베이스)에 접근할 수
+          있습니다. 앱을 바꾸거나 터미널에 접속한 조치는 기록으로 남깁니다.
+        </Bullet>
         <Bullet>환경변수 같은 비밀 값은 클러스터의 암호화된 저장소(Secret)에 보관</Bullet>
       </Section>
 

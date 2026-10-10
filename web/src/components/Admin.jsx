@@ -1,19 +1,21 @@
 // 관리자 페이지 (/admin) — role admin/root만 진입 (TopBar 링크도 동일 조건).
 //
-// - 통계 카드: 가입자 · 배포된 앱 · 총 빌드(성공/실패) · 최근 24h
-//   "총 빌드" 클릭 → 빌드 기록 테이블 토글 (단계별 소요시간 포함)
-// - 노드: CPU/메모리/디스크 사용량 바 (kubelet stats/summary, 30s 폴링)
-//   노드 카드 클릭 → 그 노드 Pod별 사용량+limit 테이블 펼침
-// - 가입자 테이블: tenant · 앱 · 도메인 · 빌드 수 · 마지막 빌드 · 등급
-//   등급 select는 root에게만, 대상이 root/본인이면 잠김.
+// 탭으로 나눈다 (?tab= 으로 새로고침·뒤로가기에도 남는다):
+// - 개요: 통계 카드(가입자 · 앱 · 총 빌드 · 최근 24h) + 빌드 기록 토글 + 노드 사용량(30s 폴링, 카드 클릭 → Pod 표)
+// - 유저: 권한 · 앱 등급 · 빌드 집계. 행을 펼치면 그 유저의 앱과 (root) 계정 강제 탈퇴
+// - 앱: 전체 앱. 행을 펼치면 선택 스택 · Pod 상태 · 앱 화면 열기 (root=주인 권한, admin=보기)
+// - 등급: 등급별 앱 수 (root만 고친다)
+// - 기록: 관리자가 남의 앱·계정에 한 동작
+// 권한 select·등급 select·강제 탈퇴는 root에게만, 대상이 root/본인이면 잠긴다.
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { ChevronDown } from "lucide-react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { ArrowRight, ChevronDown } from "lucide-react";
 import {
   getNodePods,
   getNodes,
   getOverview,
-  getUserTenant,
+  listAdminActions,
+  listAdminApps,
   listBuildRecords,
   listUsers,
   setUserRole,
@@ -23,9 +25,21 @@ import {
 } from "../api/admin.js";
 import { useAuth } from "../contexts/AuthContext.jsx";
 import { relativeTime } from "../lib/format.js";
+import AdminActions from "./admin/AdminActions.jsx";
+import AdminApps from "./admin/AdminApps.jsx";
+import DeleteUserModal from "./admin/DeleteUserModal.jsx";
+import { BUILD_STATUS_COLORS, BUILD_STATUS_LABEL, Hint, SectionTitle, TableHead } from "./admin/atoms.jsx";
 
 const ADMIN_ROLES = ["admin", "root"];
 const NODE_POLL_MS = 30000;
+
+const TABS = [
+  { id: "overview", label: "개요" },
+  { id: "users", label: "유저" },
+  { id: "apps", label: "앱" },
+  { id: "tiers", label: "등급" },
+  { id: "actions", label: "기록" },
+];
 
 const GiB = 1024 ** 3;
 const MiB = 1024 ** 2;
@@ -48,13 +62,6 @@ const fmtDuration = (sec) => {
   return m > 0 ? `${m}분 ${s}초` : `${s}초`;
 };
 
-const BUILD_STATUS_COLORS = {
-  running: "var(--ok-fg)",   // 성공 (롤아웃 완료)
-  failed: "var(--err-fg)",
-  cancelled: "var(--fg-3)",
-  building: "var(--warn-fg)",  // 진행 중 (아직 마감 안 됨)
-};
-
 const ROLE_COLORS = {
   root: "var(--warn-fg)",
   admin: "var(--accent)",
@@ -63,19 +70,24 @@ const ROLE_COLORS = {
 
 export default function Admin() {
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
   const { user, loading: authLoading, openLogin } = useAuth();
   const [overview, setOverview] = useState(null);
   const [users, setUsers] = useState([]);
+  const [apps, setApps] = useState(null);                  // null=로딩
   const [tiers, setTiers] = useState([]);                  // 앱 개수 등급 [{name, max_apps, users}]
   const [nodes, setNodes] = useState(null);               // null=로딩
+  const [actions, setActions] = useState(null);           // 기록 탭 첫 오픈 때 읽는다
   const [error, setError] = useState(null);
   // "총 빌드" 카드 드릴다운 — 열 때 1회 fetch 후 캐시 (닫았다 열어도 재요청 X)
   const [showBuilds, setShowBuilds] = useState(false);
   const [buildRecords, setBuildRecords] = useState(null);
-  // 유저 row 드릴다운 — 한 번에 한 명만 펼침. 상세는 id별 캐시.
+  // 유저 row 드릴다운 — 한 번에 한 명만 펼친다
   const [expandedUser, setExpandedUser] = useState(null);
-  const [tenantDetails, setTenantDetails] = useState({});
+  const [deleting, setDeleting] = useState(null);         // 강제 탈퇴 확인 중인 유저
 
+  const tab = TABS.some((t) => t.id === params.get("tab")) ? params.get("tab") : "overview";
+  const setTab = (id) => setParams(id === "overview" ? {} : { tab: id }, { replace: true });
   const isAdmin = user && ADMIN_ROLES.includes(user.role);
 
   // 가드 — 미로그인은 로그인 유도, 일반 user는 홈으로.
@@ -91,17 +103,20 @@ export default function Admin() {
     }
   }, [authLoading, user, openLogin, navigate]);
 
-  // 통계 + 유저 목록 — 마운트 시 1회 (수동 새로고침은 노드 영역 버튼).
-  useEffect(() => {
-    if (!isAdmin) return;
-    Promise.all([getOverview(), listUsers(), listTiers()])
-      .then(([ov, us, ts]) => {
+  // 통계 + 유저 + 앱 + 등급 — 마운트 시 1회. 강제 탈퇴 뒤에도 다시 읽는다.
+  const loadAll = () =>
+    Promise.all([getOverview(), listUsers(), listAdminApps(), listTiers()])
+      .then(([ov, us, as, ts]) => {
         setOverview(ov);
         setUsers(us);
+        setApps(as);
         setTiers(ts);
         setError(null);
       })
       .catch((e) => setError(e.message || "조회 실패"));
+
+  useEffect(() => {
+    if (isAdmin) loadAll();
   }, [isAdmin]);
 
   // 빌드 기록 — 드릴다운 첫 오픈 시 fetch.
@@ -112,9 +127,20 @@ export default function Admin() {
       .catch(() => setBuildRecords([]));
   }, [isAdmin, showBuilds, buildRecords]);
 
-  // 노드 리소스 — 30초 폴링.
+  // 관리자 기록 — 기록 탭을 열 때마다 새로 읽는다 (앱 화면에서 바꾸고 돌아오면 바로 보이게).
   useEffect(() => {
-    if (!isAdmin) return;
+    if (!isAdmin || tab !== "actions") return;
+    listAdminActions()
+      .then(setActions)
+      .catch((e) => {
+        setActions([]);
+        setError(e.message || "기록 조회 실패");
+      });
+  }, [isAdmin, tab]);
+
+  // 노드 리소스 — 개요 탭에서만 30초 폴링.
+  useEffect(() => {
+    if (!isAdmin || tab !== "overview") return;
     let cancelled = false;
     let timer;
     const tick = async () => {
@@ -133,25 +159,9 @@ export default function Admin() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [isAdmin]);
+  }, [isAdmin, tab]);
 
   if (authLoading || !isAdmin) return null;
-
-  // 유저 row 클릭 — 펼침 토글 + 첫 오픈 시 테넌트 상세 fetch.
-  const toggleUser = (u) => {
-    const next = expandedUser === u.id ? null : u.id;
-    setExpandedUser(next);
-    if (next && !tenantDetails[u.id]) {
-      getUserTenant(u.id)
-        .then((d) => setTenantDetails((prev) => ({ ...prev, [u.id]: d })))
-        .catch((e) =>
-          setTenantDetails((prev) => ({
-            ...prev,
-            [u.id]: { error: e.message || "조회 실패" },
-          })),
-        );
-    }
-  };
 
   const handleRoleChange = async (target, role) => {
     try {
@@ -160,7 +170,7 @@ export default function Admin() {
         prev.map((u) => (u.id === target.id ? { ...u, role } : u)),
       );
     } catch (e) {
-      setError(e.message || "등급 변경 실패");
+      setError(e.message || "권한 변경 실패");
     }
   };
 
@@ -184,12 +194,33 @@ export default function Admin() {
     }
   };
 
+  const counts = { users: users.length, apps: apps?.length };
+
   return (
     <div className="kd-page kd-fade-in" style={{ paddingTop: 28, paddingBottom: 72 }}>
       <h1 className="kd-t-title text-fg-1">관리자</h1>
       <p className="kd-t-body-s text-fg-2" style={{ marginTop: 6 }}>
-        가입 · 빌드 · 노드 현황
+        가입 · 앱 · 빌드 · 노드 현황과 관리자 조치
       </p>
+
+      {/* 탭 — 빌드 상세(BuildDetail)와 같은 모양. 라벨 옆 숫자는 개수만 */}
+      <div
+        className="flex items-center overflow-x-auto scroll-thin"
+        style={{ marginTop: 22, gap: 8, borderBottom: "1px solid var(--kd-border)" }}
+      >
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            aria-pressed={tab === t.id}
+            className="kd-t-label kd-pick-x kd-pick-x-edge inline-flex items-center shrink-0"
+            style={{ height: "var(--tabbar-h)", paddingInline: 17, color: "var(--fg-3)", gap: 6 }}
+          >
+            <span className="kd-pick-name">{t.label}</span>
+            {counts[t.id] != null && <span className="kd-t-caption text-fg-3 tabular-nums">{counts[t.id]}</span>}
+          </button>
+        ))}
+      </div>
 
       {error && (
         <div
@@ -206,120 +237,104 @@ export default function Admin() {
         </div>
       )}
 
-      {/* 통계 — 카드 한 장을 세로 괘선으로 4칸 나눈다(랜딩 피처 3열과 같은 규칙) */}
-      <div className="kd-card kd-stat-row" style={{ marginTop: 26 }}>
-        <StatCard
-          label="가입자"
-          value={overview?.users.total}
-          sub={`7일 +${overview?.users.signups_7d ?? "—"}`}
-        />
-        <StatCard
-          label="배포된 앱"
-          value={overview?.users.with_app}
-          sub="app_name 보유 유저"
-        />
-        <StatCard
-          label="총 빌드"
-          value={overview?.builds.total}
-          sub={`성공 ${overview?.builds.succeeded ?? "—"} · 실패 ${overview?.builds.failed ?? "—"}`}
-          onClick={() => setShowBuilds((v) => !v)}
-          active={showBuilds}
-        />
-        <StatCard
-          label="최근 24시간"
-          value={overview?.builds.last_24h}
-          sub={`평균 성공 소요 ${fmtDuration(overview?.builds.avg_success_seconds)}`}
-        />
-      </div>
-
-      {/* 빌드 기록 — "총 빌드" 카드 토글 */}
-      {showBuilds && (
+      {tab === "overview" && (
         <>
-          <SectionTitle title="빌드 기록 (최근 100건)" />
-          <div className="mb-10">
-            <BuildRecordsTable records={buildRecords} />
+          {/* 통계 — 카드 한 장을 세로 괘선으로 4칸 나눈다(랜딩 피처 3열과 같은 규칙) */}
+          <div className="kd-card kd-stat-row" style={{ marginTop: 26 }}>
+            <StatCard
+              label="가입자"
+              value={overview?.users.total}
+              sub={`7일 +${overview?.users.signups_7d ?? "—"}`}
+            />
+            <StatCard
+              label="앱"
+              value={apps?.length}
+              sub={`앱 가진 유저 ${overview?.users.with_app ?? "—"}명`}
+            />
+            <StatCard
+              label="총 빌드"
+              value={overview?.builds.total}
+              sub={`성공 ${overview?.builds.succeeded ?? "—"} · 실패 ${overview?.builds.failed ?? "—"}`}
+              onClick={() => setShowBuilds((v) => !v)}
+              active={showBuilds}
+            />
+            <StatCard
+              label="최근 24시간"
+              value={overview?.builds.last_24h}
+              sub={`평균 성공 소요 ${fmtDuration(overview?.builds.avg_success_seconds)}`}
+            />
+          </div>
+
+          {/* 빌드 기록 — "총 빌드" 카드 토글 */}
+          {showBuilds && (
+            <>
+              <SectionTitle title="빌드 기록 (최근 100건)" />
+              <div className="mb-10">
+                <BuildRecordsTable records={buildRecords} />
+              </div>
+            </>
+          )}
+
+          <SectionTitle title="노드" />
+          <div className="flex flex-col gap-3 mb-10">
+            {nodes === null && <Hint>노드 정보를 불러오는 중…</Hint>}
+            {nodes?.length === 0 && <Hint>노드 정보를 불러오지 못했어요.</Hint>}
+            {nodes?.map((n) => (
+              <NodeCard key={n.name} node={n} />
+            ))}
           </div>
         </>
       )}
 
-      {/* 노드 현황 */}
-      <SectionTitle title="노드" />
-      <div className="flex flex-col gap-3 mb-10">
-        {nodes === null && <Hint>노드 정보를 불러오는 중…</Hint>}
-        {nodes?.length === 0 && <Hint>노드 정보를 불러오지 못했어요.</Hint>}
-        {nodes?.map((n) => (
-          <NodeCard key={n.name} node={n} />
-        ))}
-      </div>
-
-      {/* 앱 개수 등급 — 등급별로 만들 수 있는 앱 수. root만 고친다 */}
-      <SectionTitle title="앱 개수 등급" />
-      <TierTable tiers={tiers} me={user} onLimit={handleLimitChange} />
-
-      {/* 가입자 테이블 */}
-      <SectionTitle title="가입자" />
-      <div className="kd-table-wrap" style={{ marginTop: 14 }}>
-        <table className="w-full kd-t-body-s" style={{ borderCollapse: "collapse" }}>
-          <thead>
-            <tr className="kd-t-micro text-fg-3 text-left">
-              {["유저", "등급", "앱 등급", "앱 / 테넌트", "도메인", "빌드", "마지막 빌드", "가입"].map(
-                (h) => (
-                  <th
-                    key={h}
-                    className="px-4"
-                    style={{ height: "var(--row-md)", borderBottom: "1px solid var(--kd-border)", fontWeight: 500 }}
-                  >
-                    {h}
-                  </th>
-                ),
+      {tab === "users" && (
+        <div className="kd-table-wrap overflow-x-auto scroll-thin" style={{ marginTop: 14 }}>
+          <table className="w-full kd-t-body-s" style={{ borderCollapse: "collapse" }}>
+            <TableHead cols={["유저", "권한", "앱 등급", "빌드", "마지막 빌드", "가입"]} />
+            <tbody>
+              {users.map((u) => (
+                <UserRow
+                  key={u.id}
+                  u={u}
+                  me={user}
+                  apps={(apps || []).filter((a) => a.owner_id === u.id)}
+                  expanded={expandedUser === u.id}
+                  onToggle={() => setExpandedUser((cur) => (cur === u.id ? null : u.id))}
+                  onRoleChange={handleRoleChange}
+                  tiers={tiers}
+                  onTierChange={handleTierChange}
+                  onDelete={() => setDeleting(u)}
+                />
+              ))}
+              {users.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center kd-t-caption text-fg-3">
+                    가입자가 없어요.
+                  </td>
+                </tr>
               )}
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((u) => (
-              <UserRow
-                key={u.id}
-                u={u}
-                me={user}
-                expanded={expandedUser === u.id}
-                detail={tenantDetails[u.id]}
-                onToggle={() => toggleUser(u)}
-                onRoleChange={handleRoleChange}
-                tiers={tiers}
-                onTierChange={handleTierChange}
-              />
-            ))}
-            {users.length === 0 && (
-              <tr>
-                <td colSpan={8} className="px-4 py-8 text-center kd-t-caption text-fg-3">
-                  가입자가 없어요.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-// 섹션 제목 + 아래 괘선 — 앱 개요(AppOverview.Section)와 같은 모양.
-function SectionTitle({ title, action }) {
-  return (
-    <div
-      className="flex items-baseline gap-4"
-      style={{ marginTop: 34, paddingBottom: 12, borderBottom: "1px solid var(--kd-border)" }}
-    >
-      <h2 className="kd-t-section text-fg-1">{title}</h2>
-      {action}
-    </div>
-  );
-}
+      {tab === "apps" && <AdminApps apps={apps} me={user} />}
 
-function Hint({ children }) {
-  return (
-    <div className="kd-t-caption text-fg-3" style={{ paddingBlock: 16 }}>
-      {children}
+      {tab === "tiers" && <TierTable tiers={tiers} me={user} onLimit={handleLimitChange} />}
+
+      {tab === "actions" && <AdminActions actions={actions} appIds={new Set((apps || []).map((a) => a.id))} />}
+
+      {deleting && (
+        <DeleteUserModal
+          target={deleting}
+          onClose={() => setDeleting(null)}
+          onDone={() => {
+            setDeleting(null);
+            setExpandedUser(null);
+            setActions(null);
+            loadAll();
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -415,8 +430,8 @@ function BuildRecordsTable({ records }) {
   );
 }
 
-// 가입자 row + 클릭 펼침 (테넌트 상세). 등급 select·앱 링크 클릭은 토글에 안 걸리게 차단.
-function UserRow({ u, me, expanded, detail, onToggle, onRoleChange, tiers, onTierChange }) {
+// 가입자 row + 클릭 펼침 (그 유저의 앱 · 강제 탈퇴). 권한·등급 select 클릭은 토글에 안 걸리게 차단.
+function UserRow({ u, me, apps, expanded, onToggle, onRoleChange, tiers, onTierChange, onDelete }) {
   return (
     <>
       <tr
@@ -427,7 +442,7 @@ function UserRow({ u, me, expanded, detail, onToggle, onRoleChange, tiers, onTie
           cursor: "pointer",
           background: expanded ? "var(--sel-soft)" : "transparent",
         }}
-        title={expanded ? "테넌트 상세 접기" : "테넌트 상세 보기"}
+        title={expanded ? "앱 목록 접기" : "앱 목록 보기"}
       >
         <td className="px-4" style={{ height: "var(--row-lg)" }}>
           <div className="flex items-center gap-2 min-w-0">
@@ -439,7 +454,7 @@ function UserRow({ u, me, expanded, detail, onToggle, onRoleChange, tiers, onTie
                 style={{ border: "1px solid var(--kd-border)" }}
               />
             )}
-            <span className="truncate" className="kd-strong" style={{ color: "var(--fg-1)" }}>
+            <span className="truncate kd-strong" style={{ color: "var(--fg-1)" }}>
               {u.login}
             </span>
             <ChevronDown
@@ -456,28 +471,6 @@ function UserRow({ u, me, expanded, detail, onToggle, onRoleChange, tiers, onTie
         <td className="px-4" style={{ height: "var(--row-lg)" }} onClick={(e) => e.stopPropagation()}>
           <TierCell user={u} me={me} tiers={tiers} onChange={onTierChange} />
         </td>
-        <td className="px-4" style={{ height: "var(--row-lg)" }}>
-          {u.app_name ? (
-            <div className="min-w-0">
-              <a
-                href={`https://${u.app_name}.kodeploy.com`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hover:underline"
-                style={{ color: "var(--accent)", fontWeight: 510 }}
-                onClick={(e) => e.stopPropagation()}
-              >
-                {u.app_name}
-              </a>
-              <div className="kd-t-code text-fg-3">{u.tenant_id}</div>
-            </div>
-          ) : (
-            <span className="text-fg-4">—</span>
-          )}
-        </td>
-        <td className="px-4" style={{ height: "var(--row-lg)" }}>
-          {u.custom_domain || <span className="text-fg-4">—</span>}
-        </td>
         <td className="px-4 tabular-nums">{u.build_count}</td>
         <td className="px-4 text-fg-3 tabular-nums">
           {u.last_build_at ? relativeTime(u.last_build_at) : "—"}
@@ -488,8 +481,8 @@ function UserRow({ u, me, expanded, detail, onToggle, onRoleChange, tiers, onTie
       </tr>
       {expanded && (
         <tr style={{ borderBottom: "1px solid var(--kd-border)" }}>
-          <td colSpan={8} className="px-4 py-4" style={{ background: "var(--sel-soft)" }}>
-            <TenantDetail detail={detail} />
+          <td colSpan={6} className="px-4 py-4" style={{ background: "var(--sel-soft)" }}>
+            <UserApps user={u} me={me} apps={apps} onDelete={onDelete} />
           </td>
         </tr>
       )}
@@ -497,116 +490,50 @@ function UserRow({ u, me, expanded, detail, onToggle, onRoleChange, tiers, onTie
   );
 }
 
-// 펼침 내용 — 선택 스택 chips + 테넌트 Pod 상태 테이블.
-function TenantDetail({ detail }) {
-  if (!detail) return <Hint>테넌트 정보를 불러오는 중…</Hint>;
-  if (detail.error)
-    return (
-      <div className="kd-t-caption" style={{ color: "var(--err-fg)" }}>
-        {detail.error}
-      </div>
-    );
-
-  const cfg = detail.config;
-  if (!cfg && detail.pods.length === 0) {
-    return <Hint>아직 배포한 앱이 없어요.</Hint>;
-  }
-
-  // 선택 스택 → chips. db "none"/redis off/storage off는 표시 안 함.
-  const chips = [];
-  if (cfg) {
-    chips.push({ label: { python: "Python", java: "Java", php: "PHP", javascript: "JavaScript", go: "Go" }[cfg.runtime] || cfg.runtime, color: "var(--brand-fg)" });
-    if (cfg.db_type && cfg.db_type !== "none")
-      chips.push({ label: cfg.db_type === "mysql" ? "MySQL" : "PostgreSQL", color: "var(--info-fg)" });
-    if (cfg.use_redis) chips.push({ label: "Redis", color: "var(--err-fg)" });
-    if (cfg.use_storage) chips.push({ label: "스토리지 (R2)", color: "var(--warn-fg)" });
-    if (cfg.volume_mount_path) chips.push({ label: "스토리지 (로컬)", color: "var(--warn-fg)" });
-    chips.push({
-      label: cfg.build_mode === "auto" ? "auto (nixpacks)" : "Dockerfile",
-      color: "var(--fg-3)",
-    });
-  }
-
+// 펼침 — 그 유저가 주인인 앱 (누르면 앱 화면) + root면 계정 강제 탈퇴.
+function UserApps({ user: target, me, apps, onDelete }) {
+  const canDelete = me.role === "root" && target.role !== "root" && target.id !== me.id;
   return (
     <div className="flex flex-col gap-3">
-      {cfg && (
-        <>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {chips.map((c) => (
-              <span key={c.label} className="kd-chip" style={{ color: c.color }}>
-                {c.label}
-              </span>
-            ))}
-            <span className="kd-t-caption text-fg-3 ml-1">포트 {cfg.port}</span>
-          </div>
-          <div className="kd-t-caption text-fg-3">
-            <a
-              href={cfg.repo_url.replace(/\.git$/, "")}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:underline"
-              style={{ color: "var(--accent)" }}
-            >
-              {cfg.repo_url.replace(/^https?:\/\/(www\.)?github\.com\//, "").replace(/\.git$/, "")}
-            </a>
-            <span className="text-fg-4"> · {cfg.branch} 브랜치 · 마지막 빌드 {relativeTime(cfg.created_at)}</span>
-          </div>
-        </>
-      )}
-      {detail.pods.length > 0 ? (
-        <div className="kd-table-wrap overflow-x-auto scroll-thin">
-          <table className="w-full kd-t-caption" style={{ borderCollapse: "collapse" }}>
-            <thead>
-              <tr className="kd-t-micro text-fg-3 text-left">
-                {["Pod", "컴포넌트", "상태", "재시작", "시작"].map((h) => (
-                  <th
-                    key={h}
-                    className="px-3 whitespace-nowrap"
-                    style={{ height: "var(--row-sm)", borderBottom: "1px solid var(--kd-border)", fontWeight: 500 }}
-                  >
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {detail.pods.map((p) => (
-                <tr
-                  key={p.name}
-                  className="text-fg-2"
-                  style={{ borderBottom: "1px solid var(--kd-border)" }}
-                >
-                  <td className="px-3 font-mono" style={{ color: "var(--fg-1)" }}>
-                    {p.name}
-                  </td>
-                  <td className="px-3 text-fg-3">{p.component || "—"}</td>
-                  <td className="px-3">
-                    <span
-                      style={{
-                        color:
-                          p.phase === "Running" && p.ready
-                            ? "var(--ok-fg)"
-                            : p.phase === "Running"
-                              ? "var(--warn-fg)"
-                              : "var(--err-fg)",
-                        fontWeight: 590,
-                      }}
-                    >
-                      {p.phase}
-                      {p.phase === "Running" && !p.ready && " (NotReady)"}
-                    </span>
-                  </td>
-                  <td className="px-3 tabular-nums">{p.restarts}</td>
-                  <td className="px-3 text-fg-3 tabular-nums whitespace-nowrap">
-                    {p.started_at ? relativeTime(p.started_at) : "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      {apps.length === 0 ? (
+        <Hint>만든 앱이 없어요.</Hint>
       ) : (
-        <Hint>테넌트 네임스페이스에 실행 중인 Pod이 없어요.</Hint>
+        <div className="flex flex-col">
+          {apps.map((a) => (
+            <Link
+              key={a.id}
+              to={`/apps/${a.id}`}
+              className="flex items-center gap-3 no-underline kd-hoverable"
+              style={{ height: "var(--row-md)", paddingInline: 4, borderBottom: "1px solid var(--line-1)" }}
+            >
+              <span className="kd-strong" style={{ color: "var(--fg-1)" }}>{a.name}</span>
+              <span className="kd-chip" style={{ color: a.pipeline === "v2" ? "var(--accent)" : "var(--fg-3)" }}>
+                {a.pipeline}
+              </span>
+              {a.last_build ? (
+                <span className="kd-t-caption" style={{ color: BUILD_STATUS_COLORS[a.last_build.status] || "var(--fg-3)" }}>
+                  {BUILD_STATUS_LABEL[a.last_build.status] || a.last_build.status}
+                  <span className="text-fg-3"> · {relativeTime(a.last_build.created_at)}</span>
+                </span>
+              ) : (
+                <span className="kd-t-caption text-fg-4">배포 전</span>
+              )}
+              <ArrowRight size={14} strokeWidth={1.8} className="text-fg-3 ml-auto" />
+            </Link>
+          ))}
+        </div>
+      )}
+      {canDelete && (
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onDelete}
+            className="kd-btn-sm"
+            style={{ background: "transparent", border: "1px solid var(--line-3)", color: "var(--err-fg)" }}
+          >
+            계정 강제 탈퇴
+          </button>
+          <span className="kd-t-caption text-fg-3">앱과 데이터, 계정 정보가 회원 탈퇴와 똑같이 삭제돼요.</span>
+        </div>
       )}
     </div>
   );

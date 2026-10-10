@@ -33,7 +33,7 @@ data:
     TS=$(date -u +%Y%m%d-%H%M%S)
     OUT="/backup/kodeploy-${TS}.sql.gz"
     # 스키마가 늘면 여기에 추가 — 누락 감지의 기준선이다 (core/app/**/model.py의 __tablename__)
-    EXPECTED="users sessions builds build_records posts comments saved_queries apps tiers app_members app_invites"
+    EXPECTED="users sessions builds build_records posts comments saved_queries apps tiers app_members app_invites admin_actions"
 
     echo "[1/3] mysqldump ${DB_NAME} @ ${DB_HOST} ..."
     # --single-transaction : InnoDB 일관 스냅샷을 락 없이 (운영 중 백업이라 필수)

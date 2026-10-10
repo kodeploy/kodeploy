@@ -42,6 +42,28 @@ def access(db: Session, user_id: uuid.UUID, app_id: uuid.UUID) -> tuple[App, str
     return (app, member.role) if member else None
 
 
+# 플랫폼 관리자(users.role)의 최소 단계 — root는 모든 앱에서 주인과 같고, admin은 보기만 한다.
+ADMIN_FLOOR = {"root": "owner", "admin": "viewer"}
+
+
+# access에 관리자 단계를 더한다: (앱, 단계, 관리자 권한으로 들어왔는가). 자기 단계(주인·멤버)가 같거나 높으면 그쪽이고
+# 관리자 표시는 False다. 관리자 권한으로 바꾼 동작은 호출한 쪽이 기록한다 (admin/audit.py).
+def access_for(db: Session, user: User, app_id: uuid.UUID) -> tuple[App, str, bool] | None:
+    app = db.get(App, app_id)
+    if app is None:
+        return None
+    own = None
+    if app.owner_id == user.id:
+        own = "owner"
+    else:
+        member = db.get(AppMember, (app_id, user.id))
+        own = member.role if member else None
+    floor = ADMIN_FLOOR.get(user.role or "")
+    if floor and (own is None or RANK[floor] > RANK[own]):
+        return app, floor, True
+    return (app, own, False) if own else None
+
+
 # 내 앱 + 공유받은 앱. (앱, 내 단계, 주인 아이디) — 내 앱이 먼저, 각각 만든 순서.
 def list_accessible(db: Session, user_id: uuid.UUID) -> list[tuple[App, str, str | None]]:
     owned = db.query(App).filter(App.owner_id == user_id).order_by(App.created_at, App.id).all()

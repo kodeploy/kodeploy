@@ -52,6 +52,12 @@ export function listApps() {
   return request("/apps");
 }
 
+// 앱 하나 — 앱 화면이 처음 띄울 때. 내 앱·공유받은 앱에 더해 관리자는 남의 앱도 받는다 (볼 수 없으면 404).
+// 응답: listApps 한 줄 + admin (관리자 권한으로 보는 남의 앱이면 true — root는 role "owner", admin은 "viewer")
+export function getApp(appId) {
+  return request(`/apps/${appId}`);
+}
+
 // 빈 앱 만들기 (이름·ns만 잡는다). 등급 한도를 넘으면 400.
 export function createApp(name, repoUrl = "") {
   return request("/apps", { method: "POST", body: JSON.stringify({ name: name || null, repo_url: repoUrl }) });

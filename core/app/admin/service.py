@@ -13,8 +13,8 @@ from kubernetes.client.exceptions import ApiException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.apps import service as apps_service
-from app.apps.model import App, Tier
+from app.admin import audit
+from app.apps.model import App, AppMember, Tier
 from app.auth.model import User
 from app.deploy.model import Build, BuildRecord
 from app.shared import k8s
@@ -338,24 +338,53 @@ def list_build_records(db: Session, limit: int = 100) -> list[dict]:
     ]
 
 
-# 유저 테넌트 상세 — 가입자 row 드릴다운용.
-# 1) 선택 스택: 최신 빌드 row(builds, kind="build")의 runtime/db_type/use_redis/use_storage 등.
-#    delete_app이 builds를 지우므로 앱 삭제 후엔 config=None (영구 기록이 필요한 건
-#    build_records가 담당, 여기는 "현재 구성"이 목적이라 의도된 동작).
-# 2) 실제 상태: 테넌트 ns의 Pod 목록 (phase/ready/restarts) — ns 없으면 빈 리스트.
-def user_tenant_detail(db: Session, user_id: uuid.UUID) -> dict:
-    user = db.query(User).filter_by(id=user_id).first()
-    if not user:
-        raise ValueError("유저를 찾을 수 없습니다")
-    app = apps_service.get_user_app(db, user.id)
-    tenant_id = app.namespace if app else None
+# --- 앱 ----------------------------------------------------------------------
+
+# 전체 앱 목록 — 관리자 앱 탭. 주인·멤버 수·마지막 배포(빌드 행 기준)를 붙인다. 최신 앱이 먼저.
+def list_apps(db: Session) -> list[dict]:
+    apps = db.query(App).order_by(App.created_at.desc(), App.id).all()
+    logins = dict(db.query(User.id, User.login).all())
+    members = dict(db.query(AppMember.app_id, func.count()).group_by(AppMember.app_id).all())
+    last: dict = {}   # 앱별 마지막 배포 (환경변수 변경 행은 빼고)
+    for app_id, status, runtime, created in (
+        db.query(Build.app_id, Build.status, Build.runtime, Build.created_at)
+        .filter(Build.app_id.isnot(None), Build.kind == "build")
+        .order_by(Build.created_at.desc())
+        .all()
+    ):
+        last.setdefault(app_id, {"status": status, "runtime": runtime, "created_at": created.isoformat()})
+    return [
+        {
+            "id": str(a.id),
+            "name": a.name,
+            "namespace": a.namespace,
+            "pipeline": a.pipeline,
+            "site_enabled": a.site_enabled,
+            "custom_domain": a.custom_domain,
+            "owner_id": str(a.owner_id),
+            "owner_login": logins.get(a.owner_id),
+            "member_count": members.get(a.id, 0),
+            "last_build": last.get(a.id),
+            "created_at": a.created_at.isoformat(),
+        }
+        for a in apps
+    ]
+
+
+# 앱 상세 — 앱 탭 행 드릴다운.
+# 1) 선택 스택: 최신 서버 빌드 행(builds, kind="build")의 runtime/db_type/use_redis/use_storage 등.
+#    delete_app이 builds를 지우므로 앱 삭제 후엔 config=None (영구 기록은 build_records 몫).
+# 2) 실제 상태: 앱 ns의 Pod 목록 (phase/ready/restarts) — ns 없으면 빈 리스트.
+def app_detail(db: Session, app_id: uuid.UUID) -> dict:
+    app = db.get(App, app_id)
+    if app is None:
+        raise ValueError("앱을 찾을 수 없습니다")
 
     latest = (
         db.query(Build)
-        .filter_by(app_id=app.id, kind="build")
+        .filter(Build.app_id == app.id, Build.kind == "build", Build.runtime != "static")
         .order_by(Build.created_at.desc())
         .first()
-        if app else None
     )
     config = None
     if latest:
@@ -374,35 +403,46 @@ def user_tenant_detail(db: Session, user_id: uuid.UUID) -> dict:
         }
 
     pods = []
-    if app:
-        try:
-            pod_list = k8s.core_v1().list_namespaced_pod(namespace=tenant_id)
-            for p in pod_list.items:
-                statuses = p.status.container_statuses or []
-                conditions = p.status.conditions or []
-                pods.append({
-                    "name": p.metadata.name,
-                    # app 라벨로 컴포넌트 구분 (앱 이름 / mysql / postgres / redis)
-                    "component": (p.metadata.labels or {}).get("app", ""),
-                    "phase": p.status.phase,
-                    "ready": any(
-                        c.type == "Ready" and c.status == "True" for c in conditions
-                    ),
-                    "restarts": sum(cs.restart_count or 0 for cs in statuses),
-                    "started_at": (
-                        p.status.start_time.isoformat() if p.status.start_time else None
-                    ),
-                })
-        except ApiException as e:
-            if e.status != 404:  # ns 없음(배포 전/삭제 직후) — 빈 리스트가 정답
-                raise
-        pods.sort(key=lambda x: x["name"])
+    try:
+        for p in k8s.core_v1().list_namespaced_pod(namespace=app.namespace).items:
+            statuses = p.status.container_statuses or []
+            conditions = p.status.conditions or []
+            pods.append({
+                "name": p.metadata.name,
+                # app 라벨로 컴포넌트 구분 (앱 이름 / {앱}-static / mysql / postgres / redis)
+                "component": (p.metadata.labels or {}).get("app", ""),
+                "phase": p.status.phase,
+                "ready": any(c.type == "Ready" and c.status == "True" for c in conditions),
+                "restarts": sum(cs.restart_count or 0 for cs in statuses),
+                "started_at": p.status.start_time.isoformat() if p.status.start_time else None,
+            })
+    except ApiException as e:
+        if e.status != 404:  # ns 없음(배포 전/삭제 직후) — 빈 리스트가 정답
+            raise
+    pods.sort(key=lambda x: x["name"])
 
     return {
-        "login": user.login,
-        "app_name": app.name if app else None,
-        "tenant_id": tenant_id,
-        "custom_domain": app.custom_domain if app else None,
+        "id": str(app.id),
+        "name": app.name,
+        "namespace": app.namespace,
+        "custom_domain": app.custom_domain,
         "config": config,
         "pods": pods,
     }
+
+
+# --- 관리자 동작 기록 ---------------------------------------------------------
+
+def list_actions(db: Session, limit: int = 200) -> list[dict]:
+    return [
+        {
+            "id": a.id,
+            "actor_login": a.actor_login,
+            "app_id": str(a.app_id) if a.app_id else None,
+            "app_name": a.app_name,
+            "target_login": a.target_login,
+            "action": a.action,
+            "created_at": a.created_at.isoformat(),
+        }
+        for a in audit.recent(db, limit)
+    ]

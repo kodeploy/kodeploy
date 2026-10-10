@@ -264,6 +264,19 @@ export default function AppLayout() {
           </div>
         </div>
 
+        {/* 관리자 권한으로 보는 남의 앱 — 여기서 바꾸는 것은 관리자 기록에 남는다 */}
+        {app?.admin && (
+          <div className="kd-page shrink-0">
+            <div
+              className="kd-t-caption mt-3 px-3 py-2"
+              style={{ border: "1px solid var(--kd-border)", borderRadius: 4, color: "var(--warn-fg)" }}
+            >
+              관리자로 보는 중 · 주인 {app.owner_login || "알 수 없음"} ·{" "}
+              {app.role === "owner" ? "주인 권한 — 바꾸는 동작은 관리자 기록에 남아요" : "보기 전용"}
+            </div>
+          </div>
+        )}
+
         {error && (
           <div className="kd-page shrink-0">
             <div

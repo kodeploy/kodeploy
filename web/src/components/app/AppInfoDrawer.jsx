@@ -110,7 +110,11 @@ export default function AppInfoDrawer({ ctx, onClose }) {
             <PodStatus status={podStatus} />
           </div>
 
-          {app?.role && app.role !== "owner" && (
+          {app?.admin ? (
+            <div className="kd-t-body-s text-fg-2" style={{ marginTop: 4 }}>
+              관리자로 보는 중{app.owner_login ? ` · ${app.owner_login}` : ""} · {ROLE_LABEL[app.role] || app.role} 권한
+            </div>
+          ) : app?.role && app.role !== "owner" && (
             <div className="kd-t-body-s text-fg-2" style={{ marginTop: 4 }}>
               공유받음{app.owner_login ? ` · ${app.owner_login}` : ""} · {ROLE_LABEL[app.role] || app.role} 권한
             </div>

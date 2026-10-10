@@ -6,9 +6,10 @@
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.admin import audit
 from app.apps import service, sharing
 from app.apps.model import App
 from app.apps.schemas import AppCreate, AppOut, InviteCreate, InviteOut, RoleUpdate
@@ -21,10 +22,10 @@ router = APIRouter(prefix="/apps", tags=["apps"])
 invites_router = APIRouter(prefix="/invites", tags=["apps"])
 
 
-def _out(app: App, role: str, owner_login: str | None) -> AppOut:
+def _out(app: App, role: str, owner_login: str | None, admin: bool = False) -> AppOut:
     return AppOut(
         id=app.id, name=app.name, site_enabled=app.site_enabled, custom_domain=app.custom_domain,
-        created_at=app.created_at, role=role, owner_login=owner_login, pipeline=app.pipeline,
+        created_at=app.created_at, role=role, owner_login=owner_login, pipeline=app.pipeline, admin=admin,
     )
 
 
@@ -52,16 +53,31 @@ def create_app(
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# 앱 하나 — 앱 화면이 처음 띄울 때 부른다. 내 앱·공유받은 앱에 더해, 관리자는 남의 앱도 본다 (root=주인, admin=보기).
+@router.get("/{app_id}", response_model=AppOut)
+def get_app(app_id: uuid.UUID, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    found = sharing.access_for(db, user, app_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="app not found")
+    app, role, by_admin = found
+    owner = None if app.owner_id == user.id else db.get(User, app.owner_id)
+    return _out(app, role, owner.login if owner else None, admin=by_admin)
+
+
 # --- 공유 관리 (앱 주인) -------------------------------------------------------
 
 # 주인 앱만. 내 앱이 아니면 404, 멤버가 부르면 403 (앱이 있다는 건 그 멤버도 안다).
-def _owned_app(app_id: uuid.UUID, db: Session, user: User) -> App:
-    found = sharing.access(db, user.id, app_id)
+# root는 남의 앱도 주인처럼 관리하고, 바꾸는 요청이면 기록한다.
+def _owned_app(app_id: uuid.UUID, db: Session, user: User, request: Request | None = None) -> App:
+    found = sharing.access_for(db, user, app_id)
     if found is None:
         raise HTTPException(status_code=404, detail="app not found")
-    if found[1] != "owner":
+    app, role, by_admin = found
+    if role != "owner":
         raise HTTPException(status_code=403, detail="앱 주인만 할 수 있습니다")
-    return found[0]
+    if by_admin and request is not None and request.method != "GET":
+        audit.record(db, user, audit.action_of(request), app=app)
+    return app
 
 
 def _share_error(e: sharing.ShareError) -> HTTPException:
@@ -77,10 +93,11 @@ def members(app_id: uuid.UUID, db: Session = Depends(get_db), user: User = Depen
 def invite(
     app_id: uuid.UUID,
     req: InviteCreate,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    app = _owned_app(app_id, db, user)
+    app = _owned_app(app_id, db, user, request)
     try:
         inv = sharing.invite(db, app, user, req.target, req.role)
     except sharing.ShareError as e:
@@ -92,10 +109,11 @@ def invite(
 def cancel_invite(
     app_id: uuid.UUID,
     invite_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    app = _owned_app(app_id, db, user)
+    app = _owned_app(app_id, db, user, request)
     try:
         sharing.cancel(db, app, invite_id)
     except sharing.ShareError as e:
@@ -108,10 +126,11 @@ def change_role(
     app_id: uuid.UUID,
     user_id: uuid.UUID,
     req: RoleUpdate,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    app = _owned_app(app_id, db, user)
+    app = _owned_app(app_id, db, user, request)
     try:
         sharing.set_role(db, app, user_id, req.role)
     except sharing.ShareError as e:
@@ -124,15 +143,18 @@ def change_role(
 def remove_member(
     app_id: uuid.UUID,
     user_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> dict:
-    found = sharing.access(db, user.id, app_id)
+    found = sharing.access_for(db, user, app_id)
     if found is None:
         raise HTTPException(status_code=404, detail="app not found")
-    app, role = found
+    app, role, by_admin = found
     if role != "owner" and user_id != user.id:
         raise HTTPException(status_code=403, detail="앱 주인만 다른 멤버를 내보낼 수 있습니다")
+    if by_admin and role == "owner":
+        audit.record(db, user, audit.action_of(request), app=app)
     try:
         sharing.remove_member(db, app, user_id)
     except sharing.ShareError as e:

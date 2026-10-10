@@ -5,14 +5,15 @@
 // (/deploy/... 요청이 /apps/{id}/deploy/... 로 간다). 화면 쪽은 user.app_name 대신 useCurrentApp()을 쓴다.
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { Link, Navigate, Outlet, useParams } from "react-router-dom";
-import { listApps, setActiveApp } from "../../api/deploy.js";
+import { getApp, setActiveApp } from "../../api/deploy.js";
 import { useAppShell } from "../../contexts/AppShellContext.jsx";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import { can } from "../../lib/roles.js";
 
 const CurrentAppContext = createContext(null);
 
-// { app, base, refreshApp } — app은 { id, name, site_enabled, custom_domain, role, ... }
+// { app, base, refreshApp } — app은 { id, name, site_enabled, custom_domain, role, admin, ... }
+// admin이 true면 관리자 권한으로 보는 남의 앱이다 (root는 role "owner", admin은 "viewer").
 export function useCurrentApp() {
   const ctx = useContext(CurrentAppContext);
   if (!ctx) throw new Error("useCurrentApp은 /apps/:appId 화면 안에서만 사용");
@@ -49,12 +50,12 @@ export default function AppScope() {
 
   const load = useCallback(async () => {
     try {
-      const apps = await listApps();
-      const found = (apps || []).find((a) => a.id === appId);
-      setApp(found || null);
-      setState(found ? "ready" : "missing");
+      const found = await getApp(appId);
+      setApp(found);
+      setState("ready");
     } catch (err) {
       if (err.status === 401) openLogin?.();
+      setApp(null);
       setState("missing");
     }
   }, [appId, openLogin]);

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, WebSocket
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, WebSocket
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -8,6 +8,7 @@ import re
 import uuid
 from datetime import datetime, timezone
 
+from app.admin import audit
 from app.apps import service as apps_service
 from app.apps import sharing
 from app.apps.model import App
@@ -48,40 +49,46 @@ router = APIRouter(prefix="/deploy", tags=["deploy"])
 #
 # 단계는 owner > editor > viewer (apps/sharing.py). 기본 의존성(current_app*)은 owner를 요구해서, 아래 두 개
 # (viewer_app*, editor_app*)를 명시한 라우트만 멤버에게 열린다 — 새 라우트는 기본이 "주인만"이다.
-def _app_at(app_id: uuid.UUID | None, db: Session, user: User, need: str) -> App | None:
+# 플랫폼 관리자는 남의 앱에도 들어온다 (root=주인, admin=보기). 관리자 권한으로 바꾸는 요청(GET 말고)은 기록한다.
+def _app_at(app_id: uuid.UUID | None, db: Session, user: User, need: str, request: Request | None = None) -> App | None:
     if app_id is None:
         return apps_service.get_user_app(db, user.id)
-    found = sharing.access(db, user.id, app_id)
+    found = sharing.access_for(db, user, app_id)
     if found is None:
         raise HTTPException(status_code=404, detail="app not found")
-    app, role = found
+    app, role, by_admin = found
     if sharing.RANK[role] < sharing.RANK[need]:
         raise HTTPException(status_code=403, detail="이 앱에서 할 수 없는 동작입니다 — 권한이 부족해요")
+    if by_admin and request is not None and request.method != "GET":
+        audit.record(db, user, audit.action_of(request), app=app)
     return app
 
 
 def current_app_or_none(
+    request: Request,
     app_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> App | None:
-    return _app_at(app_id, db, user, "owner")
+    return _app_at(app_id, db, user, "owner", request)
 
 
 def editor_app_or_none(
+    request: Request,
     app_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> App | None:
-    return _app_at(app_id, db, user, "editor")
+    return _app_at(app_id, db, user, "editor", request)
 
 
 def viewer_app_or_none(
+    request: Request,
     app_id: uuid.UUID | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> App | None:
-    return _app_at(app_id, db, user, "viewer")
+    return _app_at(app_id, db, user, "viewer", request)
 
 
 def _required(app: App | None) -> App:
@@ -339,15 +346,23 @@ def _ws_origin_allowed(ws: WebSocket) -> bool:
     return ws.headers.get("origin") in config.ALLOWED_ORIGINS
 
 
-# WebSocket이 가리키는 앱 — /apps/{app_id}/deploy/... 면 그 앱(내 것만), 옛 경로면 유저의 첫 앱.
+# WebSocket이 가리키는 앱 — /apps/{app_id}/deploy/... 면 그 앱(주인 단계만 — 터미널은 주인 전용), 옛 경로면
+# 유저의 첫 앱. root는 남의 앱 터미널에도 들어오고, 그 접속을 기록한다.
 def _ws_app(db: Session, ws: WebSocket, user_id: uuid.UUID) -> App | None:
     raw = ws.path_params.get("app_id")
     if raw is None:
         return apps_service.get_user_app(db, user_id)
+    user = db.get(User, user_id)
     try:
-        return apps_service.get_owned_app(db, user_id, uuid.UUID(raw))
+        found = sharing.access_for(db, user, uuid.UUID(raw)) if user is not None else None
     except ValueError:
         return None
+    if found is None or found[1] != "owner":
+        return None
+    app, _, by_admin = found
+    if by_admin:
+        audit.record(db, user, audit.action_of(ws), app=app)
+    return app
 
 
 # Pod exec WebSocket — xterm.js 프론트와 양방향. cookie로 인증.

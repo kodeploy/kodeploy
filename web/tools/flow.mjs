@@ -129,7 +129,13 @@ for (const sc of scenarios) {
       return route.fulfill({ status: 401, contentType: "application/json", body: '{"detail":"인증 필요"}' });
     const hit = ROUTES.find(([pre]) => p.startsWith(pre));
     if (!hit) return route.fulfill({ status: 404, contentType: "application/json", body: '{"detail":"stub miss"}' });
-    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(hit[1]()) });
+    // 스텁이 { __status } 를 주면 그 상태로 돌려준다 (없는 앱 404 같은 실패 응답)
+    const data = hit[1]();
+    if (data && !Array.isArray(data) && data.__status) {
+      const { __status, ...rest } = data;
+      return route.fulfill({ status: __status, contentType: "application/json", body: JSON.stringify(rest) });
+    }
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(data) });
   });
 
   for (const [i, step] of (sc.steps || []).entries()) {

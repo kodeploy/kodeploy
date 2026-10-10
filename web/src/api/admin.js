@@ -7,8 +7,8 @@ export function getOverview() {
   return request("/admin/overview");
 }
 
-// 가입자 목록 — tenant·빌드 집계 포함.
-// 응답: [{id, login, email, avatar_url, role, app_name, tenant_id, custom_domain,
+// 가입자 목록 — 앱 수·빌드 집계 포함.
+// 응답: [{id, login, email, avatar_url, role, tier, app_count, app_name, tenant_id, custom_domain,
 //         build_count, last_build_at, created_at}]
 export function listUsers() {
   return request("/admin/users");
@@ -36,13 +36,30 @@ export function listBuildRecords() {
   return request("/admin/builds");
 }
 
-// 유저 row 드릴다운 — 선택 스택(runtime/DB/Redis/스토리지) + 테넌트 ns Pod 상태.
-// 응답: { login, app_name, tenant_id, custom_domain,
-//         config: {runtime, db_type, use_redis, use_storage, build_mode, port,
+// 전체 앱 목록 — 응답: [{id, name, namespace, pipeline, site_enabled, custom_domain, owner_id, owner_login,
+//                         member_count, last_build: {status, runtime, created_at} | null, created_at}]
+export function listAdminApps() {
+  return request("/admin/apps");
+}
+
+// 앱 row 드릴다운 — 선택 스택(runtime/DB/Redis/스토리지) + 앱 ns Pod 상태.
+// 응답: { id, name, namespace, custom_domain,
+//         config: {runtime, db_type, use_redis, use_storage, volume_mount_path, build_mode, port,
 //                  repo_url, branch, status, created_at} | null,
 //         pods: [{name, component, phase, ready, restarts, started_at}] }
-export function getUserTenant(userId) {
-  return request(`/admin/users/${userId}/tenant`);
+export function getAdminApp(appId) {
+  return request(`/admin/apps/${appId}`);
+}
+
+// 관리자가 남의 앱·계정에 한 동작 (최신 200건).
+// 응답: [{id, actor_login, app_id, app_name, target_login, action, created_at}] — action은 "PUT /deploy/env" 꼴
+export function listAdminActions() {
+  return request("/admin/actions");
+}
+
+// 계정 강제 탈퇴 (root 전용) — 회원 탈퇴와 같은 정리. 자기 계정·root 계정은 400.
+export function deleteUserAccount(userId) {
+  return request(`/admin/users/${userId}`, { method: "DELETE" });
 }
 
 // 앱 개수 등급 목록 — 응답: [{name, max_apps, users}] (max_apps null = 무제한)

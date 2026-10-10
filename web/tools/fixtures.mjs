@@ -209,6 +209,30 @@ export const ADMIN_BUILDS = [
     build_mode: "dockerfile", started_at: AGO(210), nixpacks_seconds: null, buildkit_seconds: 74, total_seconds: 88, status: "failed", error: "npm ci 실패" },
 ];
 
+// 관리자가 보는 남의 앱 — GET /apps/<id>가 admin: true로 돌려준다 (root면 role owner)
+export const OTHER_APP_ID = "dddddddd-4444-4444-8444-dddddddddddd";
+export const OTHER_APP = {
+  id: OTHER_APP_ID, name: "blog", site_enabled: false, custom_domain: null, created_at: "2026-09-02T00:00:00+00:00",
+  role: (process.env.ME_ROLE ?? "root") === "root" ? "owner" : "viewer", owner_login: "someone", pipeline: "v1", admin: true,
+};
+
+export const ADMIN_APPS = [
+  { id: APP_ID, name: "my-api", namespace: "tenant-1a2b3c4d", pipeline: "v2", site_enabled: true, custom_domain: "api.mine.dev",
+    owner_id: 1, owner_login: "yuntyu01", member_count: 2, last_build: { status: "running", runtime: "python", created_at: AGO(25) },
+    created_at: AGO(60 * 24 * 40) },
+  { id: OTHER_APP_ID, name: "blog", namespace: "tenant-9f8e7d6c", pipeline: "v1", site_enabled: false, custom_domain: null,
+    owner_id: 2, owner_login: "someone", member_count: 0, last_build: { status: "failed", runtime: "javascript", created_at: AGO(210) },
+    created_at: AGO(60 * 24 * 11) },
+  { id: "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", name: "blog-server", namespace: "app-0badf00d", pipeline: "v1", site_enabled: false,
+    custom_domain: null, owner_id: 1, owner_login: "yuntyu01", member_count: 0, last_build: null, created_at: AGO(60 * 24 * 4) },
+];
+
+export const ADMIN_ACTIONS = [
+  { id: 3, actor_login: "yuntyu01", app_id: OTHER_APP_ID, app_name: "blog", target_login: "someone", action: "WS /deploy/app/terminal", created_at: AGO(5) },
+  { id: 2, actor_login: "yuntyu01", app_id: OTHER_APP_ID, app_name: "blog", target_login: "someone", action: "PUT /deploy/env", created_at: AGO(12) },
+  { id: 1, actor_login: "yuntyu01", app_id: "77777777-0000-4000-8000-777777777777", app_name: "old-app", target_login: "gone-user", action: "DELETE /admin/users/{user_id}", created_at: AGO(60 * 30) },
+];
+
 export const ADMIN_PODS = [
   { namespace: "tenant-1a2b3c4d", name: "my-api-7d9f", component: "server", phase: "Running", ready: true,
     restarts: 0, started_at: AGO(300), cpu_used_cores: 0.04, cpu_limit_cores: 0.5,
@@ -233,6 +257,10 @@ export const ROUTES = [
   ["/auth/me", () => ME],
   ["/members", () => MEMBERS],
   ["/invites", () => INVITES],
+  // GET /apps/<id> — 앱 화면이 처음 띄울 때 (목록보다 먼저 매칭돼야 한다)
+  ...APPS.map((a) => [`/apps/${a.id}`, () => a]),
+  [`/apps/${OTHER_APP_ID}`, () => OTHER_APP],
+  ["/apps/", () => ({ __status: 404, detail: "app not found" })],   // 모르는 앱 — 실제 서버도 404 (볼 수 없는 앱)
   ["/apps", () => APPS],
   ["/deploy/app/status", () => APP_STATUS],
   ["/deploy/app/logs", () => LOGS],
@@ -251,7 +279,9 @@ export const ROUTES = [
     { name: "pro", max_apps: 5, users: 0 }, { name: "master", max_apps: null, users: 1 },
   ]],
   ["/admin/overview", () => ADMIN_OVERVIEW],
-  ["/admin/users/1/tenant", () => ({ login: "yuntyu01", app_name: "my-api", tenant_id: "tenant-1a2b3c4d", custom_domain: "api.mine.dev", config: { runtime: "python", db_type: "postgres", use_redis: true, use_storage: true, build_mode: "auto", port: 8080, repo_url: "https://github.com/me/my-api", branch: "main", status: "running", created_at: AGO(300) }, pods: ADMIN_PODS })],
+  [`/admin/apps/${OTHER_APP_ID}`, () => ({ id: OTHER_APP_ID, name: "blog", namespace: "tenant-9f8e7d6c", custom_domain: null, config: { runtime: "javascript", db_type: "mysql", use_redis: false, use_storage: false, volume_mount_path: "", build_mode: "dockerfile", port: 3000, repo_url: "https://github.com/someone/blog", branch: "main", status: "failed", created_at: AGO(210) }, pods: [{ name: "blog-5c7d", component: "blog", phase: "Running", ready: false, restarts: 4, started_at: AGO(200) }, { name: "mysql-0", component: "mysql", phase: "Running", ready: true, restarts: 0, started_at: AGO(60 * 24) }] })],
+  ["/admin/apps", () => ADMIN_APPS],
+  ["/admin/actions", () => ADMIN_ACTIONS],
   ["/admin/users", () => ADMIN_USERS],
   ["/admin/nodes/oci-node-1/pods", () => ADMIN_PODS],
   ["/admin/nodes", () => ADMIN_NODES],
