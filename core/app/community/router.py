@@ -51,15 +51,22 @@ def _mask_post(db: Session, post: Post, user: User | None, comment_count: int) -
     )
 
 
-def _mask_comment(db: Session, comment: Comment, user: User | None) -> CommentOut:
+# 비밀글에 달린 댓글은 댓글 자체가 비밀이 아니어도 비밀로 본다 — 비밀글에 단 답변이 목록에서
+# 그대로 보이면 글을 가린 의미가 없다. 비밀 댓글은 댓글 작성자 · 글 작성자 · 관리자에게만 보인다.
+def _mask_comment(db: Session, comment: Comment, post: Post, user: User | None) -> CommentOut:
     mine = user is not None and comment.user_id == user.id
-    visible = not comment.is_secret or mine or (user is not None and _is_admin(user))
+    secret = comment.is_secret or post.is_secret
+    visible = (
+        not secret
+        or mine
+        or (user is not None and (post.user_id == user.id or _is_admin(user)))
+    )
     return CommentOut(
         id=comment.id,
         post_id=comment.post_id,
         author=_resolve_login(db, comment.user_id),
         content=comment.content if visible else "비밀 댓글입니다.",
-        is_secret=comment.is_secret,
+        is_secret=secret,
         is_mine=mine,
         created_at=comment.created_at,
     )
@@ -118,7 +125,7 @@ def get_post(
         content=post.content if visible else "비밀글입니다.",
         is_secret=post.is_secret,
         is_mine=mine,
-        comments=[_mask_comment(db, c, user) for c in comments],
+        comments=[_mask_comment(db, c, post, user) for c in comments],
         created_at=post.created_at,
     )
 
@@ -144,7 +151,7 @@ def create_comment(
     db.add(comment)
     db.commit()
     db.refresh(comment)
-    return _mask_comment(db, comment, user)
+    return _mask_comment(db, comment, post, user)
 
 
 @router.delete("/{post_id}")
