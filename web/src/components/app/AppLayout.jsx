@@ -26,6 +26,7 @@ const TABS = [
   { label: "작업 공간", to: "/workspace" },
   { label: "배포 이력", to: "/history" },
   { label: "환경변수", to: "/env", need: "editor" },
+  { label: "멤버", to: "/members", need: "owner" },
   { label: "설정", to: "/settings", need: "owner" },
   { label: "가이드", to: "/guide" },
 ];

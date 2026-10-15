@@ -6,8 +6,10 @@
 // 데이터는 전부 AppLayout이 폴링한 실제 값이다. 시안에 있는 "커밋 메시지"는
 // 빌드 레코드에 커밋 정보가 없어(Build 모델에 sha/message 컬럼 없음) 넣지 않았다 —
 // 자리 대신 빌드 식별자(build_id)와 브랜치를 쓴다.
+import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
-import { can } from "../../lib/roles.js";
+import { ROLE_LABEL, can } from "../../lib/roles.js";
+import { getMembers } from "../../api/deploy.js";
 import {
   ArrowUpRight,
   BarChart3,
@@ -25,6 +27,8 @@ import { STYLES_BUILD, STYLES_ENV } from "../StatusBadge.jsx";
 import { relativeTime, repoSlug } from "../../lib/format.js";
 
 const DB_LABEL = { mysql: "MySQL", postgres: "PostgreSQL" };
+// 개요의 멤버 요약은 몇 줄만 — 전체 목록과 관리는 멤버 탭에서 한다.
+const MEMBER_PREVIEW = 3;
 const RUNTIME_LABEL = {
   python: "Python",
   java: "Java",
@@ -46,6 +50,25 @@ export default function AppOverview() {
   const { builds, serverBuild, envVars, base, app } = useOutletContext();
   const isOwner = can(app, "owner");
   const canEnv = can(app, "editor");
+
+  // 멤버 요약 — 멤버 API는 주인만 부를 수 있어서 주인일 때만 읽는다. 실패하면 요약을 숨긴다.
+  const [share, setShare] = useState(null); // { members, invites }
+  useEffect(() => {
+    if (!isOwner) return;
+    let cancelled = false;
+    getMembers(app.id)
+      .then((d) => !cancelled && setShare(d))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isOwner, app.id]);
+  const people = share
+    ? [
+        ...share.members.map((m) => ({ key: m.user_id, name: m.login, note: ROLE_LABEL[m.role] || m.role })),
+        ...share.invites.map((i) => ({ key: i.id, name: i.email || `@${i.github_login}`, note: "수락 대기" })),
+      ]
+    : [];
 
   // 빌드 번호(#N) — env_change는 번호를 안 매긴다(위젯과 같은 규칙).
   const numbered = new Map();
@@ -275,13 +298,44 @@ export default function AppOverview() {
               )}
             </InfoRow>
 
+            {isOwner && share && (
+              <>
+                <SideHeading style={{ marginTop: 24 }}>멤버</SideHeading>
+                {people.length ? (
+                  people.slice(0, MEMBER_PREVIEW).map((p, i, arr) => (
+                    <div
+                      key={p.key}
+                      className="kd-t-caption flex items-center gap-4"
+                      style={{ height: 32, borderBottom: i < arr.length - 1 ? "1px solid var(--kd-border)" : "none" }}
+                    >
+                      <span className="text-fg-1 truncate">{p.name}</span>
+                      <span className="text-fg-3 ml-auto shrink-0">{p.note}</span>
+                    </div>
+                  ))
+                ) : (
+                  <div className="kd-t-caption text-fg-3" style={{ height: 32, display: "flex", alignItems: "center" }}>
+                    아직 공유한 사람이 없어요.
+                  </div>
+                )}
+                {people.length > MEMBER_PREVIEW && (
+                  <Link
+                    to={`${base}/members`}
+                    className="kd-t-caption text-fg-3 hover:text-fg-1 no-underline transition-colors"
+                    style={{ display: "block", marginTop: 6 }}
+                  >
+                    외 {people.length - MEMBER_PREVIEW}명
+                  </Link>
+                )}
+              </>
+            )}
+
             {isOwner && (
               <div className="flex items-center gap-4" style={{ marginTop: 16 }}>
                 <Link to={`${base}/settings`} className="kd-t-caption text-fg-1 underline underline-offset-4">
                   설정 보기
                 </Link>
                 <Link
-                  to={`${base}/settings?section=share`}
+                  to={`${base}/members`}
                   className="kd-t-caption text-fg-1 underline underline-offset-4"
                 >
                   초대하기

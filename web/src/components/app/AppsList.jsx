@@ -611,7 +611,7 @@ function AppMenu({ base, app, onDelete }) {
           )}
           {can(app, "owner") && (
             <>
-              <MenuLink to={`${base}/settings?section=share`} label="초대하기" onDone={() => setOpen(false)} />
+              <MenuLink to={`${base}/members`} label="초대하기" onDone={() => setOpen(false)} />
               <MenuLink to={`${base}/settings`} label="설정" onDone={() => setOpen(false)} />
             </>
           )}

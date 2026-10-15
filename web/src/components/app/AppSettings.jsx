@@ -28,16 +28,11 @@ import {
 } from "lucide-react";
 import {
   CUSTOM_DOMAIN_CNAME_TARGET,
-  cancelInvite,
   dbExportUrl,
   deleteDomain,
   getDomain,
-  getMembers,
-  inviteToApp,
-  removeMember,
   restoreDb,
   setDomain,
-  setMemberRole,
 } from "../../api/deploy.js";
 import DomainStatusBadge from "../DomainStatusBadge.jsx";
 import DeleteAppModal from "../DeleteAppModal.jsx";
@@ -49,7 +44,6 @@ const SECTIONS = [
   { id: "general", nav: "일반", row: "빌드와 실행 설정" },
   { id: "domain", nav: "도메인", row: "도메인 설정" },
   { id: "storage", nav: "스토리지", row: "스토리지 설정" },
-  { id: "share", nav: "초대하기", row: "초대하기" },
   { id: "danger", row: "앱 삭제" },
 ];
 const SECTION_IDS = new Set(SECTIONS.map((s) => s.id));
@@ -87,6 +81,8 @@ function AppSettingsBody() {
 
   // 섹션은 URL에 둔다 — 새로고침·뒤로가기·링크 공유에서 같은 화면이 열린다.
   const q = params.get("section");
+  // 초대하기는 멤버 탭으로 나갔다 — 예전 링크(?section=share)는 그쪽으로 보낸다
+  if (q === "share") return <Navigate to={`${base}/members`} replace />;
   const section = SECTION_IDS.has(q) ? q : "domain"; // 시안 기본 선택 = 도메인
   const select = (id) => setParams({ section: id }, { replace: true });
 
@@ -134,7 +130,6 @@ function AppSettingsBody() {
             {section === "domain" && <DomainSection appHost={appHost} />}
             {section === "general" && <GeneralSection build={serverBuild} />}
             {section === "storage" && <StorageSection build={serverBuild} />}
-            {section === "share" && <ShareSection appId={app.id} />}
             {section === "danger" && <DangerSection onDelete={() => setDeleteOpen(true)} />}
 
             {/* 접힌 나머지 섹션 — 시안 괘선 y819/882/945, 행 높이 63 ⇒ 42(var(--row-lg)) */}
@@ -672,170 +667,6 @@ function StorageSection({ build }) {
 }
 
 /* ─────────────────────────── 앱 삭제 ─────────────────────────── */
-
-/* ─────────────────────────── 공유 ─────────────────────────── */
-
-const ROLE_OPTIONS = [
-  { id: "viewer", label: "보기" },
-  { id: "editor", label: "편집" },
-];
-const ROLE_HINT = "보기: 상태·배포 이력·로그·모니터링 / 편집: 보기 + 재배포·환경변수. 터미널·DB·도메인·삭제는 주인만 해요.";
-
-// 다른 유저에게 이 앱을 보여 주거나 편집하게 한다. 초대는 이메일 또는 GitHub 아이디로 하고,
-// 상대가 대시보드에서 수락해야 멤버가 된다. 주인은 역할을 바꾸고 내보내고 초대를 취소한다.
-function ShareSection({ appId }) {
-  const [data, setData] = useState(null); // { members, invites }
-  const [target, setTarget] = useState("");
-  const [role, setRole] = useState("viewer");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-
-  const load = async () => {
-    try {
-      setData(await getMembers(appId));
-    } catch (e) {
-      setError(e.message || "불러오지 못했어요");
-    }
-  };
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [appId]);
-
-  // 동작 하나 — 끝나면 목록을 다시 읽는다. 실패는 한 줄로 보인다.
-  const run = async (fn) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await fn();
-      await load();
-      return true;
-    } catch (e) {
-      setError(e.message.replace(/^\d+ /, "") || "실패했어요");
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const onInvite = async (e) => {
-    e.preventDefault();
-    if (!target.trim() || busy) return;
-    if (await run(() => inviteToApp(appId, target.trim(), role))) setTarget("");
-  };
-
-  return (
-    <>
-      <SectionHead>초대하기</SectionHead>
-      <p className="kd-t-body-s text-fg-2" style={{ marginTop: 10 }}>
-        {ROLE_HINT}
-      </p>
-
-      <form onSubmit={onInvite} className="flex items-center gap-2 flex-wrap" style={{ marginTop: 18 }}>
-        <input
-          className="kd-input"
-          style={{ flex: 1, minWidth: 220, maxWidth: INPUT_W }}
-          value={target}
-          onChange={(e) => setTarget(e.target.value)}
-          placeholder="이메일 또는 GitHub 아이디"
-          spellCheck={false}
-          autoCapitalize="off"
-          disabled={busy}
-        />
-        <select
-          className="kd-input"
-          style={{ width: 88 }}
-          value={role}
-          onChange={(e) => setRole(e.target.value)}
-          disabled={busy}
-          aria-label="권한"
-        >
-          {ROLE_OPTIONS.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.label}
-            </option>
-          ))}
-        </select>
-        <button type="submit" className="kd-btn-primary kd-btn-md" disabled={busy || !target.trim()}>
-          초대
-        </button>
-      </form>
-      {error && (
-        <p className="kd-t-caption" style={{ marginTop: 10, color: "var(--err-fg)" }}>
-          {error}
-        </p>
-      )}
-
-      <div style={{ marginTop: 22, borderTop: "1px solid var(--kd-border)" }}>
-        {data === null && <p className="kd-t-body-s text-fg-3" style={{ paddingBlock: 16 }}>불러오는 중…</p>}
-        {data?.members.map((m) => (
-          <ShareRow
-            key={m.user_id}
-            name={m.login}
-            note="멤버"
-            role={m.role}
-            busy={busy}
-            onRole={(r) => run(() => setMemberRole(appId, m.user_id, r))}
-            actionLabel="내보내기"
-            onAction={() => run(() => removeMember(appId, m.user_id))}
-          />
-        ))}
-        {data?.invites.map((i) => (
-          <ShareRow
-            key={i.id}
-            name={i.email || `@${i.github_login}`}
-            note="수락 대기 중"
-            role={i.role}
-            busy={busy}
-            actionLabel="초대 취소"
-            onAction={() => run(() => cancelInvite(appId, i.id))}
-          />
-        ))}
-        {data && data.members.length === 0 && data.invites.length === 0 && (
-          <p className="kd-t-body-s text-fg-3" style={{ paddingBlock: 16 }}>
-            아직 공유한 사람이 없어요.
-          </p>
-        )}
-      </div>
-    </>
-  );
-}
-
-// 멤버·대기 초대 한 줄 — 이름 · 상태 · 권한(멤버만 바꾼다) · 우측 동작.
-function ShareRow({ name, note, role, busy, onRole, actionLabel, onAction }) {
-  return (
-    <div
-      className="flex items-center gap-3 flex-wrap"
-      style={{ minHeight: "var(--row-lg)", borderBottom: "1px solid var(--kd-border)", paddingBlock: 6 }}
-    >
-      <span className="kd-t-body-s kd-strong text-fg-1 truncate" style={{ maxWidth: 260 }}>
-        {name}
-      </span>
-      <span className="kd-t-caption text-fg-3">{note}</span>
-      {onRole ? (
-        <select
-          className="kd-input ml-auto"
-          style={{ width: 88, height: 30 }}
-          value={role}
-          onChange={(e) => onRole(e.target.value)}
-          disabled={busy}
-          aria-label="권한"
-        >
-          {ROLE_OPTIONS.map((r) => (
-            <option key={r.id} value={r.id}>
-              {r.label}
-            </option>
-          ))}
-        </select>
-      ) : (
-        <span className="kd-t-caption text-fg-2 ml-auto">{ROLE_OPTIONS.find((r) => r.id === role)?.label || role}</span>
-      )}
-      <button className="kd-btn-secondary kd-btn-sm" disabled={busy} onClick={onAction}>
-        {actionLabel}
-      </button>
-    </div>
-  );
-}
 
 function DangerSection({ onDelete }) {
   return (

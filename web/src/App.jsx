@@ -9,6 +9,7 @@ import AppWorkspace from "./components/app/AppWorkspace.jsx";
 import AppHistory from "./components/app/AppHistory.jsx";
 import AppEnv from "./components/app/AppEnv.jsx";
 import AppSettings from "./components/app/AppSettings.jsx";
+import AppMembers from "./components/app/AppMembers.jsx";
 import AppsList from "./components/app/AppsList.jsx";
 import DeployProgress from "./components/deploy/DeployProgress.jsx";
 import FrontendDeploy from "./components/deploy/FrontendDeploy.jsx";
@@ -99,6 +100,7 @@ export default function App() {
                   <Route path="workspace" element={<AppWorkspace />} />
                   <Route path="history" element={<AppHistory />} />
                   <Route path="env" element={<AppEnv />} />
+                  <Route path="members" element={<AppMembers />} />
                   <Route path="settings" element={<AppSettings />} />
                   {/* 읽는 화면도 앱 셸 안에서 그대로 본다 — 사이드바에서 눌러도 작업 화면을
                       벗어나지 않는다(같은 컴포넌트, 감싸는 셸만 다르다).
