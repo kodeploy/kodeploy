@@ -70,6 +70,28 @@ class DbQueryRequest(BaseModel):
     offset: int = 0
 
 
+# POST /deploy/app/db/browse 입력 — SQL 없이 표 보기. SQL은 서버가 이 값으로 만든다(console/dbbrowse).
+# columns가 비면 전체 열. schema_name은 pg에서만 의미가 있다(없으면 기본 스키마).
+class DbBrowseFilter(BaseModel):
+    column: str
+    op: Literal["eq", "ne", "gt", "gte", "lt", "lte", "contains", "is_null", "not_null"]
+    value: str = ""
+
+
+class DbBrowseSort(BaseModel):
+    column: str
+    dir: Literal["asc", "desc"] = "asc"
+
+
+class DbBrowseRequest(BaseModel):
+    table: str
+    schema_name: str | None = None                      # BaseModel.schema와 겹치지 않게 schema_name
+    columns: list[str] = []
+    filters: list[DbBrowseFilter] = []
+    sort: list[DbBrowseSort] = []
+    offset: int = 0
+
+
 # 저장된 쿼리 (DB 콘솔) — 스코프(user/app/db)는 **요청에 없다**. 세션 user와 최신 서버
 # 빌드에서만 서버가 뽑는다(router._db_scope). 클라이언트가 스코프를 말할 수 있으면
 # 남의 앱/DB 칸에 쓰거나 읽을 여지가 생기므로, 입력 스키마에 그 축을 두지 않는다.

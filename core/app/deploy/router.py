@@ -19,12 +19,13 @@ from app.deploy import crud, status
 from app.builder import client as builder
 from app.deploy.build import github, pipeline, v2, validation
 from app.deploy.build.naming import repo_key
-from app.deploy.console import dbquery, logs, metrics, snapshots, terminal
+from app.deploy.console import dbbrowse, dbquery, logs, metrics, snapshots, terminal
 from app.deploy.routing import hostnames
 from app.deploy.stack import env, resources
 from app.deploy.model import Build, SavedQuery
 from app import config
 from app.deploy.schemas import (
+    DbBrowseRequest,
     DbQueryRequest,
     DeployBuildRef,
     DeployRequest,
@@ -457,6 +458,29 @@ async def db_query(
 ) -> dict:
     try:
         return await dbquery.run_query(app.namespace, req.sql, offset=req.offset)
+    except dbquery.QueryError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# DB 탐색 — SQL 없이 표를 고르고 컬럼·조건·정렬로 행을 본다. 읽기 전용 세션에서만 돈다.
+# db/query와 같은 권한(주인)·같은 exec 길. /{build_id}보다 위에 등록(위와 같은 이유).
+@router.get("/app/db/tables")
+async def db_tables(app: App = Depends(current_app)) -> dict:
+    try:
+        return await dbbrowse.list_tables(app.namespace)
+    except dbquery.QueryError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/app/db/browse")
+async def db_browse(
+    req: DbBrowseRequest,
+    app: App = Depends(current_app),
+) -> dict:
+    spec = req.model_dump()
+    spec["schema"] = spec.pop("schema_name")
+    try:
+        return await dbbrowse.browse(app.namespace, spec)
     except dbquery.QueryError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
