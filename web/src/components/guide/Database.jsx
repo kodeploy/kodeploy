@@ -14,10 +14,12 @@ DB_PASSWORD=자동으로 생성된 값`}</CodeBlock>
         <Bullet>Python SQLAlchemy용 <Code>DATABASE_URL</Code>과 Spring용 <Code>SPRING_DATASOURCE_*</Code>도 함께 제공해요. Node.js·PHP나 다른 드라이버를 쓴다면 위의 개별 변수로 연결하세요.</Bullet>
       </Section>
 
-      <Section title="SQL 실행과 DB 터미널">
-        <Bullet>앱 상세의 <Code>작업 공간 → 데이터베이스</Code>에서 SQL을 실행하고 결과를 표로 볼 수 있어요. 조회 결과는 한 번에 최대 500행이며, 지원되는 조회는 다음 페이지를 불러올 수 있습니다.</Bullet>
+      <Section title="탐색, SQL 실행과 DB 터미널">
+        <Bullet>앱 상세의 <Code>작업 공간 → 데이터베이스</Code>를 열면 <Code>탐색</Code>이 먼저 보여요. 왼쪽에서 테이블을 고르면 행이 100개씩 보이고, 컬럼 고르기·조건 추가·헤더 클릭 정렬을 SQL 없이 할 수 있어요. 탐색은 읽기 전용이라 데이터를 바꾸지 않으며, 테이블 옆 행 수는 DB가 가진 추정치예요.</Bullet>
+        <Bullet>탐색의 <Code>SQL로 보기</Code>를 누르면 지금 보이는 표를 만든 SELECT가 <Code>SQL</Code> 편집기로 넘어가요. 거기서 고쳐 실행하거나 저장할 수 있어요.</Bullet>
+        <Bullet><Code>SQL</Code>에서는 직접 SQL을 실행하고 결과를 표로 볼 수 있어요. 조회 결과는 한 번에 최대 500행이며, 지원되는 조회는 다음 페이지를 불러올 수 있습니다.</Bullet>
         <CodeBlock>{`SELECT 1 AS connection_ok;`}</CodeBlock>
-        <Bullet>표의 쿼리는 실행할 때마다 별도 연결을 사용해요. 트랜잭션이나 세션 상태를 이어서 사용하려면 같은 화면의 <Code>터미널</Code>을 사용하세요.</Bullet>
+        <Bullet>SQL 편집기의 쿼리는 실행할 때마다 별도 연결을 사용해요. 트랜잭션이나 세션 상태를 이어서 사용하려면 같은 화면의 <Code>터미널</Code>을 사용하세요.</Bullet>
         <Bullet>INSERT·UPDATE·DELETE 같은 SQL은 실제 DB에 적용됩니다. 대량 변경 전에는 스냅샷을 내보내두세요.</Bullet>
       </Section>
 

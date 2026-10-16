@@ -301,6 +301,21 @@ export function runDbQuery(sql, offset = 0) {
   });
 }
 
+// DB 탐색 — SQL 없이 표를 고르고 행을 본다. 서버가 읽기 전용 세션에서 SELECT를 만들어 돈다.
+// 응답: { db_type, tables: [{ schema, name, kind: "table"|"view", rows_estimate, columns: [{ name, type, pk }] }] }
+export function listDbTables() {
+  return request("/deploy/app/db/tables");
+}
+
+// spec: { table, schema_name, columns, filters: [{ column, op, value }], sort: [{ column, dir }], offset }
+// 응답: { columns, rows, row_count, offset, page_size, has_more, duration_ms, cell_limit, sql }
+export function browseDbTable(spec) {
+  return request("/deploy/app/db/browse", {
+    method: "POST",
+    body: JSON.stringify(spec),
+  });
+}
+
 // 저장된 쿼리 (DB 콘솔) — 플랫폼 DB에 보관. 유저 앱 DB는 건드리지 않는다.
 // 스코프(유저·앱·DB)는 **보내지 않는다** — 서버가 세션 user와 최신 서버 빌드에서 정한다.
 // 응답: [{ id, name, sql, created_at, updated_at }] (최신 저장순)

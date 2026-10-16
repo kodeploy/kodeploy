@@ -12,6 +12,7 @@ const ACTION_LABEL = {
   "DELETE /deploy/domain": "도메인 해제",
   "DELETE /deploy/app": "앱 삭제",
   "POST /deploy/app/db/query": "DB 콘솔 쿼리",
+  "POST /deploy/app/db/browse": "DB 탐색 조회",
   "POST /deploy/app/db/queries": "DB 쿼리 저장",
   "PATCH /deploy/app/db/queries/{query_id}": "저장한 DB 쿼리 수정",
   "DELETE /deploy/app/db/queries/{query_id}": "저장한 DB 쿼리 삭제",

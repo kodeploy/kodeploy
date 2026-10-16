@@ -3,7 +3,7 @@
 // 화면은 뷰 탭 줄 하나 + 카드 하나다. 카드 안에 뷰 하나가 열린다.
 // 앱 이름·실행 상태는 상단바가, 앱 액션(서비스 열기·앱 정보·재배포)은 사이드바가 맡는다.
 //   터미널·로그 — 좌 터미널(대상 선택) / 우 런타임 로그   ← 들어오면 바로 이 뷰
-//   데이터베이스 — SQL 편집기 + 조회 결과 (또는 DB 터미널)
+//   데이터베이스 — 탐색(표 고르기) / SQL 편집기 + 조회 결과 / DB 터미널
 //   스토리지    — 파일 목록 + 미리보기 (use_storage일 때만 탭이 뜬다)
 //   모니터링    — 현재 사용량 표
 //
@@ -32,6 +32,8 @@ import {
   ChevronRight,
   ChevronUp,
   ChevronsUpDown,
+  Code,
+  Columns3,
   Copy,
   Database,
   Download,
@@ -39,7 +41,9 @@ import {
   FileCode,
   FileText,
   Image as ImageIcon,
+  KeyRound,
   Layers,
+  ListFilter,
   Maximize2,
   Minimize2,
   MoreHorizontal,
@@ -57,11 +61,13 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import "@xterm/xterm/css/xterm.css";
 import {
+  browseDbTable,
   createSavedQuery,
   deleteSavedQuery,
   deleteStorageObject,
   getAppLogs,
   getAppMetrics,
+  listDbTables,
   listSavedQueries,
   listStorageObjects,
   readStorageObject,
@@ -902,11 +908,23 @@ function LogSide({ build, zoomed, onZoom }) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// 2) 데이터베이스 — SQL 편집기 + 조회 결과 / DB 터미널
+// 2) 데이터베이스 — 탐색 / SQL 편집기 + 조회 결과 / DB 터미널
+// 탐색이 기본이다 — SQL을 몰라도 표를 골라 보는 게 이 탭에서 가장 흔한 일이다.
 // 실행·페이지네이션·결과 필터·정렬 규칙은 panels/DbConsolePanel.jsx에서 가져왔다.
 // ────────────────────────────────────────────────────────────────────────────
 function DatabaseView({ dbType }) {
-  const [mode, setMode] = useState("table"); // "table" | "terminal"
+  const [mode, setMode] = useState("browse"); // "browse" | "table" | "terminal"
+  // 터미널은 처음 열 때 붙인다 — 탭만 열어도 DB 셸 소켓이 잡히지 않게. 한 번 열면 토글로 끊지 않는다
+  const [terminalOpened, setTerminalOpened] = useState(false);
+  useEffect(() => {
+    if (mode === "terminal") setTerminalOpened(true);
+  }, [mode]);
+  // 탐색의 "SQL로 보기" → SQL 편집기로. n은 같은 SQL을 두 번 보내도 다시 받게 하는 번호
+  const [handoff, setHandoff] = useState(null);
+  const openSql = (sql) => {
+    setHandoff((prev) => ({ sql, n: (prev?.n || 0) + 1 }));
+    setMode("table");
+  };
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
@@ -919,7 +937,8 @@ function DatabaseView({ dbType }) {
           style={{ padding: 2, borderRadius: 4, background: "var(--sel-soft)" }}
         >
           {[
-            { id: "table", label: "표", icon: Table2 },
+            { id: "browse", label: "탐색", icon: Table2 },
+            { id: "table", label: "SQL", icon: Code },
             { id: "terminal", label: "터미널", icon: TerminalSquare },
           ].map((m) => {
             const Icon = m.icon;
@@ -946,14 +965,561 @@ function DatabaseView({ dbType }) {
         </div>
       </PaneBar>
 
-      {/* 두 모드 모두 마운트 유지 — 터미널 WebSocket이 토글로 끊기지 않게 display로 전환
+      {/* 모든 모드 마운트 유지 — 터미널 WebSocket이 토글로 끊기지 않게 display로 전환
           (DbConsolePanel과 같은 이유). 터미널은 헤더 없는 bare 모드로 얹는다. */}
+      <div className="flex-1 min-h-0 flex-col" style={{ display: mode === "browse" ? "flex" : "none" }}>
+        <DbBrowser onOpenSql={openSql} />
+      </div>
       <div className="flex-1 min-h-0 flex-col" style={{ display: mode === "table" ? "flex" : "none" }}>
-        <SqlConsole dbType={dbType} />
+        <SqlConsole dbType={dbType} handoff={handoff} />
       </div>
       <div className="flex-1 min-h-0 flex-col" style={{ display: mode === "terminal" ? "flex" : "none" }}>
-        <DbTerminalPanel bare />
+        {terminalOpened && <DbTerminalPanel bare />}
       </div>
+    </div>
+  );
+}
+
+// 탐색 — SQL을 치지 않고 표를 골라 행을 본다. 컬럼·조건·정렬은 화면에서 고르고, SELECT는 서버가
+// 만든다(읽기 전용 세션). 만든 SQL은 "SQL로 보기"로 편집기에 넘겨 이어서 고칠 수 있다.
+//
+// 정렬은 SQL 콘솔과 달리 서버가 한다 — 받은 100행 안에서만 정렬하면 다음 페이지와 순서가 맞지 않는다.
+// 사용자가 정렬을 고르지 않았으면 기본 키 순으로 받는다(순서 없는 페이지 넘김은 행이 겹치거나 빠진다).
+const BROWSE_OPS = [
+  { id: "eq", label: "같음", sign: "=" },
+  { id: "ne", label: "다름", sign: "≠" },
+  { id: "contains", label: "포함", sign: "포함" },
+  { id: "gt", label: "보다 큼", sign: ">" },
+  { id: "gte", label: "이상", sign: "≥" },
+  { id: "lt", label: "보다 작음", sign: "<" },
+  { id: "lte", label: "이하", sign: "≤" },
+  { id: "is_null", label: "비어 있음(NULL)", sign: "NULL" },
+  { id: "not_null", label: "값 있음", sign: "NOT NULL" },
+];
+const NO_VALUE_OPS = new Set(["is_null", "not_null"]);
+const COMPARE_OPS = new Set(["eq", "ne", "gt", "gte", "lt", "lte"]);
+// 숫자 열에 숫자가 아닌 값을 비교하면 MySQL은 오류 없이 0으로 바꿔 비교한다(엉뚱한 행이 나온다).
+// 그래서 보내기 전에 화면에서 막는다. pg는 어차피 오류로 답한다.
+const NUMERIC_TYPE = /^(tiny|small|medium|big)?int|^integer|^numeric|^decimal|^real|^double|^float|^serial|^bigserial|^smallserial/i;
+
+const tableKey = (t) => `${t.schema || ""}.${t.name}`;
+const tableLabel = (t) => (t.schema && t.schema !== "public" ? `${t.schema}.${t.name}` : t.name);
+// 추정 행 수 — 정확한 COUNT가 아니므로 "약"을 붙인다
+const estimateLabel = (n) => (n == null ? null : `약 ${n.toLocaleString("ko-KR")}행`);
+
+let filterSeq = 0;
+const newFilter = (column) => ({ id: ++filterSeq, column, op: "eq", value: "" });
+
+function filterProblem(f, columns) {
+  if (NO_VALUE_OPS.has(f.op)) return null;
+  const col = columns.find((c) => c.name === f.column);
+  if (COMPARE_OPS.has(f.op) && col && NUMERIC_TYPE.test(col.type) && f.value.trim() !== "" && !Number.isFinite(Number(f.value)))
+    return "숫자 열이라 숫자를 넣어 주세요";
+  return null;
+}
+
+function DbBrowser({ onOpenSql }) {
+  const [tables, setTables] = useState(null);
+  const [tablesError, setTablesError] = useState(null);
+  const [tableQuery, setTableQuery] = useState("");
+  const [selectedKey, setSelectedKey] = useState(null);
+  const [hidden, setHidden] = useState([]);          // 숨긴 컬럼 이름
+  const [filters, setFilters] = useState([]);        // 편집 중인 조건
+  const [applied, setApplied] = useState([]);        // 실제로 건 조건
+  const [sort, setSort] = useState(null);            // { key: 컬럼 이름, dir }
+  const [offset, setOffset] = useState(0);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [reload, setReload] = useState(0);
+  const seq = useRef(0);
+
+  const loadTables = useCallback(async () => {
+    setTablesError(null);
+    try {
+      const res = await listDbTables();
+      setTables(res.tables || []);
+    } catch (e) {
+      setTablesError(e.message?.replace(/^\d{3}\s+/, "") || "테이블 목록을 불러오지 못했어요");
+      setTables([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadTables();
+  }, [loadTables]);
+
+  const table = useMemo(
+    () => (tables || []).find((t) => tableKey(t) === selectedKey) || (tables || [])[0] || null,
+    [tables, selectedKey],
+  );
+
+  const pick = (key) => {
+    if (key === (table && tableKey(table))) return;
+    setSelectedKey(key);
+    setHidden([]);
+    setFilters([]);
+    setApplied([]);
+    setSort(null);
+    setOffset(0);
+    setResult(null);
+    setError(null);
+  };
+
+  const shown = useMemo(
+    () => (table ? table.columns.filter((c) => !hidden.includes(c.name)) : []),
+    [table, hidden],
+  );
+
+  // 서버에 보낼 요청. 바뀔 때마다(표·컬럼·조건·정렬·페이지) 한 번 받는다.
+  const spec = useMemo(() => {
+    if (!table) return null;
+    const pk = table.columns.filter((c) => c.pk).map((c) => ({ column: c.name, dir: "asc" }));
+    return {
+      table: table.name,
+      schema_name: table.schema,
+      columns: shown.map((c) => c.name),
+      filters: applied.map(({ column, op, value }) => ({ column, op, value })),
+      sort: sort ? [{ column: sort.key, dir: sort.dir }, ...pk.filter((p) => p.column !== sort.key)] : pk,
+      offset,
+    };
+  }, [table, shown, applied, sort, offset]);
+  const specKey = JSON.stringify(spec);
+
+  useEffect(() => {
+    if (!spec) return;
+    const my = ++seq.current;
+    setLoading(true);
+    setError(null);
+    browseDbTable(spec)
+      .then((res) => my === seq.current && setResult(res))
+      .catch((e) => {
+        if (my !== seq.current) return;
+        setError(e.message || "조회 실패");
+        setResult(null);
+      })
+      .finally(() => my === seq.current && setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [specKey, reload]);
+
+  const columns = table?.columns || [];
+  const problems = filters.map((f) => filterProblem(f, columns));
+  const ready = filters.filter((f, i) => !problems[i] && (NO_VALUE_OPS.has(f.op) || f.value !== ""));
+  const dirty = JSON.stringify(ready) !== JSON.stringify(applied);
+
+  const apply = () => {
+    if (problems.some(Boolean)) return;
+    setApplied(ready);
+    setOffset(0);
+  };
+  const patchFilter = (id, patch) => setFilters((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f)));
+  // 지우기는 바로 반영한다 — 조건을 걷어 내는 데 "적용"을 한 번 더 누르게 하지 않는다
+  const removeFilter = (id) => {
+    setFilters((prev) => prev.filter((f) => f.id !== id));
+    if (applied.some((f) => f.id === id)) {
+      setApplied((prev) => prev.filter((f) => f.id !== id));
+      setOffset(0);
+    }
+  };
+  const toggleColumn = (name) =>
+    setHidden((prev) => {
+      if (prev.includes(name)) return prev.filter((n) => n !== name);
+      // 마지막 하나는 숨기지 않는다 — 열이 없는 SELECT는 없다
+      return columns.length - prev.length > 1 ? [...prev, name] : prev;
+    });
+  const refresh = () => {
+    loadTables();
+    setReload((n) => n + 1);
+  };
+
+  const needle = tableQuery.trim().toLowerCase();
+  const listed = (tables || []).filter((t) => !needle || tableLabel(t).toLowerCase().includes(needle));
+  const typeOf = Object.fromEntries(columns.map((c) => [c.name, c]));
+  const hasRows = result && result.rows.length > 0;
+  const multiPage = result && (result.offset > 0 || result.has_more);
+
+  if (tables === null)
+    return <Centered>테이블 목록을 불러오는 중…</Centered>;
+  if (tablesError)
+    return <Centered>{tablesError}</Centered>;
+  if (tables.length === 0)
+    return <Centered>아직 테이블이 없어요. 앱이 테이블을 만들면 여기에 보여요.</Centered>;
+
+  return (
+    <div className="flex-1 min-h-0 flex">
+      {/* ── 왼쪽: 테이블 목록 (좁은 화면에서는 툴바의 드롭다운이 대신한다) ── */}
+      <aside
+        className="hidden md:flex shrink-0 min-h-0 flex-col"
+        style={{ width: 248, borderRight: "1px solid var(--kd-border)" }}
+      >
+        <div className="shrink-0" style={{ padding: "12px 14px 8px" }}>
+          <div className="relative">
+            <Search size={15} strokeWidth={1.7} className="absolute text-fg-4" style={{ left: 10, top: 10 }} />
+            <input
+              className="kd-input"
+              style={{ height: 36, paddingLeft: 32 }}
+              placeholder="테이블 검색"
+              value={tableQuery}
+              spellCheck={false}
+              onChange={(e) => setTableQuery(e.target.value)}
+            />
+          </div>
+        </div>
+        <div className="flex-1 min-h-0 overflow-auto scroll-thin" style={{ paddingBottom: 8 }}>
+          {listed.length === 0 ? (
+            <p className="kd-t-caption text-fg-3" style={{ padding: "8px 18px" }}>검색 결과가 없어요.</p>
+          ) : (
+            listed.map((t) => {
+              const on = table && tableKey(t) === tableKey(table);
+              return (
+                <button
+                  key={tableKey(t)}
+                  onClick={() => pick(tableKey(t))}
+                  aria-current={on ? "true" : undefined}
+                  title={tableLabel(t)}
+                  className="kd-pick w-full text-left flex items-center gap-2"
+                  style={{ height: "var(--row-md)", paddingInline: 18 }}
+                >
+                  <span className="kd-pick-name kd-t-body-s text-fg-2 truncate min-w-0">{tableLabel(t)}</span>
+                  {t.kind === "view" && <span className="kd-t-caption text-fg-4 shrink-0">뷰</span>}
+                  <span className="kd-t-caption text-fg-4 tabular-nums shrink-0 ml-auto">
+                    {t.rows_estimate == null ? "" : t.rows_estimate.toLocaleString("ko-KR")}
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </aside>
+
+      {/* ── 오른쪽: 툴바 + 조건 + 표 ── */}
+      <div className="flex-1 min-w-0 min-h-0 flex flex-col">
+        <div
+          className="shrink-0 flex items-center gap-3 overflow-x-auto scroll-thin"
+          style={{ height: 54, paddingInline: 20, borderBottom: "1px solid var(--kd-border)" }}
+        >
+          <div className="md:hidden">
+            <MiniSelect
+              value={table && tableKey(table)}
+              options={tables.map((t) => ({ id: tableKey(t), label: tableLabel(t) }))}
+              onChange={pick}
+              width={110}
+            />
+          </div>
+          <h2 className="hidden md:block kd-t-section text-fg-1 truncate min-w-0" title={table && tableLabel(table)}>
+            {table && tableLabel(table)}
+          </h2>
+          {table && (table.kind === "view" || table.rows_estimate != null) && (
+            <span className="hidden sm:inline kd-t-caption text-fg-3 tabular-nums shrink-0">
+              {table.kind === "view" ? "뷰" : estimateLabel(table.rows_estimate)}
+            </span>
+          )}
+
+          <div className="ml-auto flex items-center gap-2 shrink-0">
+            <ColumnPicker columns={columns} hidden={hidden} onToggle={toggleColumn} onShowAll={() => setHidden([])} />
+            <button
+              onClick={() => setFilters((prev) => [...prev, newFilter(columns[0]?.name)])}
+              aria-label="조건 추가"
+              disabled={filters.length >= 10}
+              className="kd-btn-secondary kd-btn-sm inline-flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <ListFilter size={15} strokeWidth={1.8} />
+              {/* 좁은 화면에서는 아이콘만 — 툴바가 옆으로 밀려 버튼이 화면 밖으로 나가지 않게 */}
+              <span className="hidden sm:inline">조건 추가</span>
+            </button>
+            <button
+              onClick={() => result && onOpenSql(result.sql)}
+              disabled={!result}
+              className="kd-btn-secondary kd-btn-sm inline-flex items-center gap-1.5 disabled:opacity-50"
+              title="지금 보이는 표를 만든 SQL을 편집기로 가져가요"
+              aria-label="SQL로 보기"
+            >
+              <Code size={15} strokeWidth={1.8} />
+              <span className="hidden sm:inline">SQL로 보기</span>
+            </button>
+            <IconBtn icon={RefreshCw} label="새로고침" onClick={refresh} />
+          </div>
+        </div>
+
+        {/* 조건 — 행마다 [컬럼][연산][값][지우기]. Enter나 "적용"으로 건다 */}
+        {filters.length > 0 && (
+          <div
+            className="shrink-0 flex flex-col gap-2"
+            style={{ padding: "12px 20px", borderBottom: "1px solid var(--kd-border)" }}
+          >
+            {filters.map((f, i) => (
+              <div key={f.id} className="flex items-center gap-2 flex-wrap">
+                <span className="kd-t-caption text-fg-3" style={{ width: 34 }}>{i === 0 ? "조건" : "그리고"}</span>
+                <MiniSelect
+                  value={f.column}
+                  options={columns.map((c) => ({ id: c.name, label: c.name }))}
+                  onChange={(column) => patchFilter(f.id, { column })}
+                  width={170}
+                />
+                <MiniSelect
+                  value={f.op}
+                  options={BROWSE_OPS.map((o) => ({ id: o.id, label: o.label }))}
+                  onChange={(op) => patchFilter(f.id, { op })}
+                  width={140}
+                />
+                {!NO_VALUE_OPS.has(f.op) && (
+                  <input
+                    className="kd-input"
+                    style={{
+                      height: 30,
+                      width: 220,
+                      borderColor: problems[i] ? "var(--err-fg)" : undefined,
+                    }}
+                    placeholder={NUMERIC_TYPE.test(typeOf[f.column]?.type || "") ? "숫자" : "값"}
+                    value={f.value}
+                    spellCheck={false}
+                    onChange={(e) => patchFilter(f.id, { value: e.target.value })}
+                    onKeyDown={(e) => e.key === "Enter" && apply()}
+                  />
+                )}
+                <IconBtn icon={X} label="조건 지우기" onClick={() => removeFilter(f.id)} />
+                {problems[i] && (
+                  <span className="kd-t-caption" style={{ color: "var(--err-fg)" }}>{problems[i]}</span>
+                )}
+              </div>
+            ))}
+            <div className="flex items-center gap-3" style={{ paddingLeft: 42 }}>
+              <button
+                onClick={apply}
+                disabled={!dirty || problems.some(Boolean)}
+                className="kd-btn-primary kd-btn-sm disabled:opacity-50"
+              >
+                적용
+              </button>
+              <span className="kd-t-caption text-fg-4">
+                {!dirty && applied.length
+                  ? `조건 ${applied.length}개 적용 중`
+                  : "값을 넣고 Enter나 적용을 누르면 걸려요"}
+              </span>
+            </div>
+          </div>
+        )}
+
+        <div className="flex-1 min-h-0 overflow-auto scroll-thin">
+          {error ? (
+            <pre
+              className="kd-t-code whitespace-pre-wrap"
+              style={{
+                margin: 20,
+                padding: 14,
+                borderRadius: 4,
+                border: "1px solid var(--kd-border)",
+                color: "var(--err-fg)",
+              }}
+            >
+              {error.replace(/^\d{3}\s+/, "")}
+            </pre>
+          ) : !result ? (
+            <Centered>{loading ? "불러오는 중…" : ""}</Centered>
+          ) : (
+            <table style={{ borderCollapse: "collapse", width: "max-content", minWidth: "100%", opacity: loading ? 0.6 : 1 }}>
+              <thead>
+                <tr>
+                  {result.columns.map((c, i) => (
+                    <th
+                      key={c}
+                      className="text-left"
+                      title={typeOf[c]?.type}
+                      style={{
+                        height: "var(--row-lg)",
+                        paddingInline: i === 0 ? 20 : 12,
+                        background: "var(--kd-surface)",
+                        borderBottom: "1px solid var(--kd-border)",
+                        position: "sticky",
+                        top: 0,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        {typeOf[c]?.pk && (
+                          <KeyRound size={13} strokeWidth={1.8} className="text-fg-4 shrink-0" aria-label="기본 키" />
+                        )}
+                        <SortHeader
+                          label={c}
+                          active={sort?.key === c}
+                          dir={sort?.dir}
+                          onClick={() => {
+                            setSort((p) => nextSort(p, c));
+                            setOffset(0);
+                          }}
+                        />
+                      </span>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {result.rows.map((row, ri) => (
+                  <tr key={ri}>
+                    {row.map((v, ci) => {
+                      const clipped = v && v.length >= result.cell_limit;
+                      return (
+                        <td
+                          key={ci}
+                          title={clipped ? `${v}\n… (앞 ${result.cell_limit}자만 보여요)` : v}
+                          className="kd-t-caption text-fg-1"
+                          style={{
+                            height: "var(--row-sm)",
+                            paddingInline: ci === 0 ? 20 : 12,
+                            borderBottom: "1px solid var(--kd-border)",
+                            whiteSpace: "nowrap",
+                            maxWidth: 420,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                          }}
+                        >
+                          {v === "NULL" ? <span className="text-fg-4">NULL</span> : v}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {result && !hasRows && !error && (
+            <Centered>{applied.length ? "조건에 맞는 행이 없어요." : "빈 테이블이에요."}</Centered>
+          )}
+        </div>
+
+        {/* 아랫줄 — 지금 보는 범위와 페이지 넘김 */}
+        {result && !error && (
+          <div
+            className="shrink-0 flex items-center gap-3"
+            style={{ height: 44, paddingInline: 20, borderTop: "1px solid var(--kd-border)" }}
+          >
+            <span className="kd-t-caption text-fg-3 tabular-nums">
+              {hasRows
+                ? `${(result.offset + 1).toLocaleString("ko-KR")}–${(result.offset + result.row_count).toLocaleString("ko-KR")}행`
+                : "0행"}
+              {` · ${result.duration_ms}ms`}
+            </span>
+            {multiPage && (
+              <span className="ml-auto flex items-center gap-2">
+                <PageBtn
+                  icon={ChevronLeft}
+                  disabled={loading || result.offset === 0}
+                  onClick={() => setOffset(Math.max(0, result.offset - result.page_size))}
+                />
+                <PageBtn
+                  icon={ChevronRight}
+                  disabled={loading || !result.has_more}
+                  onClick={() => setOffset(result.offset + result.page_size)}
+                />
+              </span>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// 보여 줄 컬럼 고르기 — 버튼에 "보이는 수/전체"를 적고, 누르면 체크 목록이 뜬다.
+// 메뉴는 MiniSelect처럼 body로 포털해 fixed로 띄운다(툴바가 overflow-x-auto라 안에서 띄우면 잘린다).
+function ColumnPicker({ columns, hidden, onToggle, onShowAll }) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState(null);
+  const wrapRef = useRef(null);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const r = wrapRef.current?.getBoundingClientRect();
+      if (r) setPos({ right: window.innerWidth - r.right, top: r.bottom + 4 });
+    };
+    place();
+    const onDown = (e) =>
+      !wrapRef.current?.contains(e.target) && !menuRef.current?.contains(e.target) && setOpen(false);
+    const onKey = (e) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open]);
+
+  const visible = columns.length - hidden.length;
+  return (
+    <div ref={wrapRef} className="relative shrink-0">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="kd-btn-secondary kd-btn-sm inline-flex items-center gap-1.5"
+      >
+        <Columns3 size={15} strokeWidth={1.8} />
+        <span className="hidden sm:inline">컬럼</span>
+        <span className="text-fg-3 tabular-nums">
+          {visible}/{columns.length}
+        </span>
+      </button>
+      {open && pos && createPortal(
+        <div
+          ref={menuRef}
+          className="fixed z-50 kd-card flex flex-col"
+          style={{ right: pos.right, top: pos.top, width: 240, maxHeight: 360, paddingBlock: 6 }}
+        >
+          <div className="flex-1 min-h-0 overflow-auto scroll-thin">
+            {columns.map((c) => {
+              const on = !hidden.includes(c.name);
+              return (
+                <button
+                  key={c.name}
+                  onClick={() => onToggle(c.name)}
+                  className="kd-t-label w-full text-left flex items-center gap-2"
+                  style={{ height: "var(--row-md)", paddingInline: 14, color: "var(--fg-1)" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--sel)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <span
+                    className="shrink-0 inline-flex items-center justify-center"
+                    style={{
+                      width: 16,
+                      height: 16,
+                      borderRadius: 3,
+                      border: `1px solid ${on ? "var(--accent)" : "var(--kd-border)"}`,
+                      background: on ? "var(--accent)" : "transparent",
+                      color: "var(--kd-surface)",
+                    }}
+                  >
+                    {on && <Check size={12} strokeWidth={2.5} />}
+                  </span>
+                  <span className="truncate min-w-0">{c.name}</span>
+                  <span className="kd-t-caption text-fg-4 truncate ml-auto shrink-0" style={{ maxWidth: 90 }}>
+                    {c.type}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {hidden.length > 0 && (
+            <button
+              onClick={onShowAll}
+              className="kd-t-label text-left shrink-0"
+              style={{
+                height: "var(--row-md)",
+                paddingInline: 14,
+                marginTop: 4,
+                color: "var(--fg-2)",
+                borderTop: "1px solid var(--kd-border)",
+              }}
+            >
+              모두 보이기
+            </button>
+          )}
+        </div>,
+        document.body,
+      )}
     </div>
   );
 }
@@ -998,7 +1564,7 @@ function historyTime(iso) {
   return sameDay ? `오늘 ${hm}` : `${d.getMonth() + 1}월 ${d.getDate()}일 ${hm}`;
 }
 
-function SqlConsole({ dbType }) {
+function SqlConsole({ dbType, handoff }) {
   const { user } = useAuth();
   const { app } = useCurrentApp();
 
@@ -1121,6 +1687,12 @@ function SqlConsole({ dbType }) {
     }
     setDialog({ kind: "replace", sql: incoming });
   };
+
+  // 탐색에서 "SQL로 보기"로 넘어온 SQL — 편집기에 넣기만 한다(덮어쓰기 확인 규칙은 불러오기와 같다)
+  useEffect(() => {
+    if (handoff) loadIntoEditor(handoff.sql);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handoff?.n]);
 
   const openSave = (text) => {
     const target = (text || "").trim();
