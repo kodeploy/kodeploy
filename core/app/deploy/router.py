@@ -223,8 +223,8 @@ def env_get(app: App | None = Depends(editor_app_or_none)) -> EnvVarsResponse:
     return EnvVarsResponse(env=env.get_env(app.namespace, app.name))
 
 
-# 환경변수 전체 replace. 저장 직후 rolling update 트리거로 새 값 즉시 반영.
-# 빌드 status는 영구 기록이라 안 건드림. 새 Pod 상태는 헤더의 앱 상태(/deploy/app/status)로 표시.
+# 환경변수 전체 replace. Secret을 쓰고, 빌더에 envRevision을 올리게 해 Argo가 Pod을 다시 띄운다.
+# 결과는 이 변경의 이력 행(kind=env_change)에 콜백이 반영한다.
 @router.put("/env", response_model=EnvVarsResponse)
 async def env_put(
     req: EnvVarsRequest,
@@ -235,16 +235,15 @@ async def env_put(
     if app is None:
         raise HTTPException(status_code=400, detail="첫 배포 완료 후 환경변수 설정 가능")
     tenant_id = app.namespace
-    is_v2 = v2.is_v2(app)
-    if is_v2:   # v2는 Pod 재시작을 Argo가 한다 — 서버 배포가 도는 중이면 요청이 겹쳐 배포가 죽으니 먼저 막는다
-        try:
-            v2.ensure_idle(db, app)
-        except ValueError as e:
-            raise HTTPException(status_code=409, detail=str(e))
+    # Pod 재시작은 Argo가 한다 — 서버 배포가 도는 중이면 요청이 겹쳐 배포가 죽으니 먼저 막는다
+    try:
+        v2.ensure_idle(db, app)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     # 변경 전 현재 env (Secret) 조회 — set_env 전에 받아둬야 diff 계산 가능
     old_env = env.get_env(tenant_id, app.name)
     try:
-        env.set_env(tenant_id, app.name, req.env, restart=not is_v2)
+        env.set_env(tenant_id, app.name, req.env)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -290,31 +289,22 @@ async def env_put(
         kind="env_change",
         status="applied",
         env_change_summary=", ".join(entries),  # "KEY (추가), KEY2 (수정), KEY3 (삭제)"
-        last_event_seq=0 if is_v2 else None,   # v2 표시 겸 빌더 콜백 seq 시작점
+        last_event_seq=0,                      # 빌더 콜백 seq 시작점
     )
     db.add(event)
     db.commit()
 
-    if is_v2:
-        # Secret은 이미 썼다. envRevision을 올리는 커밋을 빌더에 맡기면 Argo가 Pod을 다시 띄우고,
-        # 결과(deployed 또는 failed)는 콜백이 이 행에 반영한다.
-        try:
-            await v2.submit_env_revision(event, user)
-        except builder.BuilderError as e:
-            event.status, event.error = "failed", f"빌더가 받지 않았습니다: {e}"
-            db.commit()
-            raise HTTPException(
-                status_code=502,
-                detail=f"환경변수는 저장했지만 적용 요청이 실패했어요 ({e}). 다음 배포 때 반영돼요",
-            )
-        return EnvVarsResponse(env=req.env)
-
-    # Pod이 새 env로 부팅했는지 백그라운드 폴링 → 이 event row의 status를 running/failed로 갱신.
-    # 동기 K8s 클라이언트를 쓰므로 메인 루프 대신 전용 스레드에서 (pipeline.spawn_background).
-    pipeline.spawn_background(
-        pipeline.watch_env_change_rollout,
-        user.id, app.name, tenant_id, event.build_id,
-    )
+    # Secret은 이미 썼다. envRevision을 올리는 커밋을 빌더에 맡기면 Argo가 Pod을 다시 띄우고,
+    # 결과(deployed 또는 failed)는 콜백이 이 행에 반영한다.
+    try:
+        await v2.submit_env_revision(event, user)
+    except builder.BuilderError as e:
+        event.status, event.error = "failed", f"빌더가 받지 않았습니다: {e}"
+        db.commit()
+        raise HTTPException(
+            status_code=502,
+            detail=f"환경변수는 저장했지만 적용 요청이 실패했어요 ({e}). 다음 배포 때 반영돼요",
+        )
     return EnvVarsResponse(env=req.env)
 
 
@@ -656,7 +646,7 @@ def get_domain(
     return result
 
 
-# 커스텀 도메인 연결/변경 — CF custom hostname 생성 + 앱 HTTPRoute에 hostname 주입.
+# 커스텀 도메인 연결/변경 — CF custom hostname 생성 + 바뀐 hostnames를 빌더로 보낸다 (route는 Argo가 그린다).
 @router.put("/domain")
 async def put_domain(
     req: DomainRequest,
@@ -666,21 +656,18 @@ async def put_domain(
 ) -> dict:
     if app is None:
         raise HTTPException(status_code=400, detail="먼저 앱을 배포한 후 커스텀 도메인을 연결할 수 있습니다")
-    is_v2 = v2.is_v2(app)
     try:
-        if is_v2:
-            v2.ensure_idle(db, app, include_static=True)   # 배포가 도는 중이면 빌더 요청이 겹치거나 옛 호스트를 되돌린다
-        # CF·K8s 호출이 동기라 메인 루프를 막지 않게 스레드에서. v2는 route를 Argo가 그리므로 직접 안 고친다.
-        result = await asyncio.to_thread(hostnames.set_custom_domain, db, app, req.domain, not is_v2)
+        v2.ensure_idle(db, app, include_static=True)   # 배포가 도는 중이면 빌더 요청이 겹치거나 옛 호스트를 되돌린다
+        # CF 호출이 동기라 메인 루프를 막지 않게 스레드에서
+        result = await asyncio.to_thread(hostnames.set_custom_domain, db, app, req.domain)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    if is_v2:
-        await _apply_hostnames_or_502(app, user)
+    await _apply_hostnames_or_502(app, user)
     result["cname_target"] = config.CUSTOM_DOMAIN_CNAME_TARGET
     return result
 
 
-# 커스텀 도메인 해제 — CF custom hostname 삭제 + route에서 hostname 제거.
+# 커스텀 도메인 해제 — CF custom hostname 삭제 + 바뀐 hostnames를 빌더로 보낸다.
 @router.delete("/domain")
 async def delete_domain(
     db: Session = Depends(get_db),
@@ -689,19 +676,16 @@ async def delete_domain(
 ) -> dict:
     if app is None:
         return {"status": "cleared"}
-    is_v2 = v2.is_v2(app)
-    if is_v2:
-        try:
-            v2.ensure_idle(db, app, include_static=True)
-        except ValueError as e:
-            raise HTTPException(status_code=409, detail=str(e))
-    await asyncio.to_thread(hostnames.clear_custom_domain, db, app, not is_v2)
-    if is_v2:
-        await _apply_hostnames_or_502(app, user)
+    try:
+        v2.ensure_idle(db, app, include_static=True)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    await asyncio.to_thread(hostnames.clear_custom_domain, db, app)
+    await _apply_hostnames_or_502(app, user)
     return {"status": "cleared"}
 
 
-# v2: 바뀐 hostnames를 빌더로 보낸다. 도메인 자체(CF·DB)는 이미 바뀐 뒤라, 요청이 실패하면 그 사실을 알려 다시 시도하게 한다.
+# 바뀐 hostnames를 빌더로 보낸다. 도메인 자체(CF·DB)는 이미 바뀐 뒤라, 요청이 실패하면 그 사실을 알려 다시 시도하게 한다.
 async def _apply_hostnames_or_502(app: App, user: User) -> None:
     try:
         await v2.apply_hostnames(app, user)
@@ -713,7 +697,7 @@ async def _apply_hostnames_or_502(app: App, user: User) -> None:
 
 
 # 앱 완전 삭제 — K8s 리소스 + PVC + builds + 앱 행 삭제.
-# v2 앱은 먼저 빌더가 values를 지우고 Application이 사라지길 기다린다 (그 전에 ns를 지우면 Argo가 되살린다).
+# 먼저 빌더가 values를 지우고 Application이 사라지길 기다린다 (그 전에 ns를 지우면 Argo가 되살린다).
 # /{build_id} 핸들러보다 위에 등록해야 path param이 "app"을 잡지 않음.
 @router.delete("/app")
 async def delete_app(
@@ -724,15 +708,14 @@ async def delete_app(
     if app is None:
         raise HTTPException(status_code=400, detail="삭제할 앱이 없습니다")
     try:
-        if v2.is_v2(app):
-            await v2.request_delete(user, app)
+        await v2.request_delete(user, app)
         await asyncio.to_thread(status.delete_app, db, app)   # K8s·R2 호출이 동기라 메인 루프를 막지 않게
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"status": "deleted"}
 
 
-# 이력의 한 배포로 되돌린다 (v2 앱, 편집 권한 이상) — 이미지를 다시 빌드하지 않고 그 배포의 digest로 배포한다.
+# 이력의 한 배포로 되돌린다 (편집 권한 이상) — 이미지를 다시 빌드하지 않고 그 배포의 digest로 배포한다.
 # 새 배포 행이 이력에 남고 진행은 그 build_id로 따라간다. /{build_id} 핸들러와 경로가 달라 순서 제약은 없다.
 @router.post("/{build_id}/rollback", response_model=DeployBuildRef)
 async def rollback_build(

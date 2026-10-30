@@ -1,14 +1,15 @@
 """빌드 소스 검증 — repo·브랜치·경로가 빌드 Job YAML/git 인자에 끼어들지 못하게.
 
-템플릿은 autoescape 없이 `value: "{{ branch }}"`처럼 값을 넣는다. 따옴표·개행이 통과하면 Job에
-필드(예: 다른 Secret 마운트)를 끼워 넣을 수 있어서, 제출(start_deploy)과 렌더(manifests) 두 곳에서 막는다.
+Job은 값을 git 인자·환경변수로 그대로 쓴다. 따옴표·개행이 통과하면 Job에 필드(예: 다른 Secret 마운트)를
+끼워 넣을 수 있어서, 제출(start_deploy)에서 막는다 (빌더도 요청 검증에서 한 번 더 막는다).
 """
 
 import pytest
 
 from app.deploy.build.source import validate_branch, validate_repo_path, validate_repo_url
-from app.deploy.stack import manifests
-from tests.test_start_deploy import fake_apps, make_user, run_deploy, spawned  # noqa: F401  (fixture)
+from tests.test_start_deploy import builder_ok, fake_apps, make_user, run_deploy, spawned  # noqa: F401  (fixture)
+
+pytestmark = pytest.mark.usefixtures("builder_ok")
 
 INJECT_BRANCH = 'main"\n            - name: X\n              value: "y'
 
@@ -80,33 +81,3 @@ def test_start_deploy_accepts_dot_slash_dockerfile(spawned):  # noqa: F811
     from unittest.mock import MagicMock
     builds = run_deploy(MagicMock(), make_user(), dockerfile_path="./docker/Dockerfile")
     assert builds[0].dockerfile_path == "docker/Dockerfile"
-
-
-# --- 렌더 단계: 감지 결과·옛 빌드 행도 여기서 막힌다 ---
-
-JOB = dict(build_id="3f9a2c1d", user_id="d6d8b75985524d6f9a9000665e7ca0da",
-           image="ghcr.io/u/d6d8b759/app:3f9a2c1d", repo_url="https://github.com/u/repo.git")
-
-
-def test_render_rejects_injected_branch():
-    with pytest.raises(ValueError):
-        manifests.buildkit_job(**JOB, branch=INJECT_BRANCH)
-    with pytest.raises(ValueError):
-        manifests.nixpacks_buildkit_job(**JOB, branch=INJECT_BRANCH)
-    with pytest.raises(ValueError):
-        manifests.static_buildkit_job(**JOB, branch=INJECT_BRANCH, dockerfile_text="FROM x")
-
-
-def test_render_rejects_detected_paths():
-    with pytest.raises(ValueError):
-        manifests.buildkit_job(**JOB, branch="main", dockerfile_subdir='x"', dockerfile_filename="Dockerfile")
-    with pytest.raises(ValueError):
-        manifests.buildkit_job(**JOB, branch="main", dockerfile_filename="")
-    with pytest.raises(ValueError):
-        manifests.nixpacks_buildkit_job(**JOB, branch="main", project_path="a/../../b")
-
-
-def test_render_ok():
-    job = manifests.buildkit_job(**JOB, branch="feature/x", dockerfile_subdir="docker", dockerfile_filename="Dockerfile.prod")
-    env = {e["name"]: e["value"] for e in job["spec"]["template"]["spec"]["initContainers"][0]["env"]}
-    assert env["BRANCH"] == "feature/x"

@@ -1,8 +1,8 @@
 """start_deploy 검증·분기 고정 — 배포 제출 규칙의 안전망.
 
 start_deploy는 슬롯 조합·의존성·저장소·예약 키 규칙의 진실원이라, 거절 분기와
-슬롯별 spawn 결정을 현행 그대로 고정한다. 실제 빌드/K8s는 안 돌린다 —
-spawn_background를 기록용 스텁으로 갈아끼우고 DB는 mock 세션.
+슬롯별 spawn 결정을 현행 그대로 고정한다. 실제 빌드/K8s/빌더는 안 돌린다 —
+spawn_background를 기록용 스텁으로, 빌더 제출 조건(v2.check_submit)은 입력 그대로 통과로, DB는 mock 세션.
 """
 
 import asyncio
@@ -15,19 +15,19 @@ from app import config
 from app.apps import service as apps_service
 from app.apps.model import App
 from app.auth.model import User
-from app.deploy.build import pipeline
+from app.deploy.build import pipeline, v2
 
 APPS: dict[uuid.UUID, App] = {}   # 유저 id → 앱. 아래 가짜 apps 서비스(fake_apps)가 읽고 쓴다
 
 
-def make_user(app_name="foo", user_id=None, pipeline="v1"):
+def make_user(app_name="foo", user_id=None):
     """유저와 (app_name이 있으면) 그 유저의 앱. 앱은 APPS[user.id]로 꺼낸다."""
     # SQLAlchemy 컬럼 default는 INSERT 시점 적용이라 인스턴스 생성 시 명시 세팅 필수
     user = User(id=user_id or uuid.uuid4())
     if app_name:
         APPS[user.id] = App(
             id=uuid.uuid4(), owner_id=user.id, name=app_name, namespace=f"tenant-{user.id.hex[:8]}",
-            site_enabled=False, pipeline=pipeline,
+            site_enabled=False, pipeline="v2",
         )
     return user
 
@@ -41,7 +41,7 @@ def fake_apps(monkeypatch):
     def create_app(db, owner_id, name):
         APPS[owner_id] = App(
             id=uuid.uuid4(), owner_id=owner_id, name=name, namespace=f"tenant-{owner_id.hex[:8]}",
-            site_enabled=False, pipeline="v1",
+            site_enabled=False, pipeline="v2",
         )
         return APPS[owner_id]
 
@@ -66,6 +66,19 @@ def spawned(monkeypatch, fake_apps):
     monkeypatch.setattr(pipeline, "_cancel_stale_builds", lambda db, uid, slot: None)
     monkeypatch.setattr(pipeline, "crud", MagicMock(create_build=lambda db, b: b))
     return calls
+
+
+@pytest.fixture
+def builder_ok(monkeypatch):
+    """빌더 제출 조건은 입력 그대로 통과 — 여기선 start_deploy의 규칙만 본다 (조건 검사는 test_v2_deploy)."""
+    async def check_submit(user, *, build_mode, dockerfile_path, project_path="", **kw):
+        return ("auto", project_path) if build_mode == "auto" else ("dockerfile", dockerfile_path or "Dockerfile")
+    monkeypatch.setattr(v2, "check_submit", check_submit)
+    monkeypatch.setattr(v2, "has_server_deployed", lambda db, app: True)   # 정적만 남기면 서버를 내린다
+    monkeypatch.setattr(apps_service, "repo_installation_id", lambda db, app: None)
+
+
+pytestmark = pytest.mark.usefixtures("builder_ok")
 
 
 def spawned_fns(calls):
@@ -136,28 +149,35 @@ def test_rejects_invalid_static_env_key(spawned):
 
 # --- 슬롯별 spawn 결정 ---
 
-def test_server_only_spawns_build_and_static_teardown(spawned):
+def test_server_only_spawns_one_build(spawned):
+    # 정적을 끄는 건 서버 빌드가 static.enabled=false를 실어 보낸다 — 따로 spawn하지 않는다
     user = make_user()
     builds = run_deploy(MagicMock(), user, use_static=False)
 
     assert [b.runtime for b in builds] == ["python"]
-    assert spawned_fns(spawned) == [pipeline._run_build, pipeline._teardown_static]
+    assert spawned_fns(spawned) == [v2.run_v2_build]
     assert APPS[user.id].site_enabled is False  # 슬롯 선언 저장 (라우팅 진실원)
 
 
-def test_static_only_spawns_server_teardown_and_build(spawned):
+def test_static_only_removes_server_and_builds_static(spawned):
     user = make_user()
     builds = run_deploy(MagicMock(), user, runtime="none", use_static=True)
 
     assert [b.runtime for b in builds] == ["static"]
-    assert spawned_fns(spawned) == [pipeline._teardown_server, pipeline._run_build]
+    assert spawned_fns(spawned) == [v2.remove_server, v2.run_v2_build]
     assert APPS[user.id].site_enabled is True
+
+
+def test_static_only_skips_remove_when_no_server_was_deployed(spawned, monkeypatch):
+    monkeypatch.setattr(v2, "has_server_deployed", lambda db, app: False)
+    run_deploy(MagicMock(), make_user(), runtime="none", use_static=True)
+    assert spawned_fns(spawned) == [v2.run_v2_build]
 
 
 def test_both_slots_spawn_two_builds(spawned):
     builds = run_deploy(MagicMock(), make_user(), use_static=True)
     assert [b.runtime for b in builds] == ["python", "static"]
-    assert spawned_fns(spawned) == [pipeline._run_build, pipeline._run_build]
+    assert spawned_fns(spawned) == [v2.run_v2_build, v2.run_v2_build]
 
 
 # --- Build row 내용 ---

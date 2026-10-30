@@ -31,7 +31,7 @@ from app.auth.model import User
 from app.deploy import router as deploy_router
 from app.deploy.model import Build
 from app.deploy import status
-from app.deploy.build import pipeline
+from app.deploy.build import pipeline, v2
 from app.shared.db import get_db
 
 
@@ -63,9 +63,8 @@ def add_user(db, login=None, email=None):
     return u
 
 
-# 접근 권한 테스트라 배포 경로는 v1으로 고정한다 (v1 쪽 가짜 K8s를 쓴다)
 def add_app(db, owner, name="shop"):
-    a = App(id=uuid.uuid4(), owner_id=owner.id, name=name, namespace=f"app-{uuid.uuid4().hex[:8]}", pipeline="v1")
+    a = App(id=uuid.uuid4(), owner_id=owner.id, name=name, namespace=f"app-{uuid.uuid4().hex[:8]}")
     db.add(a)
     db.commit()
     return a
@@ -239,6 +238,15 @@ def test_purge_removes_members_and_invites(db):
 
 # --- 단계별 접근: viewer < editor < owner ---
 
+# 권한만 본다 — 빌더에 보내는 요청(환경변수 적용·삭제)은 받은 것으로 친다
+def _no_builder(monkeypatch):
+    async def accepted(*a, **kw):
+        return None
+    monkeypatch.setattr(v2, "submit_env_revision", accepted)
+    monkeypatch.setattr(v2, "request_delete", accepted)
+    monkeypatch.setattr(v2, "ensure_idle", lambda *a, **kw: None)
+
+
 @pytest.fixture
 def roles(db, monkeypatch):
     owner, editor, viewer, stranger = add_user(db, "o"), add_user(db, "e"), add_user(db, "v"), add_user(db, "s")
@@ -249,8 +257,9 @@ def roles(db, monkeypatch):
     monkeypatch.setattr(status, "list_builds", lambda d, app_id=None: [])
     monkeypatch.setattr(status, "get_state", lambda d, bid, app_id=None: None)
     monkeypatch.setattr(deploy_router.env, "get_env", lambda ns, name: {"SECRET": "x"})
-    monkeypatch.setattr(deploy_router.env, "set_env", lambda ns, name, e, restart=True: None)
+    monkeypatch.setattr(deploy_router.env, "set_env", lambda ns, name, e: None)
     monkeypatch.setattr(deploy_router.logs, "fetch_app_logs", lambda ns, name: {"current": ""})
+    _no_builder(monkeypatch)
     seen = {}
 
     async def fake_start(db_, **kw):
@@ -258,7 +267,7 @@ def roles(db, monkeypatch):
         return []
 
     monkeypatch.setattr(pipeline, "start_deploy", fake_start)
-    monkeypatch.setattr(pipeline, "spawn_background", lambda fn, *a: None)   # env 변경 뒤 롤아웃 감시 스레드는 안 띄운다
+    monkeypatch.setattr(pipeline, "spawn_background", lambda fn, *a: None)
     return type("R", (), dict(app=app, owner=owner, editor=editor, viewer=viewer, stranger=stranger, seen=seen))
 
 

@@ -1,10 +1,11 @@
-"""v2 배포 경로 — users.pipeline == "v2"인 앱의 서버 빌드를 Go 빌더에 맡긴다.
+"""배포 경로 — 빌드·배포를 Go 빌더에 맡긴다 (빌더 → kodeploy-apps 커밋 → Argo).
 
-core가 하는 일: 제출 조건 검사 → 네임스페이스·Secret·PVC 준비 → 서명한 kind=build 요청 전송.
+core가 하는 일: 제출 조건 검사 → 네임스페이스·Secret·PVC 준비 → 서명한 요청 전송.
 그 뒤(Job·로그·커밋·Argo 대기)는 빌더가 하고, 결과는 콜백(app/internal)으로 받아 builds를 갱신한다.
 계약: docs/go-builder-plan.md 3절, docs/builder-e2e.md "4부 할 일".
 
-v1과 다른 점: 초기 DB 복원은 앱이 뜬 뒤에 한다 (DB와 앱을 Argo가 함께 띄우므로) — 아래 "초기 DB 복원" 참고.
+초기 DB 복원은 앱이 뜬 뒤에 한다 (DB와 앱을 Argo가 함께 띄우므로) — 아래 "초기 DB 복원" 참고.
+옛 이름 v1(core가 직접 Job·Deployment를 만들던 경로)은 2026-10에 지웠다. v1 시절 이력 행은 last_event_seq가 비어 있다.
 """
 
 import asyncio
@@ -37,11 +38,6 @@ from app.shared.db import SessionLocal
 
 logger = logging.getLogger(__name__)
 
-NOT_YET = "새 경로(v2)는 아직"
-
-
-def is_v2(app: App) -> bool:
-    return app.pipeline == "v2"
 
 
 def is_v2_build(build: Build) -> bool:
@@ -68,7 +64,7 @@ async def check_submit(
     installation_id: int | None = None,    # 저장소를 받을 GitHub 연결 (비공개 저장소 확인용)
 ) -> tuple[str, str]:
     if not config.BUILDER_HMAC_SECRET:
-        raise ValueError("새 경로(v2) 빌더 연결이 설정되지 않았습니다")
+        raise ValueError("빌더 연결이 설정되지 않았습니다")
     # 빌드할 저장소를 모두 확인한다: 서버가 있으면 repo_url, 정적 사이트가 있으면 그 저장소 (기본은 repo_url)
     repos: list[str] = []
     if runtime != "none":
@@ -116,7 +112,7 @@ def _installation_has_repo(installation_id: int | None, repo_url: str) -> bool:
     return any((r.get("full_name") or "").lower() == slug for r in github_app.list_installation_repos(installation_id))
 
 
-# 정적 사이트 빌드에 쓸 Dockerfile 본문 — repo엔 없고 플랫폼이 만든다 (v1과 같은 템플릿).
+# 정적 사이트 빌드에 쓸 Dockerfile 본문 — repo엔 없고 플랫폼이 만든다.
 # 빌드 입력(빌드 커맨드·출력 폴더·빌드 변수)만의 함수라 같은 행이면 늘 같은 글자다 (화면의 Dockerfile 탭에도 이걸 둔다).
 def static_dockerfile_text(build: Build) -> str:
     return manifests.static_dockerfile(
@@ -320,16 +316,16 @@ async def run_v2_build(build_id: str, initial_env: dict[str, str] | None = None,
 
 
 # ---- 초기 DB 복원 -------------------------------------------------------------------------------
-# v1은 DB를 core가 먼저 띄워 앱보다 앞서 복원했다. v2는 DB와 앱을 Argo가 values 하나로 함께 띄우므로
+# DB와 앱을 Argo가 values 하나로 함께 띄우므로
 # 앱이 다 뜬 뒤(deployed)에 복원하고, 앱을 한 번 다시 띄워 복원된 데이터로 시작하게 한다.
 # (앱이 빈 DB에 먼저 스키마를 만들어도, 덤프의 DROP TABLE IF EXISTS·CREATE가 그 위를 덮는다)
-# 덤프 파일은 core Pod의 /tmp(stage_dump)에 있어 토큰도 이 프로세스 메모리에 둔다 — core가 재시작되면 둘 다 사라진다(v1과 같다).
+# 덤프 파일은 core Pod의 /tmp(stage_dump)에 있어 토큰도 이 프로세스 메모리에 둔다 — core가 재시작되면 둘 다 사라진다.
 # 그 경우 복원은 하지 않고 배포는 그대로 성공이다.
 
 _pending_dumps: dict[str, str] = {}   # build_id → stage된 덤프 토큰
 
 
-# 이 빌드가 끝나면 복원할 덤프를 맡긴다. DB를 고르지 않았으면 복원할 곳이 없으니 바로 버린다 (v1과 같다).
+# 이 빌드가 끝나면 복원할 덤프를 맡긴다. DB를 고르지 않았으면 복원할 곳이 없으니 바로 버린다.
 def hold_initial_dump(build: Build, token: str | None) -> None:
     if not token:
         return
@@ -351,7 +347,7 @@ def drop_initial_dump(build_id: str) -> None:
 
 
 # 배포가 끝났다(deployed) — DB가 준비되면 덤프를 복원하고 앱을 다시 띄운다. 실패는 빌드 행의 error에 남긴다
-# (배포 자체는 성공이다 — v1과 같은 문구).
+# (배포 자체는 성공이다).
 async def restore_initial_dump(build_id: str) -> None:
     token = _pending_dumps.pop(build_id, None)
     if not token:
@@ -463,9 +459,9 @@ def on_delete_event(build_id: str, ev: dict) -> bool:
 # 이력의 한 배포로 되돌린다. 이미지를 다시 빌드하지 않고, 그 배포가 올라갔던 digest(repo:tag@sha256:…)를
 # 빌더에 set-image로 보내 git values의 이미지 칸만 바꾼다 — Argo가 그 이미지로 롤아웃한다.
 # 포트·런타임은 그 배포 것으로 돌아가고, DB·Redis·볼륨·호스트 같은 core 소유 설정은 지금 값을 그대로 둔다.
-# v1 앱은 대상이 아니다.
+# v1 시절 행은 digest가 없어 대상이 아니다.
 
-# 되돌릴 수 있는 배포 — 서버 슬롯의 v2 빌드가 성공했고(running) digest가 남아 있는 것.
+# 되돌릴 수 있는 배포 — 서버 슬롯의 빌더 배포가 성공했고(running) digest가 남아 있는 것.
 def is_rollbackable(build: Build) -> bool:
     return (
         (build.kind or "build") == "build"
@@ -478,12 +474,10 @@ def is_rollbackable(build: Build) -> bool:
 
 # 롤백할 수 있는지 검사한다. 못 하면 ValueError(화면에 보여도 되는 이유).
 def check_rollback_target(app: App, target: Build | None) -> None:
-    if not is_v2(app):
-        raise ValueError("새 경로(v2) 앱만 되돌릴 수 있습니다")
     if target is None or target.app_id != app.id:
         raise LookupError("배포를 찾을 수 없습니다")
     if not is_rollbackable(target):
-        raise ValueError("이 배포로는 되돌릴 수 없습니다 — 성공한 새 경로(v2) 서버 배포만 되돌릴 수 있어요")
+        raise ValueError("이 배포로는 되돌릴 수 없습니다 — 성공한 서버 배포만 되돌릴 수 있어요")
 
 
 # 롤백 요청 본문 (계약 3-1 kind=set-image). values는 보내지 않는다 — 지금 설정이 그대로 남는다.
@@ -548,8 +542,8 @@ def has_server_deployed(db, app: App) -> bool:
 
 # ---- 서버 내리기 ---------------------------------------------------------------------------------
 # 정적 사이트만 남기는 배포. 빌더가 values의 서버 칸(image·runtime·port)을 비우면 Argo가 서버와 DB·Redis를 내린다.
-# DB 디스크(StatefulSet이 만든 PVC)·볼륨·버킷·Secret은 남는다 — 서버를 다시 올리면 데이터가 돌아온다 (v1 _teardown_server와 같다).
-# v1 teardown처럼 이력 행 없이 best-effort다: 실패는 기록만 하고, 다음 정적 단독 제출이 다시 보낸다.
+# DB 디스크(StatefulSet이 만든 PVC)·볼륨·버킷·Secret은 남는다 — 서버를 다시 올리면 데이터가 돌아온다.
+# 이력 행 없이 best-effort다: 실패는 기록만 하고, 다음 정적 단독 제출이 다시 보낸다.
 
 def remove_payload(build_id: str, actor: str, namespace: str) -> dict:
     return {"build_id": build_id, "actor": actor, "namespace": namespace, "slot": "server", "kind": "remove"}

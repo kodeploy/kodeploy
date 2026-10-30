@@ -272,8 +272,8 @@ def _get_client() -> openai.OpenAI:
 # 이 둘이 절단 예산을 먹으면 BuildKit 로그의 "실패 직전 맥락"이 밀려난다. 최종 에러 줄은
 # 로그 맨 끝이라 어차피 살아남지만, 원인 특정에 필요한 건 그 앞 스텝들이다.
 # ★ 신호 손실이 0인 유일한 절단 최적화다 — 꼬리 길이를 줄이는 쪽은 항상 뭔가를 잃는다.
-# ★ 마커 문자열은 templates/{nixpacks,static}_buildkit_job.yaml.j2 및
-#   pipeline._finalize_build_artifacts의 것과 동일해야 한다. 바꾸면 전부 같이 바꿀 것.
+# ★ 마커 문자열은 빌더 Job 스크립트(builder/internal/job) 및 internal/events.py의 Dockerfile 추출과
+#   동일해야 한다. 바꾸면 전부 같이 바꿀 것.
 _MARKER_BLOCK_RE = re.compile(
     r"===KODEPLOY_(DOCKERFILE|PLAN)_START===.*?===KODEPLOY_\1_END===", re.DOTALL
 )
@@ -307,8 +307,7 @@ def _truncate(text: str | None) -> str:
 # 있다 — OOMKilled는 로그가 문장 중간에서 끊길 뿐 아무 말도 남기지 않고, Job의
 # DeadlineExceeded(타임아웃)는 진짜 빌드 실패와 로그 모양이 거의 같다. 이 구조화 신호가
 # 없으면 모델이 로그 꼬리만 보고 엉뚱한 원인을 지목한다.
-# 리소스는 label(build-id / app)로만 찾는다 — Job 이름 규칙(pipeline._build_job_name)을
-# 복제하면 드리프트가 생기고, pipeline을 import하면 순환 참조가 된다.
+# 리소스는 label(build-id / app)로만 찾는다 — Job 이름은 빌더가 정하므로 복제하지 않는다.
 
 def _terminated_summary(cs) -> str | None:
     """컨테이너 상태 한 줄. 종료했으면 사유+exit code, 대기 중이면 대기 사유."""

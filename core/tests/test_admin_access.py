@@ -31,7 +31,7 @@ from app.deploy import status
 from app.deploy.build import pipeline
 from app.deploy.model import Build
 from app.shared.db import get_db
-from tests.test_sharing import DEPLOY, add_app, add_user, client, share  # noqa: F401  (LONGTEXT sqlite 컴파일도 같이)
+from tests.test_sharing import DEPLOY, _no_builder, add_app, add_user, client, share  # noqa: F401  (LONGTEXT sqlite 컴파일도 같이)
 
 
 @pytest.fixture
@@ -62,7 +62,8 @@ def world(db, monkeypatch):
     monkeypatch.setattr(status, "get_app_status", lambda a: {"status": "running"})
     monkeypatch.setattr(status, "list_builds", lambda d, app_id=None: [])
     monkeypatch.setattr(deploy_router.env, "get_env", lambda ns, name: {"SECRET": "x"})
-    monkeypatch.setattr(deploy_router.env, "set_env", lambda ns, name, e, restart=True: None)
+    monkeypatch.setattr(deploy_router.env, "set_env", lambda ns, name, e: None)
+    _no_builder(monkeypatch)
 
     async def fake_start(db_, **kw):
         return []
@@ -199,7 +200,7 @@ def test_apps_list_shows_owner_members_and_last_deploy(db, world):
     db.commit()
     rows = admin_client(db, world.admin).get("/admin/apps").json()
     row = next(r for r in rows if r["id"] == str(world.app.id))
-    assert (row["owner_login"], row["member_count"], row["pipeline"]) == ("owner", 1, "v1")
+    assert (row["owner_login"], row["member_count"], row["pipeline"]) == ("owner", 1, "v2")
     assert row["last_build"]["status"] == "failed"                   # 환경변수 변경 행은 배포가 아니다
     assert admin_client(db, world.stranger).get("/admin/apps").status_code == 403
 

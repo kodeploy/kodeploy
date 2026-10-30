@@ -26,27 +26,13 @@ GHCR_AUTH_SECRET_NAME = "ghcr-auth"                 # dockerconfigjson Secret �
 GHCR_USER = os.getenv("GHCR_USER", "")
 
 
-# --- BuildKit ---
-BUILDKIT_IMAGE = "moby/buildkit:v0.30.0-rootless"   # rootless: privileged 권한 없이 빌드 가능. 클러스터에서 검증된 버전으로 고정
-BUILD_TIMEOUT_SECONDS = int(os.getenv("BUILD_TIMEOUT_SECONDS", "600"))  # 운영 튜닝 가능
-# Job 전체(빌드+push+cache export) 상한. build 단계는 위 값이 재지만, early-trigger 후 Job은
-# 배포가 끝나도 export를 붙들고 살아 있으므로 그보다 넉넉해야 정상 빌드를 안 자른다.
-# Job의 activeDeadlineSeconds로 주입 — 무한 export를 컷.
-BUILD_ACTIVE_DEADLINE_SECONDS = int(
-    os.getenv("BUILD_ACTIVE_DEADLINE_SECONDS", str(BUILD_TIMEOUT_SECONDS + 300))
-)
-# early-trigger — push 마커(이미지가 레지스트리에 올라간 시점)에 배포를 시작하고 cache export는
-# 백그라운드로 넘긴다. 기본 OFF: 켜기 전 계측만 쌓고 전후 비교 후 켠다. 마커를 못 잡으면 어느
-# 쪽이든 Job 완료를 기다리는 기존 경로로 자동 폴백(느려질 뿐 안 깨짐).
-EARLY_TRIGGER_ENABLED = os.getenv("EARLY_TRIGGER", "false").lower() == "true"
+# --- 빌드 ---
 # 레지스트리 레이어 캐시(--import/export-cache, 이미지와 같은 repo의 :buildcache 태그). 기본 OFF —
-# 켜기 전 캐시 없는 기준선을 계측하고 전후 비교 후 켠다. early-trigger와 독립 플래그(캐시 없이도
-# push 마커는 찍히므로 early-trigger는 동작). 켜면 매 빌드 끝에 cache export 비용이 붙는데, 그 비용을
-# 응답 경로에서 빼는 게 early-trigger의 목적.
+# 켜기 전 캐시 없는 기준선을 계측하고 전후 비교 후 켠다. 빌더 요청의 build.cache로 넘긴다.
 BUILD_REGISTRY_CACHE_ENABLED = os.getenv("BUILD_REGISTRY_CACHE", "false").lower() == "true"
 
-# Go 빌더 (users.pipeline == "v2"인 앱만 쓴다). HMAC 키는 빌더 Secret kodeploy-builder-secrets의
-# HMAC_SECRET과 같은 값 — core Deployment가 그 Secret에서 직접 읽는다. 비어 있으면 v2 제출·콜백을 막는다.
+# Go 빌더 (모든 배포가 거친다). HMAC 키는 빌더 Secret kodeploy-builder-secrets의
+# HMAC_SECRET과 같은 값 — core Deployment가 그 Secret에서 직접 읽는다. 비어 있으면 배포 제출·콜백을 막는다.
 BUILDER_URL = os.getenv("BUILDER_URL", "http://kodeploy-builder.default.svc:8080").rstrip("/")
 BUILDER_HMAC_SECRET = os.getenv("BUILDER_HMAC_SECRET", "")
 
@@ -74,10 +60,6 @@ CF_ZONE_ID = os.getenv("CF_ZONE_ID", "")
 CF_ZONE_API_TOKEN = os.getenv("CF_ZONE_API_TOKEN", "")
 # 유저가 자기 도메인 DNS에 걸 CNAME 타깃 (CF for SaaS fallback origin). UI 안내에 노출.
 CUSTOM_DOMAIN_CNAME_TARGET = os.getenv("CUSTOM_DOMAIN_CNAME_TARGET", "origin.kodeploy.com")
-# CF가 오리진 요청에 붙이는 origin-verify 헤더의 공유 비밀. HTTPRoute가 이 값으로 헤더매칭해
-# CF 경유 트래픽만 통과시킨다(origin-lock Layer B′, mTLS 대체). CF Transform Rule 값과 일치해야 함.
-# 비어 있으면 헤더매칭 생략(미적용 — Layer A만). CF가 전 트래픽에 헤더 붙이는 걸 켠 뒤 설정할 것.
-ORIGIN_VERIFY_SECRET = os.getenv("ORIGIN_VERIFY_SECRET", "")
 
 # --- AI 실패 진단 (사내 API Gateway) ---
 # 빌드/배포 실패 시 로그를 읽어 한국어 원인·조치를 내는 기능. 시크릿이라 env 주입.
@@ -97,7 +79,7 @@ LLM_BASE_URL = os.getenv(
 # ⚠️ 바꾼 뒤엔 실패 1건으로 구조화 출력(strict json_schema)이 그 모델에서도 통과하는지
 #    확인할 것. 제공자마다 지원 여부가 다르고, 안 되면 진단만 조용히 비게 된다.
 LLM_MODEL = os.getenv("LLM_MODEL", "gpt-5.6-terra")
-# 기본 OFF. EARLY_TRIGGER/BUILD_REGISTRY_CACHE와 같은 방침 — 실 로그로 몇 건 돌려
+# 기본 OFF. BUILD_REGISTRY_CACHE와 같은 방침 — 실 로그로 몇 건 돌려
 # 진단 품질과 호출당 비용을 확인한 뒤 켠다. 켜도 실패한 빌드에서만 호출된다.
 AI_DIAGNOSE_ENABLED = os.getenv("AI_DIAGNOSE", "false").lower() == "true"
 # 일일 토큰 예산 (입력+출력 합). 0이면 무제한 = 상한 없음(기본값이 무제한인 이유는

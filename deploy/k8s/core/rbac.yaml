@@ -8,31 +8,18 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole                                        # 클러스터 전역 권한 (ns 무관 — kodeploy-build, tenant-xxx 모두 적용)
 metadata:
   name: kodeploy-core
-# 원칙: core가 app/ 코드에서 "실제로 호출하는" 동사만 둔다 (2026-09 전수 대조).
-# watch는 어디서도 안 쓴다 — 상태 추적은 전부 폴링(pipeline/status)이라 의도적으로 뺐다.
+# 원칙: core가 app/ 코드에서 "실제로 호출하는" 동사만 둔다 (2026-10 v1 경로 제거 뒤 전수 대조).
+# 워크로드(Deployment·DB·Service·HTTPRoute·NetworkPolicy)는 차트가 그리고 Argo가 apply한다 — core는 쓰지 않는다.
+# 빌드 Job도 빌더가 만든다. core는 그 앞의 준비(ns·Secret·PVC)와 조회·터미널·삭제만 한다.
+# watch는 어디서도 안 쓴다 — 상태 추적은 전부 폴링이라 의도적으로 뺐다.
 # ⚠️ 새 K8s 호출을 추가하고 여기를 안 늘리면 대부분 403으로 터지지만, 항상 그렇진 않다:
-#    admin/service.py:217, console/logs.py:58·72, pipeline.py:473·508 등은 ApiException을
-#    삼켜서 "빈 목록/빈 로그/삭제 성공"으로 위장한다. 권한을 줄인 뒤 검증할 땐 화면이 뜨는지가
-#    아니라 실제 내용(로그 줄·Pod 행)이 나오는지로 판정할 것.
+#    admin/service.py, console/logs.py 등은 ApiException을 삼켜서 "빈 목록/빈 로그"로 위장한다.
+#    권한을 줄인 뒤 검증할 땐 화면이 뜨는지가 아니라 실제 내용(로그 줄·Pod 행)이 나오는지로 판정할 것.
 rules:
-  # --- BuildKit 빌드 Job (kodeploy-build ns) ---
+  # --- 빌드 Job (kodeploy-build ns, 빌더가 만든다) ---
   - apiGroups: ["batch"]
     resources: ["jobs"]
-    verbs: ["list", "create", "delete"]                  # list=진단, create=빌드 제출, delete=재빌드 전 청소
-  - apiGroups: ["batch"]
-    resources: ["jobs/status"]
-    verbs: ["get"]                                       # read_namespaced_job_status — 빌드 완료 판정
-
-  # --- 유저 앱 워크로드 (tenant ns) ---
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "create", "update", "patch", "delete"]  # patch=env 변경 재기동, update=스펙 교체
-  - apiGroups: ["apps"]
-    resources: ["deployments/status"]
-    verbs: ["get"]                                       # 롤아웃 완료 대기
-  - apiGroups: ["apps"]
-    resources: ["statefulsets"]
-    verbs: ["create", "delete"]                          # mysql/postgres — 만들고 지우기만, 수정은 안 함
+    verbs: ["list"]                                      # 실패 진단이 종료 사유를 읽는다 (diagnose.py)
 
   # --- 테넌트 프로비저닝 ---
   - apiGroups: [""]
@@ -41,11 +28,11 @@ rules:
 
   # --- 테넌트 내부 리소스 ---
   - apiGroups: [""]
-    resources: ["services", "secrets"]
-    verbs: ["get", "create", "update", "delete"]         # list 없음 — 이름을 알고 여는 것만. 전역 secret 열람 차단
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "delete"]         # 환경변수·의존성·R2·ghcr-auth·git-auth. list 없음 — 이름을 알고 여는 것만
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["create"]                                    # 삭제는 ns delete가 대신함
+    verbs: ["create"]                                    # 로컬 볼륨. 삭제는 ns delete가 대신함
   - apiGroups: [""]
     resources: ["resourcequotas"]
     verbs: ["delete"]                                    # 옛 quota 잔재 청소용(stack/resources.py) — 잔재 정리 확인되면 코드와 함께 제거
@@ -53,7 +40,7 @@ rules:
   # --- Pod 조회/로그/터미널 ---
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["list"]                                      # 라벨 셀렉터로 대상 Pod 찾기. get/delete 안 씀(재기동은 Deployment patch)
+    verbs: ["list"]                                      # 라벨 셀렉터로 대상 Pod 찾기
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
@@ -71,36 +58,6 @@ rules:
   - apiGroups: [""]
     resources: ["nodes/proxy"]
     verbs: ["get"]                                       # kubelet stats/summary (CPU/메모리/디스크)
-
-  # --- 네트워크/라우팅 ---
-  - apiGroups: ["projectcalico.org"]                     # per-tenant NetworkPolicy — 생성만(삭제는 ns delete가 처리)
-    resources: ["networkpolicies"]
-    verbs: ["create"]
-  - apiGroups: ["gateway.networking.k8s.io"]             # 유저 앱 서브도메인 라우팅
-    resources: ["httproutes"]
-    verbs: ["create", "patch", "delete"]                 # patch=커스텀 도메인 hostname 주입, delete=앱 삭제 시 정리
-
-  # --- 이관 기간: v1 → v2 넘겨받기 (deploy/build/adopt.py strip_core_managers) ---
-  # Argo가 apply한 리소스에서 v1이 남긴 field manager(OpenAPI-Generator)를 지운다 — list로 찾고 managedFields만 JSON patch.
-  # 모든 앱이 v2가 되고 v1 코드를 지울 때 위 v1 쓰기 권한과 함께 뺀다.
-  - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["list"]
-  - apiGroups: ["apps"]
-    resources: ["statefulsets"]
-    verbs: ["list", "patch"]
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["list", "patch"]
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["patch"]
-  - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["httproutes"]
-    verbs: ["list"]
-  - apiGroups: ["projectcalico.org"]
-    resources: ["networkpolicies"]
-    verbs: ["list", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding                                 # SA를 ClusterRole에 연결 

@@ -49,9 +49,6 @@ spec:
                 name: kodeploy-cloudflare                # CF_API_TOKEN (R2 버킷/토큰 프로비저닝)
                 optional: true                           # 없으면 storage 토글만 비활성 — 나머지는 정상
             - secretRef:
-                name: kodeploy-origin-verify             # ORIGIN_VERIFY_SECRET — 앱 HTTPRoute 헤더매칭값(origin-lock B′)
-                optional: true                           # 없으면 새 앱 라우트에 헤더매칭 미주입(Layer A만) — /healthz 정상
-            - secretRef:
                 name: kodeploy-ai                        # LLM_API_KEY — 빌드/배포 실패 AI 진단
                 optional: true                           # 없으면 진단만 비활성 — 빌드·배포는 그대로
           env:
@@ -65,7 +62,7 @@ spec:
                 secretKeyRef:
                   name: kodeploy-builder-secrets
                   key: HMAC_SECRET
-                  optional: true                         # 없으면 v2(빌더) 제출·콜백만 막힌다 — v1은 그대로
+                  optional: true                         # 없으면 배포 제출·콜백이 막힌다 — /healthz와 화면 조회는 살아있게
           startupProbe:                                  # 부팅 단계 전용. 통과 전엔 liveness/readiness 멈춤
             httpGet:
               path: /healthz                             # main.py의 /healthz 엔드포인트

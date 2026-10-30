@@ -3,14 +3,14 @@
 - seq가 builds.last_event_seq 이하면 이미 처리한 것이라 무시한다 (빌더는 2xx를 받을 때까지 다시 보낸다).
   빈 번호는 허용한다 (빌더가 재시작하면 seq를 건너뛴다).
 - 행을 잠그고(SELECT … FOR UPDATE) 처리해서, 재시도가 겹쳐도 같은 이벤트가 두 번 반영되지 않는다.
-- 모르는 build_id·v1 빌드면 무시하고 성공으로 답한다 (4xx면 빌더가 영원히 다시 보낸다).
+- 모르는 build_id·v1 시절 행이면 무시하고 성공으로 답한다 (4xx면 빌더가 영원히 다시 보낸다).
 - core가 이미 취소한 빌드(재배포로 대체)는 seq만 올리고 내용은 반영하지 않는다.
 """
 
 import logging
 from datetime import datetime, timezone
 
-from app.deploy.build import adopt, diagnose, pipeline, postwatch
+from app.deploy.build import diagnose, pipeline, postwatch
 from app.deploy.build import v2 as v2_module
 from app.deploy.build.v2 import close_record
 from app.deploy.model import Build, BuildRecord
@@ -105,7 +105,7 @@ def apply(build_id: str, ev: dict) -> str:
             if record is not None:
                 close_record(record, "cancelled")
         # 자동 빌드(nixpacks)가 만든 Dockerfile은 init 컨테이너 로그에 표지와 함께 찍힌다 — 화면의 Dockerfile 탭과
-        # 실패 진단이 쓰도록 빌드 행에 뽑아 둔다 (v1과 같다). 이미 뽑았으면 건너뛴다.
+        # 실패 진단이 쓰도록 빌드 행에 뽑아 둔다. 이미 뽑았으면 건너뛴다.
         if build.build_mode == "auto" and not build.dockerfile_content and build.logs:
             build.dockerfile_content = pipeline._extract_between(
                 build.logs, "===KODEPLOY_DOCKERFILE_START===", "===KODEPLOY_DOCKERFILE_END==="
@@ -124,9 +124,6 @@ def apply(build_id: str, ev: dict) -> str:
 
         if diagnosis and build.ai_status == "pending":
             pipeline.spawn_background(_diagnose, build_id, diagnosis)
-        # 배포(빌드·롤백·넘겨받기)가 끝나면 v1이 남긴 field manager를 지우고, 넘겨받는 중인 앱이면 v2로 바꾼다
-        if kind == "deployed" and build.status == "running" and (build.kind or "build") == "build":
-            pipeline.spawn_background(adopt.after_deployed, build_id)
         if kind == "deployed" and build.status == "running" and (build.kind or "build") != "env_change" and build.runtime != "static":
             # 성공은 바로 표시하고, 뒤에서 60초 동안 시작 직후 크래시를 본다 (postwatch).
             # 정적 사이트는 대상이 아니다 — 서버 배포 기준(최신 서버 빌드)으로 판정하는 감시라 정적 행엔 맞지 않고,

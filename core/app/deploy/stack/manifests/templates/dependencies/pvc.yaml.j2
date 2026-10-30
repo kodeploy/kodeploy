@@ -1,11 +1,10 @@
 # 로컬 영속 볼륨 — 앱 컨테이너의 mount_path에 붙는 단일 PVC (런타임 무관 공통 옵션 "local").
-# mysql처럼 워크로드가 아니라 PVC 1개뿐. service.py가 Deployment apply 전에 생성하고,
-# 런타임 템플릿(python/java/php)이 volume_mount_path 있으면 이 PVC를 마운트한다.
+# core가 빌더 제출 전에 만들고(stack/resources.py _apply_volume), 차트의 Deployment가 마운트한다.
 # 토글 off / 재배포에도 보존 (mysql PVC 보존과 동일 정책) — 삭제는 ns 삭제(앱 완전 삭제)에 위임.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ app_name }}-data                               # 앱당 1개 (1유저=1앱). Pod 볼륨 이름은 "data"
+  name: {{ app_name }}-data                               # 앱당 1개. 차트의 Pod 볼륨이 이 이름을 참조
   namespace: {{ tenant_id }}                              # 테넌트 ns가 격리 단위
   labels:
     app: {{ app_name }}

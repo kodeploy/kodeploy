@@ -54,7 +54,7 @@ class Build(Base):
     # 프론트는 pending인 동안만 폴링을 이어 가 "분석 중" 자리를 진단으로 바꿔 끼운다.
     ai_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
     logs: Mapped[str | None] = mapped_column(LONGTEXT, nullable=True)
-    # 빌더 콜백에서 마지막으로 처리한 seq. v1 빌드는 None, v2 빌드는 만들 때 0 (v2 표시 겸용).
+    # 빌더 콜백에서 마지막으로 처리한 seq. v1 시절 행은 None, 빌더 배포는 만들 때 0 (빌더 배포 표시 겸용).
     last_event_seq: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     # 롤백 배포면 되돌아간 원본 배포의 build_id. 일반 배포는 NULL. (v2만 — 이미지 digest로 되돌린다)
@@ -114,7 +114,7 @@ class BuildRecord(Base):
     total_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)  # 시작→종료 전체 (배포/rollout 대기 포함)
     status: Mapped[str] = mapped_column(String(20), default="building")  # 최종: "running" | "failed" | "cancelled"
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # early-trigger + 레지스트리 캐시 계측 (config.BUILD_REGISTRY_CACHE_ENABLED / EARLY_TRIGGER_ENABLED).
+    # early-trigger + 레지스트리 캐시 계측 (config.BUILD_REGISTRY_CACHE_ENABLED, 빌더가 콜백으로 채운다).
     # 원칙: 원본 "시각"만 저장하고 구간(duration)은 쿼리/뷰에서 뺀다. 시각→구간은 언제든 파생되지만
     #   구간만 저장하면 원본과 어긋날 위험만 남는다(코드 바꿨을 때). 그래서 push_exposed_seconds 같은
     #   파생 컬럼은 두지 않는다 — 노출시간은 job_ended_at − push_done_at으로 뷰에서 뺀다.
@@ -134,7 +134,7 @@ class BuildRecord(Base):
     job_ended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     deploy_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     deploy_ready_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    # v2(빌더) 단계 시각 — values 커밋(committed), Argo가 우리 커밋으로 Synced(deployed). v1은 None.
+    # v2(빌더) 단계 시각 — values 커밋(committed), Argo가 우리 커밋으로 Synced(deployed). v1 시절 행은 None.
     git_committed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     argo_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # triggered_early: early-trigger로 배포를 먼저 시작했나(True) / 폴백·플래그OFF(False). A/B 비교 축.

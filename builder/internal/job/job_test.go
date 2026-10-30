@@ -10,7 +10,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// hack/render-original-job.py와 같은 매개변수
+// testdata/original-*.json 골든의 매개변수. 골든은 core의 옛 Job 템플릿(2026-10 v1 경로와 함께 지움)을 렌더해 만든 것으로,
+// 이제는 고정된 기준이다 — Job 모양을 바꾸면 골든도 의도와 함께 손으로 고친다.
 func goldenParams(cache bool) Params {
 	p := Params{
 		Namespace:             "kodeploy-build",
@@ -185,7 +186,7 @@ func TestNoTokenEnvForPublicRepos(t *testing.T) {
 	}
 }
 
-// nixpacksParams는 hack/render-original-job.py의 nixpacks-* 모드와 같은 매개변수다.
+// nixpacksParams는 original-nixpacks-* 골든의 매개변수다.
 func nixpacksParams(cache bool, private bool) Params {
 	p := goldenParams(false)
 	p.Mode = ModeAuto
@@ -254,8 +255,8 @@ func TestNixpacksTokenReachesOnlyTheInitContainer(t *testing.T) {
 	}
 }
 
-// staticParams는 hack/render-original-job.py의 static-* 모드와 같은 매개변수다.
-// Dockerfile 본문은 같은 스크립트가 뽑은 testdata/static-dockerfile.txt (core의 static_dockerfile 렌더 결과).
+// staticParams는 original-static-* 골든의 매개변수다.
+// Dockerfile 본문은 testdata/static-dockerfile.txt (core의 static_dockerfile 렌더 결과).
 func staticParams(t *testing.T, cache bool, private bool) Params {
 	t.Helper()
 	text, err := os.ReadFile("testdata/static-dockerfile.txt")

@@ -70,7 +70,7 @@ async def cancel(build_id: str) -> bool:
 async def submit(payload: dict, sleep: Callable[[float], Awaitable[None]] = asyncio.sleep) -> None:
     """배포 요청을 보낸다. 202를 받으면 돌아오고, 받지 못하면 BuilderError.
 
-    409면 응답의 진행 중 build_id를 취소하고 다시 보낸다 (재배포가 옛 빌드를 대체 — v1 _cancel_stale_builds와 같은 역할).
+    409면 응답의 진행 중 build_id를 취소하고 다시 보낸다 (재배포가 옛 빌드를 대체 — pipeline._cancel_stale_builds와 같은 규칙).
     429면 Retry-After(상한 BUSY_WAIT_CAP)만큼, 5xx·연결 실패면 짧게 기다렸다 다시. 전부 합쳐 MAX_ATTEMPTS번.
     """
     body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode()

@@ -47,7 +47,6 @@ async def delete_account(db: Session, user: User) -> None:
     if user.role == "root":
         raise ValueError("root 계정은 탈퇴할 수 없습니다")
     for app in apps_service.list_user_apps(db, user.id):
-        if v2.is_v2(app):
-            await v2.request_delete(user, app)        # Application이 사라진 뒤에야 ns를 지운다
+        await v2.request_delete(user, app)            # Application이 사라진 뒤에야 ns를 지운다
         await asyncio.to_thread(status.delete_app, db, app)   # K8s·R2 호출이 동기라 메인 루프를 막지 않게
     await asyncio.to_thread(purge_user_rows, db, user)

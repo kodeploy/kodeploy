@@ -8,7 +8,6 @@ import uuid
 
 from app import config
 from app.apps.model import App
-from app.deploy.build import pipeline
 from app.deploy.routing import hostnames
 from app.deploy.model import Build
 
@@ -93,14 +92,3 @@ def test_user_id_str_hex_or_anonymous():
     uid = uuid.UUID("12345678-0000-0000-0000-000000000000")
     assert Build(user_id=uid).user_id_str == uid.hex
     assert Build(user_id=None).user_id_str == "anonymous"
-
-
-# --- _build_job_name — Job 템플릿 이름 규칙과 일치해야 로그 조회/취소가 Job을 찾음 ---
-
-def test_build_job_name_truncates_user_to_8():
-    uid_str = uuid.UUID("deadbeef-0000-0000-0000-000000000000").hex
-    assert pipeline._build_job_name("ab12cd34", uid_str) == "build-deadbeef-ab12cd34"
-
-
-def test_build_job_name_anonymous():
-    assert pipeline._build_job_name("ab12cd34", "anonymous") == "build-anonymou-ab12cd34"

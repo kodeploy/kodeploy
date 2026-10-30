@@ -8,7 +8,6 @@ restart가 내부적으로 하는 patch와 동일 원리).
 
 import base64
 import re
-from datetime import datetime, timezone
 
 from kubernetes.client.exceptions import ApiException
 
@@ -65,11 +64,9 @@ def get_env(tenant_id: str, app_name: str) -> dict[str, str]:
     return {k: base64.b64decode(v).decode("utf-8") for k, v in secret.data.items()}
 
 
-# Secret 통째 replace + Pod 재생성 트리거.
-# 부분 patch 안 함 — 클라이언트가 보낸 dict가 새 전체 상태.
-# Deployment 없으면 (첫 배포 전) Secret만 만들고 끝 — 다음 첫 배포 때 자연 적용.
-# restart=False면 Secret만 바꾼다 — v2 앱은 Pod 재시작을 Argo가 하므로(envRevision 커밋) core가 Deployment를 건드리지 않는다.
-def set_env(tenant_id: str, app_name: str, env: dict[str, str], restart: bool = True) -> None:
+# Secret 통째 replace. 부분 patch 안 함 — 클라이언트가 보낸 dict가 새 전체 상태.
+# Pod 재시작은 하지 않는다 — Argo가 한다(envRevision 커밋, 첫 배포면 처음부터 이 Secret으로 뜬다).
+def set_env(tenant_id: str, app_name: str, env: dict[str, str]) -> None:
     validate_env(env)
 
     name = _secret_name(app_name)
@@ -97,29 +94,3 @@ def set_env(tenant_id: str, app_name: str, env: dict[str, str], restart: bool = 
         if e.status != 404:
             raise
         core.create_namespaced_secret(namespace=tenant_id, body=body)
-
-    if not restart:
-        return
-
-    # rolling update 트리거 — template.annotations에 매번 다른 timestamp.
-    # kubectl rollout restart가 내부적으로 동일 patch를 호출함.
-    patch = {
-        "spec": {
-            "template": {
-                "metadata": {
-                    "annotations": {
-                        "kodeploy.com/env-updated-at": datetime.now(
-                            timezone.utc
-                        ).isoformat()
-                    }
-                }
-            }
-        }
-    }
-    try:
-        k8s.apps_v1().patch_namespaced_deployment(
-            name=app_name, namespace=tenant_id, body=patch
-        )
-    except ApiException as e:
-        if e.status != 404:  # 첫 배포 전이면 Deployment 없음 — 정상
-            raise

@@ -55,8 +55,8 @@ def add_user(db, login=None, email=None, role="user"):
     return u
 
 
-def add_app(db, owner, name, pipeline="v1"):
-    a = App(id=uuid.uuid4(), owner_id=owner.id, name=name, namespace=f"app-{uuid.uuid4().hex[:8]}", pipeline=pipeline)
+def add_app(db, owner, name):
+    a = App(id=uuid.uuid4(), owner_id=owner.id, name=name, namespace=f"app-{uuid.uuid4().hex[:8]}")
     db.add(a)
     db.commit()
     return a
@@ -132,15 +132,19 @@ def test_apps_are_deleted_before_the_account(db, monkeypatch):
         db_.delete(app)
         db_.commit()
 
+    async def request_delete(user, a):
+        return None
+
+    monkeypatch.setattr(v2, "request_delete", request_delete)
     monkeypatch.setattr(status, "delete_app", fake_delete)
     run(account.delete_account(db, me))
     assert order == [("app", "one", True), ("app", "two", True)]
     assert db.get(User, me.id) is None and db.query(App).count() == 0
 
 
-def test_v2_app_waits_for_the_builder_first(db, monkeypatch):
+def test_app_waits_for_the_builder_first(db, monkeypatch):
     me = add_user(db, "me")
-    app = add_app(db, me, "fast", pipeline="v2")
+    app = add_app(db, me, "fast")
     order = []
 
     async def request_delete(user, a):
@@ -159,8 +163,12 @@ def test_failure_keeps_the_account_so_it_can_be_retried(db, monkeypatch):
     def boom(db_, app):
         raise ValueError("삭제하지 못했습니다")
 
+    async def request_delete(user, a):
+        return None
+
+    monkeypatch.setattr(v2, "request_delete", request_delete)
     monkeypatch.setattr(status, "delete_app", boom)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="삭제하지 못했습니다"):
         run(account.delete_account(db, me))
     assert db.get(User, me.id) is not None
 

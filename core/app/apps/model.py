@@ -43,8 +43,8 @@ class App(Base):
     custom_domain_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # 플랫폼 기능 밖의 추가 hostname (콤마 구분) — 운영자가 DB에서 직접 등록.
     extra_hostnames: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # 빌드·배포 경로: "v1"(core가 직접) | "v2"(Go 빌더 → kodeploy-apps 커밋 → Argo).
-    # 새 앱은 v2로 시작한다. 기존 v1 앱은 deploy/build/adopt.py로 넘긴다.
+    # 빌드·배포 경로. 지금은 모두 "v2"(Go 빌더 → kodeploy-apps 커밋 → Argo)다.
+    # "v1"(core가 직접 Job·Deployment를 만들던 경로)은 2026-10에 모든 앱을 넘기고 코드를 지웠다 — 값만 남아 있다.
     pipeline: Mapped[str] = mapped_column(String(2), default="v2", server_default="v2")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)

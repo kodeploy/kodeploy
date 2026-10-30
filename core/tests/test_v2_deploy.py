@@ -1,6 +1,6 @@
-"""v2(빌더) 제출 경로 — pipeline 플래그로 갈리고, v1은 그대로.
+"""빌더 제출 경로.
 
-start_deploy가 v2 앱만 조건 검사 → run_v2_build로 보내는지, 조건이 안 맞으면 아무것도 바꾸기 전에
+start_deploy가 조건 검사 → run_v2_build로 보내는지, 조건이 안 맞으면 아무것도 바꾸기 전에
 400(ValueError)인지, 빌더 요청 본문이 계약(3-1)대로인지, 준비 → 전송 순서와 실패 처리를 본다.
 """
 
@@ -27,7 +27,7 @@ APP_ID = uuid.UUID("11111111-2222-4333-8444-555555555555")
 
 
 def v2_user(**kw):
-    return make_user(user_id=UID, pipeline="v2", **kw)
+    return make_user(user_id=UID, **kw)
 
 
 @pytest.fixture
@@ -47,19 +47,21 @@ def github(monkeypatch):
 
 # --- 갈림길 ---
 
-def test_v1_user_is_unchanged(spawned, github):  # noqa: F811
-    builds = run_deploy(MagicMock(), make_user())
-    assert spawned_fns(spawned) == [pipeline._run_build, pipeline._teardown_static]
-    assert builds[0].last_event_seq is None
-    assert github.probes == []                      # v1은 GitHub 확인도 하지 않는다
+def test_first_deploy_without_an_app_goes_to_the_builder(spawned, github, monkeypatch):  # noqa: F811
+    # 옛 경로 /deploy로 앱 없이 처음 배포해도 빌더로 간다 (저장소는 배포하는 사람의 GitHub 연결로 확인)
+    created = []
+    monkeypatch.setattr(pipeline, "_resolve_app", lambda name, repo, user, db: created.append(name) or App(
+        id=APP_ID, owner_id=user.id, name="fresh", namespace="app-11111111", site_enabled=False, pipeline="v2"))
+    builds = run_deploy(MagicMock(), make_user(app_name=None), name="fresh")
+    assert created == ["fresh"] and spawned_fns(spawned) == [v2.run_v2_build] and builds[0].last_event_seq == 0
 
 
-def test_v2_detect_resolves_dockerfile_and_skips_v1(spawned, github):  # noqa: F811
+def test_v2_detect_resolves_dockerfile(spawned, github):  # noqa: F811
     github.detected = ("dockerfile", "docker/Dockerfile.prod")
     builds = run_deploy(MagicMock(), v2_user(), runtime="java", port=8080, env_vars={"A": "1"}, build_mode="detect")
     b = builds[0]
     assert (b.build_mode, b.dockerfile_path, b.last_event_seq) == ("dockerfile", "docker/Dockerfile.prod", 0)
-    assert spawned_fns(spawned) == [v2.run_v2_build]  # _run_build도, 정적 teardown(route reconcile)도 없다
+    assert spawned_fns(spawned) == [v2.run_v2_build]
     assert spawned[0][1] == (b.build_id, {"A": "1"}, None)
     assert github.probes == [("https://github.com/u/repo.git", "main", "java")]
 
@@ -92,14 +94,13 @@ def test_v2_without_builder_secret(spawned, github, monkeypatch):  # noqa: F811
 def test_stale_v2_build_is_cancelled_at_builder(monkeypatch):
     calls = []
     monkeypatch.setattr(pipeline, "spawn_background", lambda fn, *a: calls.append((fn, a)))
-    monkeypatch.setattr(pipeline, "_cleanup_build_job", lambda *a: calls.append(("job", a)))
     old_v2 = Build(build_id="aaaa1111", status="building", last_event_seq=5, user_id=UID, runtime="java")
     old_v1 = Build(build_id="bbbb2222", status="building", last_event_seq=None, user_id=UID, runtime="java")
     db = MagicMock()
     db.query.return_value.filter.return_value.filter.return_value.all.return_value = [old_v2, old_v1]
     pipeline._cancel_stale_builds(db, UID, slot="server")
     assert old_v2.status == old_v1.status == "cancelled"
-    assert calls == [(v2.cancel_remote, ("aaaa1111",)), ("job", ("bbbb2222", UID.hex))]
+    assert calls == [(v2.cancel_remote, ("aaaa1111",))]   # v1 시절 행은 빌더가 모른다 — 표시만 닫는다
 
 
 # --- 요청 본문 ---
@@ -361,10 +362,6 @@ def test_which_builds_can_be_rolled_back_to(change, ok):
 def test_rollback_check_errors():
     app = v2_app()
     v2.check_rollback_target(app, rb_build())               # 통과
-    v1 = v2_app()
-    v1.pipeline = "v1"
-    with pytest.raises(ValueError, match="v2"):
-        v2.check_rollback_target(v1, rb_build())
     with pytest.raises(LookupError):
         v2.check_rollback_target(app, None)
     with pytest.raises(LookupError):
@@ -672,7 +669,7 @@ def test_static_payload_matches_contract(monkeypatch):
     assert spec["image_repo"] == f"ghcr.io/yuntyu01/{UID.hex[:8]}/demo-static" and spec["image_tag"] == "5a6b7c8d"
     assert spec["cache_ref"] == spec["image_repo"] + ":buildcache"
     assert not {"dockerfile_dir", "dockerfile_name"} & set(spec)  # 정적은 repo의 Dockerfile을 쓰지 않는다
-    # Dockerfile은 v1과 같은 템플릿으로 core가 만든다 — 빌더는 받은 그대로 쓴다
+    # Dockerfile은 core가 템플릿으로 만든다 — 빌더는 받은 그대로 쓴다
     text = base64.b64decode(spec["dockerfile_b64"]).decode("utf-8")
     assert text == v2.static_dockerfile_text(b)
     assert "RUN npm ci && npm run build" in text and "/app/dist/" in text and 'ENV VITE_API="https://api.example.com"' in text
@@ -707,7 +704,7 @@ def test_v2_static_with_server_builds_both_slots_on_the_builder(spawned, github)
     assert (server.last_event_seq, site.last_event_seq) == (0, 0)             # 둘 다 콜백으로 상태를 받는다
     assert (site.build_mode, site.app_name, site.port) == ("static", "foo-static", 8080)
     assert site.image.rsplit("/", 1)[1].startswith("foo-static:")
-    assert spawned_fns(spawned) == [v2.run_v2_build, v2.run_v2_build]          # v1 빌드·정적 teardown 없음
+    assert spawned_fns(spawned) == [v2.run_v2_build, v2.run_v2_build]
     assert spawned[0][1] == (server.build_id, {"A": "1"}, None)
     assert spawned[1][1] == (site.build_id,)                                    # 서버 환경변수는 정적 사이트와 상관없다
     assert APPS[server.user_id].site_enabled is True
@@ -717,7 +714,7 @@ def test_v2_static_only_app_has_no_server_build_and_nothing_to_tear_down(spawned
     monkeypatch.setattr(v2, "has_server_deployed", lambda db, app: False)
     builds = run_deploy(MagicMock(), v2_user(), runtime="none", use_static=True)
     assert [b.runtime for b in builds] == ["static"]
-    assert spawned_fns(spawned) == [v2.run_v2_build]                           # _teardown_server·_teardown_static 없음
+    assert spawned_fns(spawned) == [v2.run_v2_build]
     assert github.probes == []                                                  # 서버 빌드가 없으니 Dockerfile 감지도 없다
 
 
@@ -731,7 +728,7 @@ def test_v2_dropping_the_static_site_leaves_it_to_the_server_build(spawned, gith
 
 
 def test_v2_static_only_removes_a_deployed_server(spawned, github, monkeypatch):  # noqa: F811
-    # 서버가 있던 앱을 정적 사이트만 남기면 빌더에 서버 슬롯을 내리게 한다 (v1 _teardown_server 자리)
+    # 서버가 있던 앱을 정적 사이트만 남기면 빌더에 서버 슬롯을 내리게 한다
     monkeypatch.setattr(v2, "has_server_deployed", lambda db, app: True)
     user = v2_user()
     builds = run_deploy(MagicMock(), user, runtime="none", use_static=True)

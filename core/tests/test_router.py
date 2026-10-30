@@ -27,13 +27,13 @@ from app.shared.db import get_db
 APPS: dict[uuid.UUID, App] = {}   # 유저 id → 앱. fake_apps가 router의 앱 조회를 이걸로 대신한다
 
 
-def make_user(app_name="foo", pipeline="v1"):
+def make_user(app_name="foo"):
     """유저와 (app_name이 있으면) 그 유저의 앱. 앱은 APPS[user.id]."""
     user = User(id=uuid.uuid4())
     if app_name:
         APPS[user.id] = App(
             id=uuid.uuid4(), owner_id=user.id, name=app_name, namespace=f"tenant-{user.id.hex[:8]}",
-            site_enabled=False, pipeline=pipeline,
+            site_enabled=False, pipeline="v2",
         )
     return user
 
@@ -174,7 +174,7 @@ def test_ws_rejects_missing_cookie_with_allowed_origin():
     assert exc.value.code == 4001              # Origin 통과 후 인증에서 거절
 
 
-# --- v2(빌더) 앱: 환경변수·도메인 변경은 빌더(config)로 반영한다 ---
+# --- 환경변수·도메인 변경은 빌더(config)로 반영한다 ---
 
 @pytest.fixture
 def cfg(monkeypatch):
@@ -182,7 +182,7 @@ def cfg(monkeypatch):
     rec = SimpleNamespace(set_env=[], submitted=[], hostnames=[], domain=[], cleared=[], spawned=[], busy=False, builder_down=False, idle=[])
 
     monkeypatch.setattr(deploy_router.env, "get_env", lambda ns, name: {"OLD": "1"})
-    monkeypatch.setattr(deploy_router.env, "set_env", lambda ns, name, e, restart=True: rec.set_env.append(restart))
+    monkeypatch.setattr(deploy_router.env, "set_env", lambda ns, name, e: rec.set_env.append(e))
     monkeypatch.setattr(pipeline, "spawn_background", lambda fn, *a: rec.spawned.append(fn))
 
     def ensure_idle(db, app, include_static=False):
@@ -204,82 +204,62 @@ def cfg(monkeypatch):
     monkeypatch.setattr(deploy_router.v2, "submit_env_revision", submit_env)
     monkeypatch.setattr(deploy_router.v2, "apply_hostnames", apply_hostnames)
     monkeypatch.setattr(deploy_router.hostnames, "set_custom_domain",
-                        lambda db, app, d, reconcile=True: rec.domain.append(reconcile) or {"domain": d, "status": "pending"})
+                        lambda db, app, d: rec.domain.append(d) or {"domain": d, "status": "pending"})
     monkeypatch.setattr(deploy_router.hostnames, "clear_custom_domain",
-                        lambda db, app, reconcile=True: rec.cleared.append(reconcile))
+                        lambda db, app: rec.cleared.append(app.name))
     return rec
 
 
-def test_v2_env_change_writes_the_secret_then_asks_the_builder(cfg):
-    client = make_client(make_user(pipeline="v2"))
+def test_env_change_writes_the_secret_then_asks_the_builder(cfg):
+    client = make_client(make_user())
     r = client.put("/deploy/env", json={"env": {"A": "1"}})
     assert r.status_code == 200
-    assert cfg.set_env == [False]                                 # Deployment은 건드리지 않는다 (Argo가 다시 띄운다)
+    assert cfg.set_env == [{"A": "1"}]                            # Secret만 쓴다 (Pod은 Argo가 다시 띄운다)
     assert cfg.idle == [False]                                    # 환경변수는 서버 배포만 기다린다 (정적 사이트와 상관없다)
     assert len(cfg.submitted) == 1
     ev = cfg.submitted[0]
     assert (ev.kind, ev.status, ev.last_event_seq) == ("env_change", "applied", 0)
-    assert cfg.spawned == []                                      # v1의 롤아웃 감시 스레드는 안 뜬다
+    assert cfg.spawned == []                                      # core가 롤아웃을 감시하지 않는다
 
 
-def test_v1_env_change_is_unchanged(cfg):
-    r = make_client(make_user(pipeline="v1")).put("/deploy/env", json={"env": {"A": "1"}})
-    assert r.status_code == 200
-    assert cfg.set_env == [True] and cfg.submitted == [] and len(cfg.spawned) == 1
-
-
-def test_v2_env_change_waits_while_a_deploy_is_running(cfg):
+def test_env_change_waits_while_a_deploy_is_running(cfg):
     cfg.busy = True
-    r = make_client(make_user(pipeline="v2")).put("/deploy/env", json={"env": {"A": "1"}})
+    r = make_client(make_user()).put("/deploy/env", json={"env": {"A": "1"}})
     assert r.status_code == 409 and "배포가 진행 중" in r.json()["detail"]
     assert cfg.set_env == [] and cfg.submitted == []              # Secret도 건드리지 않았다
 
 
-def test_v2_env_change_reports_a_builder_failure(cfg):
+def test_env_change_reports_a_builder_failure(cfg):
     cfg.builder_down = True
-    r = make_client(make_user(pipeline="v2")).put("/deploy/env", json={"env": {"A": "1"}})
+    r = make_client(make_user()).put("/deploy/env", json={"env": {"A": "1"}})
     assert r.status_code == 502 and "저장했지만" in r.json()["detail"]
-    assert cfg.set_env == [False]                                 # Secret은 이미 저장됐다
+    assert cfg.set_env == [{"A": "1"}]                            # Secret은 이미 저장됐다
 
 
-def test_v2_domain_goes_through_the_builder(cfg):
-    client = make_client(make_user(pipeline="v2"))
+def test_domain_goes_through_the_builder(cfg):
+    client = make_client(make_user())
     assert client.put("/deploy/domain", json={"domain": "www.example.com"}).status_code == 200
-    assert cfg.domain == [False] and len(cfg.hostnames) == 1      # route를 직접 안 고치고 빌더로 반영한다
+    assert cfg.domain == ["www.example.com"] and len(cfg.hostnames) == 1   # route는 빌더로 반영한다
     assert client.delete("/deploy/domain").json() == {"status": "cleared"}
     assert cfg.idle == [True, True]                               # 도메인은 정적 사이트 배포까지 기다린다 (정적 슬롯 호스트도 바뀐다)
-    assert cfg.cleared == [False] and len(cfg.hostnames) == 2
+    assert cfg.cleared == ["foo"] and len(cfg.hostnames) == 2
 
 
-def test_v1_domain_is_unchanged(cfg):
-    client = make_client(make_user(pipeline="v1"))
-    assert client.put("/deploy/domain", json={"domain": "www.example.com"}).status_code == 200
-    client.delete("/deploy/domain")
-    assert cfg.domain == [True] and cfg.cleared == [True] and cfg.hostnames == []
-
-
-def test_v2_domain_waits_while_a_deploy_is_running(cfg):
+def test_domain_waits_while_a_deploy_is_running(cfg):
     cfg.busy = True
-    client = make_client(make_user(pipeline="v2"))
+    client = make_client(make_user())
     assert client.put("/deploy/domain", json={"domain": "www.example.com"}).status_code == 400
     assert client.delete("/deploy/domain").status_code == 409
     assert cfg.domain == [] and cfg.cleared == []
 
 
-def test_v2_domain_reports_a_builder_failure(cfg):
+def test_domain_reports_a_builder_failure(cfg):
     cfg.builder_down = True
-    r = make_client(make_user(pipeline="v2")).put("/deploy/domain", json={"domain": "www.example.com"})
+    r = make_client(make_user()).put("/deploy/domain", json={"domain": "www.example.com"})
     assert r.status_code == 502 and "저장했지만" in r.json()["detail"]
 
 
-def test_v1_app_delete_still_works(monkeypatch):
-    called = []
-    monkeypatch.setattr(status, "delete_app", lambda *a: called.append("delete_app"))
-    user = make_user(pipeline="v1")
-    assert make_client(user).delete("/deploy/app").status_code == 200 and called == ["delete_app"]
-
-
-def test_v2_app_delete_waits_for_builder_then_deletes(monkeypatch):
+def test_app_delete_waits_for_builder_then_deletes(monkeypatch):
     order = []
 
     async def request_delete(user, app):
@@ -287,19 +267,19 @@ def test_v2_app_delete_waits_for_builder_then_deletes(monkeypatch):
 
     monkeypatch.setattr(deploy_router.v2, "request_delete", request_delete)
     monkeypatch.setattr(status, "delete_app", lambda *a: order.append("delete_app"))
-    user = make_user(pipeline="v2")
+    user = make_user()
     assert make_client(user).delete("/deploy/app").status_code == 200
     assert order == ["builder", "delete_app"]          # Application이 사라진 뒤에야 ns를 지운다
 
 
-def test_v2_app_delete_keeps_app_when_builder_fails(monkeypatch):
+def test_app_delete_keeps_app_when_builder_fails(monkeypatch):
     async def request_delete(user, app):
         raise ValueError("삭제하지 못했습니다 (timeout: still exists)")
 
     called = []
     monkeypatch.setattr(deploy_router.v2, "request_delete", request_delete)
     monkeypatch.setattr(status, "delete_app", lambda *a: called.append("delete_app"))
-    user = make_user(pipeline="v2")
+    user = make_user()
     r = make_client(user).delete("/deploy/app")
     assert r.status_code == 400 and "삭제하지 못했습니다" in r.json()["detail"]
     assert called == []
