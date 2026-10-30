@@ -79,6 +79,28 @@ rules:
   - apiGroups: ["gateway.networking.k8s.io"]             # 유저 앱 서브도메인 라우팅
     resources: ["httproutes"]
     verbs: ["create", "patch", "delete"]                 # patch=커스텀 도메인 hostname 주입, delete=앱 삭제 시 정리
+
+  # --- 이관 기간: v1 → v2 넘겨받기 (deploy/build/adopt.py strip_core_managers) ---
+  # Argo가 apply한 리소스에서 v1이 남긴 field manager(OpenAPI-Generator)를 지운다 — list로 찾고 managedFields만 JSON patch.
+  # 모든 앱이 v2가 되고 v1 코드를 지울 때 위 v1 쓰기 권한과 함께 뺀다.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["list"]
+  - apiGroups: ["apps"]
+    resources: ["statefulsets"]
+    verbs: ["list", "patch"]
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["list", "patch"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["patch"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["list"]
+  - apiGroups: ["projectcalico.org"]
+    resources: ["networkpolicies"]
+    verbs: ["list", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding                                 # SA를 ClusterRole에 연결 

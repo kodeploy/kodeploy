@@ -178,7 +178,7 @@ def test_deployed_event_starts_watch(monkeypatch):
     monkeypatch.setattr(events.pipeline, "spawn_background", lambda fn, *a: started.append((fn, a)))
     monkeypatch.setattr(events, "SessionLocal", lambda: _events_session())
     assert events.apply("3f9a2c1d", {"seq": 1, "type": "deployed", "at": "2026-09-28T12:03:10Z"}) == "deployed"
-    assert started == [(postwatch.watch_after_deploy, ("3f9a2c1d",))]
+    assert (postwatch.watch_after_deploy, ("3f9a2c1d",)) in started
 
 
 def _events_session():

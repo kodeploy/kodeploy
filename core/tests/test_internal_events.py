@@ -251,7 +251,8 @@ def test_regular_build_still_goes_deploying_then_watched(env):
     env.post({"seq": 1, "type": "committed", "image": "ghcr.io/u/x/demo:3f9a2c1d@sha256:" + "a" * 64})
     assert env.row()[0].status == "deploying"
     env.post({"seq": 2, "type": "deployed"})
-    assert env.row()[0].status == "running" and len(env.spawned) == 1
+    assert env.row()[0].status == "running"
+    assert [fn.__name__ for fn, _ in env.spawned] == ["after_deployed", "watch_after_deploy"]
 
 
 # --- 비공개 저장소 빌드의 토큰 Secret 정리 ---
@@ -316,11 +317,12 @@ def test_static_site_deploy_is_not_crash_watched(env):
     assert _status("5a6b7c8d") == "deploying"
     env.post({"seq": 2, "type": "deployed"}, build_id="5a6b7c8d")
     assert _status("5a6b7c8d") == "running"
-    assert env.spawned == []
+    assert [fn.__name__ for fn, _ in env.spawned] == ["after_deployed"]   # field manager 정리만, 감시는 없다
     # 서버 빌드는 그대로 감시한다
+    env.spawned.clear()
     env.post({"seq": 1, "type": "committed", "image": "i"})
     env.post({"seq": 2, "type": "deployed"})
-    assert [fn.__name__ for fn, _ in env.spawned] == ["watch_after_deploy"]
+    assert [fn.__name__ for fn, _ in env.spawned] == ["after_deployed", "watch_after_deploy"]
 
 
 def test_initial_dump_is_restored_after_deploy(env, monkeypatch):

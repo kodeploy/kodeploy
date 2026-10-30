@@ -10,7 +10,7 @@
 import logging
 from datetime import datetime, timezone
 
-from app.deploy.build import diagnose, pipeline, postwatch
+from app.deploy.build import adopt, diagnose, pipeline, postwatch
 from app.deploy.build import v2 as v2_module
 from app.deploy.build.v2 import close_record
 from app.deploy.model import Build, BuildRecord
@@ -124,6 +124,9 @@ def apply(build_id: str, ev: dict) -> str:
 
         if diagnosis and build.ai_status == "pending":
             pipeline.spawn_background(_diagnose, build_id, diagnosis)
+        # 배포(빌드·롤백·넘겨받기)가 끝나면 v1이 남긴 field manager를 지우고, 넘겨받는 중인 앱이면 v2로 바꾼다
+        if kind == "deployed" and build.status == "running" and (build.kind or "build") == "build":
+            pipeline.spawn_background(adopt.after_deployed, build_id)
         if kind == "deployed" and build.status == "running" and (build.kind or "build") != "env_change" and build.runtime != "static":
             # 성공은 바로 표시하고, 뒤에서 60초 동안 시작 직후 크래시를 본다 (postwatch).
             # 정적 사이트는 대상이 아니다 — 서버 배포 기준(최신 서버 빌드)으로 판정하는 감시라 정적 행엔 맞지 않고,

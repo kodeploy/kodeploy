@@ -137,6 +137,21 @@ def _static_values(build: Build, owner: User, server_hosts: list[str], static_ho
     }
 
 
+# 서버 슬롯 빌드의 values — core 칸 전부와, 서버 빌드가 함께 싣는 정적 슬롯 선언(enabled·hostnames).
+def server_values(
+    build: Build, owner: User, hostnames: list[str], static_enabled: bool, static_hosts: list[str],
+) -> dict:
+    return {
+        "name": build.app_name,
+        "userId": owner.id.hex,
+        "db": build.db_type or "none",
+        "redis": bool(build.use_redis),
+        "volume": {"mountPath": build.volume_mount_path or ""},
+        "hostnames": hostnames,
+        "static": {"enabled": static_enabled, "hostnames": static_hosts},
+    }
+
+
 def build_payload(
     build: Build,
     owner: User,
@@ -187,15 +202,7 @@ def build_payload(
         "namespace": build.tenant_id,
         "slot": "server",
         "kind": "build",
-        "values": {
-            "name": build.app_name,
-            "userId": owner.id.hex,
-            "db": build.db_type or "none",
-            "redis": bool(build.use_redis),
-            "volume": {"mountPath": build.volume_mount_path or ""},
-            "hostnames": hostnames,
-            "static": {"enabled": static_enabled, "hostnames": static_hosts or []},
-        },
+        "values": server_values(build, owner, hostnames, static_enabled, static_hosts or []),
         "unit": {"runtime": build.runtime, "port": build.port},
         "build": spec,
     }
