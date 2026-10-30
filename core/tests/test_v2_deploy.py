@@ -257,12 +257,42 @@ def test_ensure_dep_secrets_creates_only_secrets(monkeypatch):
     core = MagicMock()
     core.create_namespaced_secret.side_effect = lambda namespace, body: created.append((namespace, body["metadata"]["name"]))
     monkeypatch.setattr(resources.k8s, "core_v1", lambda: core)
-    apps = MagicMock()
-    monkeypatch.setattr(resources.k8s, "apps_v1", lambda: apps)
     resources.ensure_dep_secrets(make_build(db_type="mysql", use_redis=True))
     ns = f"tenant-{UID.hex[:8]}"
     assert created == [(ns, "mysql-secret"), (ns, "redis-secret")]
-    assert not core.create_namespaced_service.called and not apps.method_calls   # 워크로드는 차트가 그린다
+    assert not core.create_namespaced_service.called           # 워크로드는 차트가 그린다
+
+
+def test_tenant_ns_binds_core_before_writing_secrets(monkeypatch):
+    # core의 테넌트 권한은 이 ns의 RoleBinding에서 온다 — Namespace → RoleBinding → 권한 반영 확인 → Secret 순서
+    from app.deploy.stack import resources
+
+    order = []
+    core = MagicMock()
+    core.read_namespace.side_effect = resources.ApiException(status=404)
+    core.read_namespaced_secret.return_value = SimpleNamespace(data={".dockerconfigjson": "e30="})
+    core.create_namespace.side_effect = lambda body: order.append(("Namespace", body["metadata"]["name"]))
+    core.create_namespaced_secret.side_effect = lambda namespace, body: order.append(("Secret", body["metadata"]["name"]))
+    rbac = MagicMock()
+    rbac.create_namespaced_role_binding.side_effect = lambda namespace, body: order.append(
+        ("RoleBinding", body["roleRef"]["name"], [(s["kind"], s["name"], s["namespace"]) for s in body["subjects"]]))
+    allowed = iter([False, True])                              # 첫 확인은 아직 반영 전
+    authz = MagicMock()
+    authz.create_self_subject_access_review.side_effect = lambda body: order.append("review") or SimpleNamespace(
+        status=SimpleNamespace(allowed=next(allowed)))
+    monkeypatch.setattr(resources.k8s, "core_v1", lambda: core)
+    monkeypatch.setattr(resources.k8s, "rbac_v1", lambda: rbac)
+    monkeypatch.setattr(resources.k8s, "authorization_v1", lambda: authz)
+    monkeypatch.setattr(resources.time, "sleep", lambda s: None)
+    resources._ensure_tenant_ns(make_build())
+    ns = f"tenant-{UID.hex[:8]}"
+    assert order == [
+        ("Namespace", ns),
+        ("RoleBinding", "kodeploy-core-tenant", [("ServiceAccount", "kodeploy-core", "default")]),
+        "review", "review",
+        ("Secret", "ghcr-auth"),
+    ]
+    assert not core.delete_namespaced_resource_quota.called    # 옛 quota 청소는 지웠다
 
 
 # --- 앱 삭제: 빌더에 맡기고 deleted를 기다린다 ---

@@ -5,42 +5,70 @@ metadata:
   namespace: default
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole                                        # 클러스터 전역 권한 (ns 무관 — kodeploy-build, tenant-xxx 모두 적용)
+kind: ClusterRole                                        # 클러스터 전역 권한 — 테넌트 ns 밖에서도 필요한 것만
 metadata:
   name: kodeploy-core
-# 원칙: core가 app/ 코드에서 "실제로 호출하는" 동사만 둔다 (2026-10 v1 경로 제거 뒤 전수 대조).
+# 원칙: core가 app/ 코드에서 "실제로 호출하는" 동사만 둔다 (2026-10 전수 대조).
 # 워크로드(Deployment·DB·Service·HTTPRoute·NetworkPolicy)는 차트가 그리고 Argo가 apply한다 — core는 쓰지 않는다.
-# 빌드 Job도 빌더가 만든다. core는 그 앞의 준비(ns·Secret·PVC)와 조회·터미널·삭제만 한다.
+# 권한은 세 덩어리다:
+#   1. 여기(전역): ns 만들기·지우기, 테넌트 ns에 자기 RoleBinding 걸기, 노드 조회
+#   2. kodeploy-core-tenant: 테넌트 ns 안의 Secret·PVC·Pod 로그/exec — 그 ns의 RoleBinding으로만 받는다
+#      (core가 ns를 만들 때 같이 건다 — manifests/templates/tenant.yaml.j2). argocd·kube-system엔 닿지 않는다.
+#   3. kodeploy-build의 Role: 빌드 Secret(ghcr-auth 읽기, git-auth)·Job/Pod 조회(진단)
+# 전역의 ns 생성·삭제와 RoleBinding 생성은 이름·모양을 admission 정책이 묶는다 (admission-policy.yaml) —
+# RBAC만으로는 "app-·tenant- ns만"을 표현할 수 없어서다.
 # watch는 어디서도 안 쓴다 — 상태 추적은 전부 폴링이라 의도적으로 뺐다.
 # ⚠️ 새 K8s 호출을 추가하고 여기를 안 늘리면 대부분 403으로 터지지만, 항상 그렇진 않다:
-#    admin/service.py, console/logs.py 등은 ApiException을 삼켜서 "빈 목록/빈 로그"로 위장한다.
+#    admin/service.py, console/logs.py 등은 예외를 삼켜서 "빈 목록/빈 로그"로 위장한다.
 #    권한을 줄인 뒤 검증할 땐 화면이 뜨는지가 아니라 실제 내용(로그 줄·Pod 행)이 나오는지로 판정할 것.
 rules:
-  # --- 빌드 Job (kodeploy-build ns, 빌더가 만든다) ---
-  - apiGroups: ["batch"]
-    resources: ["jobs"]
-    verbs: ["list"]                                      # 실패 진단이 종료 사유를 읽는다 (diagnose.py)
-
-  # --- 테넌트 프로비저닝 ---
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get", "create", "delete"]                   # get=Terminating 대기, delete=앱 삭제(하위 리소스 일괄 정리)
-
-  # --- 테넌트 내부 리소스 ---
+    verbs: ["get", "create", "delete"]                   # get=Terminating 대기, delete=앱 삭제. create·delete는 테넌트 이름만 (admission)
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["create"]                                    # 테넌트 ns에 kodeploy-core-tenant를 자기에게 거는 것만 (admission)
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    resourceNames: ["kodeploy-core-tenant"]
+    verbs: ["bind"]                                      # RoleBinding으로 걸 수 있는 ClusterRole은 이것 하나
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]                                      # 관리자 노드 현황의 노드별 Pod limit 합산 (전 ns, 읽기만)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["list"]
+  - apiGroups: [""]
+    resources: ["nodes/stats"]
+    verbs: ["get"]                                       # kubelet /stats/summary 직접 조회 (nodes/proxy는 kubelet exec까지 열려 쓰지 않는다)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding                                 # SA를 ClusterRole에 연결
+metadata:
+  name: kodeploy-core
+subjects:
+  - kind: ServiceAccount
+    name: kodeploy-core
+    namespace: default
+roleRef:
+  kind: ClusterRole                                      # 어떤 권한을 (위에서 정의한 ClusterRole)
+  name: kodeploy-core
+  apiGroup: rbac.authorization.k8s.io                    # RBAC v1 그룹 (빠뜨리면 validation 에러)
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole                                        # 테넌트 ns 안의 권한 묶음 — ClusterRoleBinding 없이 ns별 RoleBinding으로만 쓴다
+metadata:
+  name: kodeploy-core-tenant
+rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "create", "update", "delete"]         # 환경변수·의존성·R2·ghcr-auth·git-auth. list 없음 — 이름을 알고 여는 것만
+    verbs: ["get", "create", "update", "delete"]         # 환경변수·의존성 비밀번호·R2·ghcr-auth. list 없음 — 이름을 알고 여는 것만
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["create"]                                    # 로컬 볼륨. 삭제는 ns delete가 대신함
   - apiGroups: [""]
-    resources: ["resourcequotas"]
-    verbs: ["delete"]                                    # 옛 quota 잔재 청소용(stack/resources.py) — 잔재 정리 확인되면 코드와 함께 제거
-
-  # --- Pod 조회/로그/터미널 ---
-  - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["list"]                                      # 라벨 셀렉터로 대상 Pod 찾기
+    verbs: ["list"]                                      # 라벨 셀렉터로 대상 Pod 찾기 (상태·로그·터미널·DB 콘솔·배포 뒤 감시)
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
@@ -50,24 +78,33 @@ rules:
     # (빈 reason 403. can-i는 get을 yes로 답하는데 실제 요청은 거부 — connecter 서브리소스는
     #  인가 경로가 다르다). 구 role의 get+create 조합은 터미널 동작이 검증된 상태라 그대로 유지.
     verbs: ["get", "create"]
-
-  # --- 관리자 페이지 노드 현황 (읽기 전용) ---
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["list"]
-  - apiGroups: [""]
-    resources: ["nodes/proxy"]
-    verbs: ["get"]                                       # kubelet stats/summary (CPU/메모리/디스크)
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding                                 # SA를 ClusterRole에 연결 
+kind: Role                                               # 빌드 ns (빌드 Job은 빌더가 만든다)
 metadata:
   name: kodeploy-core
+  namespace: kodeploy-build
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "create", "update", "delete"]         # get=ghcr-auth 읽어 테넌트로 복사, 나머지=비공개 저장소 git-auth-<build_id>
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["list"]                                      # 실패 진단이 종료 사유를 읽는다 (diagnose.py)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list"]                                      # 같은 진단 — 빌드 Pod 컨테이너 종료 정보
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kodeploy-core
+  namespace: kodeploy-build
 subjects:
-  - kind: ServiceAccount                                 
+  - kind: ServiceAccount
     name: kodeploy-core
     namespace: default
 roleRef:
-  kind: ClusterRole                                      # 어떤 권한을 (위에서 정의한 ClusterRole)
+  kind: Role
   name: kodeploy-core
-  apiGroup: rbac.authorization.k8s.io                    # RBAC v1 그룹 (빠뜨리면 validation 에러)
+  apiGroup: rbac.authorization.k8s.io

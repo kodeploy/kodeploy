@@ -1,18 +1,23 @@
 """관리자 통계/조회 — 플랫폼 DB 집계 + 노드 리소스.
 
-노드 CPU/메모리/디스크는 VictoriaMetrics를 안 거치고 K8s API proxy의
-kubelet stats/summary JSON(/api/v1/nodes/{name}/proxy/stats/summary)을 직접 읽는다 —
-라벨 추측 없이 결정적이고, core가 이미 가진 K8s 클라이언트로 끝남.
-(RBAC에 nodes + nodes/proxy 읽기 권한 필요 — deploy/k8s/core/rbac.yaml)
+노드 CPU/메모리/디스크는 VictoriaMetrics를 안 거치고 kubelet stats/summary JSON(https://<노드 IP>:10250/stats/summary)을
+직접 읽는다 — 라벨 추측 없이 결정적이다 (VM의 cadvisor 디스크는 장치별로 갈려 kubelet nodefs와 1:1이 안 된다).
+apiserver의 nodes/proxy를 거치지 않는 이유: nodes/proxy는 kubelet API 전체(exec 포함)로 가는 권한이다.
+kubelet에 직접 가면 kubelet이 /stats를 nodes/stats로 인가하므로 그 권한 하나면 된다 (deploy/k8s/core/rbac.yaml).
+kubelet 서빙 인증서는 노드마다 자체 CA가 서명했다 — 그 CA 묶음(ConfigMap kubelet-serving-ca,
+ansible 69-kubelet-serving-ca.yml)으로 검증하고, SAN이 노드 이름뿐이라 IP로 접속하되 노드 이름으로 확인한다.
 """
 
+import ssl
 import uuid
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from kubernetes.client.exceptions import ApiException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app import config
 from app.admin import audit
 from app.apps.model import App, AppMember, Tier
 from app.auth.model import User
@@ -185,15 +190,37 @@ def _parse_mem_bytes(v: str) -> int:
     return int(v)
 
 
-# kubelet stats/summary 프록시 호출 (노드 1대). 응답은 dict (실패 시 ApiException 전파).
-def _node_summary(core, node_name: str) -> dict:
-    summary = core.api_client.call_api(
-        f"/api/v1/nodes/{node_name}/proxy/stats/summary",
-        "GET",
-        auth_settings=["BearerToken"],
-        response_type="object",
-        _return_http_data_only=True,
-    )
+class StatsError(Exception):
+    pass
+
+
+# kubelet stats/summary 직접 호출 (노드 1대). 응답은 dict. 실패는 StatsError(화면에 보일 사유).
+# 토큰은 core SA 토큰 — TLS를 검증하므로 apiserver에 보내는 것과 같은 조건이다.
+# CA 묶음은 매번 읽는다 — ConfigMap이 갱신되면 재시작 없이 따라간다 (관리자 화면이라 호출이 드물다).
+def _node_summary(node) -> dict:
+    addr = next((a.address for a in (node.status.addresses or []) if a.type == "InternalIP"), None)
+    endpoints = node.status.daemon_endpoints
+    port = endpoints.kubelet_endpoint.port if endpoints and endpoints.kubelet_endpoint else 10250
+    if not addr:
+        raise StatsError("노드 주소 없음")
+    try:
+        ctx = ssl.create_default_context(cafile=config.KUBELET_CA_FILE)
+        with open(config.SA_TOKEN_FILE) as f:
+            token = f.read().strip()
+    except OSError as e:
+        raise StatsError(f"kubelet CA·토큰 없음: {e.strerror}")
+    try:
+        with httpx.Client(verify=ctx, timeout=5) as c:
+            r = c.request(
+                "GET", f"https://{addr}:{port}/stats/summary",
+                headers={"Authorization": f"Bearer {token}"},
+                extensions={"sni_hostname": node.metadata.name},   # 인증서 SAN = DNS:<노드 이름>
+            )
+    except httpx.HTTPError as e:
+        raise StatsError(type(e).__name__)
+    if r.status_code != 200:
+        raise StatsError(f"HTTP {r.status_code}")
+    summary = r.json()
     return summary if isinstance(summary, dict) else {}
 
 
@@ -222,7 +249,7 @@ def node_stats() -> list[dict]:
         }
         try:
             # kubelet Stats Summary — usageNanoCores/workingSetBytes/fs가 한 JSON에 다 옴
-            summary = _node_summary(core, name)
+            summary = _node_summary(n)
             node_sum = summary.get("node", {})
             cpu = node_sum.get("cpu") or {}
             mem = node_sum.get("memory") or {}
@@ -236,8 +263,8 @@ def node_stats() -> list[dict]:
             pods = summary.get("pods")
             if isinstance(pods, list):
                 entry["pod_count"] = len(pods)
-        except ApiException as e:
-            entry["error"] = f"stats 조회 실패 (HTTP {e.status})"
+        except StatsError as e:
+            entry["error"] = f"stats 조회 실패 ({e})"
         out.append(entry)
 
     out.sort(key=lambda e: (e["role"] != "master", e["name"]))
@@ -281,10 +308,13 @@ def node_pod_stats(node_name: str) -> list[dict]:
                 "ephemeral": eph_total if eph_all else None,
             }
 
+    node = next((n for n in core.list_node().items if n.metadata.name == node_name), None)
+    if node is None:
+        raise ValueError("노드를 찾을 수 없습니다")
     try:
-        summary = _node_summary(core, node_name)
-    except ApiException as e:
-        raise ValueError(f"노드 stats 조회 실패 (HTTP {e.status})")
+        summary = _node_summary(node)
+    except StatsError as e:
+        raise ValueError(f"노드 stats 조회 실패 ({e})")
 
     out = []
     for pod in summary.get("pods") or []:

@@ -36,6 +36,11 @@ BUILD_REGISTRY_CACHE_ENABLED = os.getenv("BUILD_REGISTRY_CACHE", "false").lower(
 BUILDER_URL = os.getenv("BUILDER_URL", "http://kodeploy-builder.default.svc:8080").rstrip("/")
 BUILDER_HMAC_SECRET = os.getenv("BUILDER_HMAC_SECRET", "")
 
+# --- kubelet 직접 조회 (관리자 노드 현황, admin/service.py) ---
+# 노드마다 자체 서명인 kubelet 서빙 CA 묶음 — ConfigMap kubelet-serving-ca 마운트 (ansible 69-kubelet-serving-ca.yml)
+KUBELET_CA_FILE = os.getenv("KUBELET_CA_FILE", "/etc/kodeploy/kubelet-ca/ca.crt")
+SA_TOKEN_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
 # --- Cloudflare R2 (오브젝트 스토리지, 레벨2 = 앱당 버킷 + bucket-scoped 토큰) ---
 # 시크릿이라 env 주입. 비어 있으면 storage 토글 비활성(r2.is_configured()=False).
 CF_API_TOKEN = os.getenv("CF_API_TOKEN", "")        # 버킷 생성/삭제 + 토큰 발급 권한 가진 CF 토큰

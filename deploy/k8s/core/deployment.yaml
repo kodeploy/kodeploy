@@ -81,5 +81,14 @@ spec:
               port: 8000
             periodSeconds: 5
             failureThreshold: 3                          # 연속 N회 실패 시 endpoint 제외 (15초)
+          volumeMounts:
+            - name: kubelet-ca                           # 관리자 노드 현황 — kubelet stats 직접 조회 TLS 검증용 (config.KUBELET_CA_FILE)
+              mountPath: /etc/kodeploy/kubelet-ca
+              readOnly: true
+      volumes:
+        - name: kubelet-ca
+          configMap:
+            name: kubelet-serving-ca                     # ansible 69-kubelet-serving-ca.yml이 노드들의 kubelet CA로 만든다
+            optional: true                               # 없으면 노드 현황만 "stats 조회 실패" — /healthz와 나머지는 정상
       imagePullSecrets:
         - name: ghcr-auth                                # private GHCR 이미지 pull용 인증

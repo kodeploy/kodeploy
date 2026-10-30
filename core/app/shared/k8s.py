@@ -22,25 +22,25 @@ def _ensure_loaded() -> None:
     _loaded = True
 
 
-# BuildKit Job 생성/조회용
+# 빌드 Job 조회용 (실패 진단 — Job은 빌더가 만든다)
 def batch_v1() -> client.BatchV1Api:
     _ensure_loaded()
     return client.BatchV1Api()
 
 
-# Pod 로그·Service 조회/생성용
+# ns·Secret·PVC·Pod 로그/exec·노드 조회용
 def core_v1() -> client.CoreV1Api:
     _ensure_loaded()
     return client.CoreV1Api()
 
 
-# Deployment 생성/패치용
-def apps_v1() -> client.AppsV1Api:
+# 테넌트 ns의 core RoleBinding 생성용
+def rbac_v1() -> client.RbacAuthorizationV1Api:
     _ensure_loaded()
-    return client.AppsV1Api()
+    return client.RbacAuthorizationV1Api()
 
 
-# Gateway API 등 CRD 조작용
-def custom() -> client.CustomObjectsApi:
+# 방금 만든 RoleBinding이 적용됐는지 확인용 (SelfSubjectAccessReview)
+def authorization_v1() -> client.AuthorizationV1Api:
     _ensure_loaded()
-    return client.CustomObjectsApi()
+    return client.AuthorizationV1Api()

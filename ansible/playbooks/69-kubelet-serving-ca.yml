@@ -1,0 +1,51 @@
+---
+# kubelet 서빙 인증서의 CA 묶음 → ConfigMap default/kubelet-serving-ca (core가 kubelet /stats/summary를 직접 부를 때 검증용).
+#
+# 왜: core 관리자 노드 현황은 kubelet stats/summary를 읽는다. apiserver의 nodes/proxy를 거치면 kubelet API
+# 전체(exec 포함)로 가는 권한이 필요해서, kubelet에 직접 가고 nodes/stats 권한만 쓴다 (core/app/admin/service.py).
+# kubelet 서빙 인증서는 노드마다 자체 CA(<노드>-ca@<시각>)가 서명했고 클러스터 CA가 아니다 —
+# 그 CA들을 모아 core에 신뢰 앵커로 준다. CA 인증서는 공개 정보라 ConfigMap이면 된다.
+#
+# 언제 다시 돌리나: kubelet 서빙 인증서가 새로 만들어질 때 (노드 재생성, 2027-04-29 만료 뒤 재발급).
+# 안 돌리면 core 노드 현황만 "stats 조회 실패 (SSL…)"로 보이고 다른 기능은 영향 없다.
+# leaf SAN은 노드 이름뿐(DNS:<노드>)이라 core는 IP로 접속하고 노드 이름으로 검증한다.
+- name: 각 노드 kubelet 서빙 CA 읽기
+  hosts: master:workers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: kubelet.crt에서 자체 서명 인증서(CA)만 뽑기
+      shell: |
+        set -eu
+        d=$(mktemp -d)
+        awk -v d="$d" '/BEGIN CERTIFICATE/{n++} n{print > (d "/c" n ".pem")}' /var/lib/kubelet/pki/kubelet.crt
+        for f in "$d"/c*.pem; do
+          s=$(openssl x509 -in "$f" -noout -subject | sed 's/^subject=//')
+          i=$(openssl x509 -in "$f" -noout -issuer | sed 's/^issuer=//')
+          [ "$s" = "$i" ] && cat "$f"
+        done
+        rm -rf "$d"
+      register: kubelet_ca
+      changed_when: false
+      failed_when: "'BEGIN CERTIFICATE' not in kubelet_ca.stdout"
+
+- name: ConfigMap default/kubelet-serving-ca 반영
+  hosts: managed
+  become: false
+  gather_facts: false
+  vars:
+    kubeconfig: /home/opc/.kube/config
+  tasks:
+    - name: CA 묶음 파일
+      copy:
+        dest: /tmp/kubelet-serving-ca.crt
+        content: "{{ (groups['master'] + groups['workers']) | map('extract', hostvars, ['kubelet_ca', 'stdout']) | join('\n') }}\n"
+        mode: "0644"
+
+    - name: ConfigMap apply
+      shell: >
+        kubectl --kubeconfig {{ kubeconfig }} -n default create configmap kubelet-serving-ca
+        --from-file=ca.crt=/tmp/kubelet-serving-ca.crt --dry-run=client -o yaml
+        | kubectl --kubeconfig {{ kubeconfig }} apply -f -
+      register: applied
+      changed_when: "'unchanged' not in applied.stdout"

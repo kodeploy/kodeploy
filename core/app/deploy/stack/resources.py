@@ -11,9 +11,10 @@ from app.deploy.stack import manifests, r2
 from app.deploy.model import Build
 from app.shared import k8s
 
-# 테넌트 ns 프로비저닝 (Namespace + ghcr-auth Secret). idempotent create(409 skip).
-# ResourceQuota는 제거됨 — API-mediated 구조에선 컴포넌트·limit이 고정이라 ns 상한이
-# 구조적으로 결정되고, 슬롯별 배포에서 quota 덮어쓰기 사고만 만들었음 (runtimes.py 주석).
+# 테넌트 ns 프로비저닝 (Namespace + core RoleBinding + ghcr-auth Secret). idempotent create(409 skip).
+# 이미 있는 ns도 매 배포 RoleBinding을 다시 시도한다 — 빠져 있으면 여기서 채워진다.
+# ResourceQuota는 쓰지 않는다 — 컴포넌트·limit이 차트로 고정이라 ns 상한이 구조적으로 정해진다
+# (옛 quota 잔재는 2026-10에 클러스터에서 0개 확인 후 청소 코드도 지웠다).
 def _ensure_tenant_ns(build: Build) -> None:
     if build.user_id is None:
         return
@@ -52,19 +53,30 @@ def _ensure_tenant_ns(build: Build) -> None:
         try:
             if kind == "Namespace":
                 core.create_namespace(body=doc)
+            elif kind == "RoleBinding":
+                k8s.rbac_v1().create_namespaced_role_binding(namespace=ns, body=doc)
             elif kind == "Secret":
+                _wait_for_tenant_access(ns)
                 core.create_namespaced_secret(namespace=ns, body=doc)
         except ApiException as e:
             if e.status != 409:
                 raise
 
-    # 옛 ResourceQuota 잔재 정리 — 라이브 테넌트에 남은 quota가 admission을 계속 물면
-    # 정체불명 배포 실패가 되므로, 배포마다 멱등 delete (테넌트별 자가 정리).
-    try:
-        core.delete_namespaced_resource_quota(name=ns, namespace=ns)
-    except ApiException as e:
-        if e.status != 404:
-            raise
+
+# core의 테넌트 ns 권한은 이 ns의 RoleBinding(kodeploy-core → kodeploy-core-tenant)에서 온다.
+# 방금 만든 RoleBinding은 apiserver 권한 캐시에 잠깐 늦게 반영될 수 있어, Secret을 만들 수 있을 때까지 기다린다.
+# 이미 있던 ns면 첫 확인에서 바로 통과한다. 15초 안에 안 되면 그대로 진행해서 Secret 생성의 403으로 표면화.
+def _wait_for_tenant_access(ns: str) -> None:
+    review = {
+        "apiVersion": "authorization.k8s.io/v1",
+        "kind": "SelfSubjectAccessReview",
+        "spec": {"resourceAttributes": {"namespace": ns, "verb": "create", "resource": "secrets"}},
+    }
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if k8s.authorization_v1().create_self_subject_access_review(body=review).status.allowed:
+            return
+        time.sleep(0.5)
 
 
 # 의존성 Secret만 만든다. StatefulSet·Service·Deployment는 차트가 그리고,

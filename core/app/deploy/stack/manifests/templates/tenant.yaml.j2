@@ -8,6 +8,23 @@ metadata:
     pod-security.kubernetes.io/enforce: restricted       # PSS 최고 보안 프로파일 — privileged/hostPath/runAsRoot 차단
     pod-security.kubernetes.io/enforce-version: v1.30    # 정책 버전 핀 (K8s 업그레이드 시 동작 변동 방지)
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding                                        # core가 이 ns 안에서만 쓰는 권한 (Secret·PVC·Pod 로그·exec)
+metadata:
+  name: kodeploy-core
+  namespace: {{ tenant_id }}
+  labels:
+    tenant: {{ tenant_id }}
+    managed-by: kodeploy
+roleRef:                                                 # 다른 ns에선 이 권한이 없다 — argocd·kube-system의 Secret·exec 차단
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kodeploy-core-tenant
+subjects:                                                # 만들 수 있는 모양은 admission 정책이 이것 하나로 묶는다 (deploy/k8s/core/admission-policy.yaml)
+  - kind: ServiceAccount
+    name: kodeploy-core
+    namespace: default
+---
 apiVersion: v1
 kind: Secret                                             # 유저 앱 이미지 pull용 (private GHCR 인증)
 metadata:

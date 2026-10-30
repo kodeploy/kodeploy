@@ -1,0 +1,46 @@
+# core SA가 쓰는 전역 권한을 테넌트 범위로 묶는다 (rbac.yaml의 짝).
+# RBAC은 "이 이름 패턴의 ns만"을 표현할 수 없다 — namespaces create·delete와 rolebindings create는 전역으로 줄 수밖에 없어서,
+# 그 요청의 모양을 여기서 확인한다. core가 털려도 argocd·kube-system ns를 지우거나, 거기에 자기 권한을 걸 수 없다.
+# 읽기(get)는 admission을 거치지 않으므로 여기서 막지 못한다 — 그래서 Secret·exec는 RBAC에서 ns별로만 준다.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kodeploy-core-tenant-only
+spec:
+  failurePolicy: Fail                                    # 정책 평가가 실패하면 거절 (열리는 쪽으로 실패하지 않게)
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "DELETE"]
+        resources: ["namespaces"]
+      - apiGroups: ["rbac.authorization.k8s.io"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["rolebindings"]
+  matchConditions:
+    - name: from-core
+      expression: "request.userInfo.username == 'system:serviceaccount:default:kodeploy-core'"
+  variables:
+    - name: tenantName                                   # apps/service.py new_namespace — tenant-<유저 hex8> | app-<앱 hex8>
+      expression: "'^(tenant|app)-[0-9a-f]{8}$'"
+  validations:
+    - expression: >-
+        request.resource.resource != 'namespaces' ||
+        (request.operation == 'DELETE' ? oldObject.metadata.name : object.metadata.name).matches(variables.tenantName)
+      message: "core는 테넌트 네임스페이스(tenant-<hex8>·app-<hex8>)만 만들고 지울 수 있습니다"
+    - expression: >-
+        request.resource.resource != 'rolebindings' ||
+        (request.namespace.matches(variables.tenantName) &&
+         object.roleRef.kind == 'ClusterRole' && object.roleRef.name == 'kodeploy-core-tenant' &&
+         size(object.subjects) == 1 &&
+         object.subjects.all(s, s.kind == 'ServiceAccount' && s.name == 'kodeploy-core' && s.namespace == 'default'))
+      message: "core는 테넌트 네임스페이스에 kodeploy-core-tenant를 자기에게 거는 RoleBinding만 만들 수 있습니다"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kodeploy-core-tenant-only
+spec:
+  policyName: kodeploy-core-tenant-only
+  validationActions: ["Deny"]
