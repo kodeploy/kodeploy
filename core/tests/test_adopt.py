@@ -49,6 +49,38 @@ def test_live_image_refuses_ambiguous_state(cluster, setup, reason):
         adopt.live_image(NSNAME, "modo")
 
 
+# --- 원본 행: 떠 있는 이미지 태그 = v1 build_id ---
+
+def _db(rows):
+    # query(Build).filter(...).first() — build_id 조건만 흉내 낸다
+    class Q:
+        def filter(self, *conds):
+            want = next(c.right.value for c in conds if c.left.key == "build_id")
+            return NS(first=lambda: next((r for r in rows if r.build_id == want), None))
+    return NS(query=lambda model: Q())
+
+
+def test_source_is_the_row_that_built_the_live_image_even_if_marked_failed(monkeypatch):
+    # 기동이 느려 failed로 찍혔지만 그 이미지가 떠 있다 — 그 행이 원본이다 (runboo)
+    monkeypatch.setattr(adopt, "live_image", lambda ns, name: f"ghcr.io/yuntyu01/1f3e0465/modo:b5076b2d@{DIGEST}")
+    rows = [_row(build_id="b5076b2d", status="failed"), _row(build_id="c0ffee00", status="running")]
+    src, image = adopt._live_source(_db(rows), _app(), "modo")
+    assert src.build_id == "b5076b2d" and image.endswith(DIGEST)
+
+
+def test_source_none_when_slot_is_not_running(monkeypatch):
+    def gone(ns, name):
+        raise adopt.ApiException(status=404)
+    monkeypatch.setattr(adopt, "live_image", gone)
+    assert adopt._live_source(_db([]), _app(), "modo-static") is None
+
+
+def test_source_refuses_image_without_history(monkeypatch):
+    monkeypatch.setattr(adopt, "live_image", lambda ns, name: f"ghcr.io/yuntyu01/1f3e0465/modo:deadbeef@{DIGEST}")
+    with pytest.raises(ValueError, match="배포 이력이 없습니다"):
+        adopt._live_source(_db([_row(build_id="b5076b2d")]), _app(), "modo")
+
+
 # --- set-image 본문 ---
 
 def _app(**kw):

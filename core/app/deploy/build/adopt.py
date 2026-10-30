@@ -5,8 +5,8 @@
 
 흐름:
   1. 떠 있는 Pod의 imageID에서 digest를 읽어, 슬롯마다 set-image를 보낸다 (values는 core 칸 전부).
-     다시 빌드하지 않으니 유저 코드가 바뀌지 않는다. 이력 행은 롤백처럼 마지막 성공 배포를 복사해 만든다 —
-     넘겨받은 배포가 그대로 첫 v2 롤백 대상이 된다.
+     다시 빌드하지 않으니 유저 코드가 바뀌지 않는다. 이력 행은 롤백처럼 지금 떠 있는 이미지를 만든 배포 행을
+     복사해 만든다 — 넘겨받은 배포가 그대로 첫 v2 롤백 대상이 된다.
   2. Argo가 values로 리소스를 그린다. 이름이 v1과 같아 새로 만들지 않고 기존 리소스에 server-side apply 한다
      (값이 다른 칸은 Argo가 가져가고, 차트 resources 표가 v1과 달라 Pod·DB가 한 번 재시작된다).
   3. deployed가 오면(콜백 → after_deployed) core 쪽 field manager를 지우고 pipeline을 v2로 바꾼다.
@@ -73,13 +73,24 @@ def live_image(namespace: str, name: str) -> str:
     return f"{repo}:{tag}@{digests.pop()}"
 
 
-def _last_running(db, app: App, *, static: bool) -> Build | None:
-    q = db.query(Build).filter(Build.app_id == app.id, Build.kind == "build", Build.status == "running")
-    q = q.filter(Build.runtime == "static") if static else q.filter(Build.runtime != "static")
-    return q.order_by(Build.created_at.desc()).first()
+# 슬롯의 Deployment가 떠 있으면 (그 이미지를 만든 배포 행, 떠 있는 이미지). Deployment가 없으면 None.
+# v1 이미지 태그는 build_id라 그 행을 원본으로 쓴다. 행 상태는 보지 않는다 — 기동이 느려 failed로 찍혔지만
+# 그 이미지가 그대로 떠 있는 앱이 있다 (마지막 성공 행은 지금 떠 있는 것과 다를 수 있다).
+def _live_source(db, app: App, name: str) -> tuple[Build, str] | None:
+    try:
+        image = live_image(app.namespace, name)
+    except ApiException as e:
+        if e.status == 404:
+            return None
+        raise
+    tag = image.split("@", 1)[0].rpartition(":")[2]
+    src = db.query(Build).filter(Build.app_id == app.id, Build.build_id == tag).first()
+    if src is None:
+        raise ValueError(f"{name}: 떠 있는 이미지({tag})를 만든 배포 이력이 없습니다")
+    return src, image
 
 
-# 마지막 성공 배포를 복사한 이력 행 (롤백 행과 같은 모양, rollback_of는 없다).
+# 떠 있는 이미지를 만든 배포를 복사한 이력 행 (롤백 행과 같은 모양, rollback_of는 없다).
 def _adopt_row(app: App, src: Build, image: str) -> Build:
     return Build(
         build_id=uuid.uuid4().hex[:8],
@@ -139,16 +150,16 @@ async def start_adopt(db, app: App) -> list[Build]:
         raise ValueError("앱 주인을 찾을 수 없습니다")
 
     plan: list[tuple[Build, str]] = []     # (복사할 행, 떠 있는 이미지)
-    server = _last_running(db, app, static=False)
+    server = _live_source(db, app, app.name)
     if server is not None:
-        plan.append((server, live_image(app.namespace, server.app_name)))
+        plan.append(server)
     if app.site_enabled:
-        static = _last_running(db, app, static=True)
+        static = _live_source(db, app, f"{app.name}-static")
         if static is None:
-            raise ValueError("정적 사이트가 켜져 있는데 성공한 정적 배포가 없습니다")
-        plan.append((static, live_image(app.namespace, static.app_name)))
+            raise ValueError("정적 사이트가 켜져 있는데 떠 있는 정적 Deployment가 없습니다")
+        plan.append(static)
     if not plan:
-        raise ValueError("넘겨받을 배포가 없습니다 (성공한 배포가 없다)")
+        raise ValueError("넘겨받을 배포가 없습니다 (떠 있는 Deployment가 없다)")
 
     rows = []
     for src, image in plan:
