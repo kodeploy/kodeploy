@@ -63,8 +63,9 @@ def add_user(db, login=None, email=None):
     return u
 
 
+# 접근 권한 테스트라 배포 경로는 v1으로 고정한다 (v1 쪽 가짜 K8s를 쓴다)
 def add_app(db, owner, name="shop"):
-    a = App(id=uuid.uuid4(), owner_id=owner.id, name=name, namespace=f"app-{uuid.uuid4().hex[:8]}")
+    a = App(id=uuid.uuid4(), owner_id=owner.id, name=name, namespace=f"app-{uuid.uuid4().hex[:8]}", pipeline="v1")
     db.add(a)
     db.commit()
     return a

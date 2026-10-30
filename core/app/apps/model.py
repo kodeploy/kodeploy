@@ -44,8 +44,8 @@ class App(Base):
     # 플랫폼 기능 밖의 추가 hostname (콤마 구분) — 운영자가 DB에서 직접 등록.
     extra_hostnames: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 빌드·배포 경로: "v1"(core가 직접) | "v2"(Go 빌더 → kodeploy-apps 커밋 → Argo).
-    # 운영자가 DB에서 앱 하나씩 켠다 (UPDATE apps SET pipeline='v2' WHERE name=...). 앱을 삭제하면 같이 사라진다.
-    pipeline: Mapped[str] = mapped_column(String(2), default="v1", server_default="v1")
+    # 새 앱은 v2로 시작한다. 기존 v1 앱은 deploy/build/adopt.py로 넘긴다.
+    pipeline: Mapped[str] = mapped_column(String(2), default="v2", server_default="v2")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
