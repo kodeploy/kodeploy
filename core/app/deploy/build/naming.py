@@ -38,6 +38,7 @@ RESERVED_NAMES = {
     "kodeploy",  # 브랜드명
     "origin",    # CF for SaaS fallback origin (origin.kodeploy.com) — 유저가 잡으면 커스텀 도메인 전부 깨짐
     "myhome",    # myhome.kodeploy.com은 클러스터 밖 OCI VM(Cloudflare 터널)으로 간다. 앱을 만들어도 열리지 않는다
+    "myhome-ssh",  # 같은 VM의 SSH 터널 이름
 }
 
 # DNS-1123 label rule (K8s metadata.name + 서브도메인 둘 다 만족)
