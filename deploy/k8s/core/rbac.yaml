@@ -11,12 +11,13 @@ metadata:
 # 원칙: core가 app/ 코드에서 "실제로 호출하는" 동사만 둔다 (2026-10 전수 대조).
 # 워크로드(Deployment·DB·Service·HTTPRoute·NetworkPolicy)는 차트가 그리고 Argo가 apply한다 — core는 쓰지 않는다.
 # 권한은 세 덩어리다:
-#   1. 여기(전역): ns 만들기·지우기, 테넌트 ns에 자기 RoleBinding 걸기, 노드 조회
-#   2. kodeploy-core-tenant: 테넌트 ns 안의 Secret·PVC·Pod 로그/exec — 그 ns의 RoleBinding으로만 받는다
+#   1. 여기(전역): ns 만들기, 테넌트 ns에 자기 RoleBinding 걸기, 노드 조회
+#   2. kodeploy-core-tenant: 테넌트 ns 안의 Secret·PVC·Pod 로그/exec와 그 ns 자신의 삭제 — 그 ns의 RoleBinding으로만 받는다
 #      (core가 ns를 만들 때 같이 건다 — manifests/templates/tenant.yaml.j2). argocd·kube-system엔 닿지 않는다.
 #   3. kodeploy-build의 Role: 빌드 Secret(ghcr-auth 읽기, git-auth)·Job/Pod 조회(진단)
-# 전역의 ns 생성·삭제와 RoleBinding 생성은 이름·모양을 admission 정책이 묶는다 (admission-policy.yaml) —
+# 전역의 ns 생성과 RoleBinding 생성은 이름·모양을 admission 정책이 묶는다 (admission-policy.yaml) —
 # RBAC만으로는 "app-·tenant- ns만"을 표현할 수 없어서다.
+# ns 읽기는 아예 없다 — 지운 직후 재배포의 Terminating 대기는 RoleBinding 생성 거절(NamespaceTerminating)로 판정한다.
 # watch는 어디서도 안 쓴다 — 상태 추적은 전부 폴링이라 의도적으로 뺐다.
 # ⚠️ 새 K8s 호출을 추가하고 여기를 안 늘리면 대부분 403으로 터지지만, 항상 그렇진 않다:
 #    admin/service.py, console/logs.py 등은 예외를 삼켜서 "빈 목록/빈 로그"로 위장한다.
@@ -24,7 +25,7 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["get", "create", "delete"]                   # get=Terminating 대기, delete=앱 삭제. create·delete는 테넌트 이름만 (admission)
+    verbs: ["create"]                                    # 테넌트 이름만 (admission). 삭제는 kodeploy-core-tenant 쪽
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["rolebindings"]
     verbs: ["create"]                                    # 테넌트 ns에 kodeploy-core-tenant를 자기에게 거는 것만 (admission)
@@ -61,6 +62,9 @@ metadata:
   name: kodeploy-core-tenant
 rules:
   - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["delete"]                                    # 앱 삭제. ns 안 RoleBinding이 주는 namespaces 권한은 그 ns 객체 하나에만 닿는다
+  - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "create", "update", "delete"]         # 환경변수·의존성 비밀번호·R2·ghcr-auth. list 없음 — 이름을 알고 여는 것만
   - apiGroups: [""]
@@ -87,7 +91,11 @@ metadata:
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "create", "update", "delete"]         # get=ghcr-auth 읽어 테넌트로 복사, 나머지=비공개 저장소 git-auth-<build_id>
+    resourceNames: ["ghcr-auth"]
+    verbs: ["get"]                                       # ghcr-auth를 읽어 테넌트로 복사 — 이 ns의 다른 Secret은 읽지 못한다
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "update", "delete"]                # 비공개 저장소 git-auth-<build_id> (이름이 빌드마다 달라 resourceNames로 못 묶는다)
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["list"]                                      # 실패 진단이 종료 사유를 읽는다 (diagnose.py)

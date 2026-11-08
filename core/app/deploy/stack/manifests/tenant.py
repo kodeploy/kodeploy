@@ -19,3 +19,10 @@ def tenant(
         user_id=user_id,
         dockerconfigjson_b64=dockerconfigjson_b64,
     )
+
+
+# core RoleBinding만 — RoleBinding이 빠진 ns를 지우기 전에 다시 건다 (resources.rebind_core).
+# 같은 템플릿에서 꺼내서 모양이 ns 프로비저닝 때와 어긋나지 않는다 (admission 정책이 이 모양 하나만 허용).
+def core_binding(tenant_id: str) -> dict:
+    docs = tenant(tenant_id=tenant_id, user_id="", dockerconfigjson_b64="")
+    return next(d for d in docs if d["kind"] == "RoleBinding")

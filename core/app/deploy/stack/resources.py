@@ -1,6 +1,7 @@
 """테넌트 준비 — ns · 의존성 Secret · R2 · PVC. 워크로드(Deployment·DB·Route)는 차트가 그리고 Argo가 apply한다."""
 
 import base64
+import json
 import time
 
 from kubernetes.client.exceptions import ApiException
@@ -19,35 +20,34 @@ def _ensure_tenant_ns(build: Build) -> None:
     if build.user_id is None:
         return
 
-    core = k8s.core_v1()
     ns = build.tenant_id
-
-    # 직전 delete_app으로 ns가 terminating 중일 수 있음 — 사라질 때까지 잠시 대기.
-    # 60초 안에 안 끝나면 그대로 진행해서 create_namespace의 에러로 표면화.
-    deadline = time.time() + 60
-    while time.time() < deadline:
-        try:
-            existing = core.read_namespace(name=ns)
-        except ApiException as e:
-            if e.status == 404:
-                break  # 사라짐 — 새로 만들면 됨
-            raise
-        if existing.status.phase != "Terminating":
-            break  # Active — 재사용
-        time.sleep(2)
-
-    secret = core.read_namespaced_secret(
+    secret = k8s.core_v1().read_namespaced_secret(
         name=config.GHCR_AUTH_SECRET_NAME,
         namespace=config.BUILD_NAMESPACE,
     )
-    dockerconfigjson_b64 = secret.data[".dockerconfigjson"]
-
     docs = manifests.tenant(
         tenant_id=ns,
         user_id=build.user_id_str,
-        dockerconfigjson_b64=dockerconfigjson_b64,
+        dockerconfigjson_b64=secret.data[".dockerconfigjson"],
     )
 
+    # 직전 delete_app으로 ns가 Terminating 중일 수 있다. core는 ns를 읽을 권한이 없어서 만들기의 거절로 판정한다:
+    # ns create는 409로 넘어가고, 그 안의 첫 생성(RoleBinding)이 NamespaceTerminating 403(막 사라졌으면 404)으로
+    # 거절된다 → 잠시 뒤 처음부터 다시 (사라졌으면 이번엔 ns create가 새로 만든다).
+    # 60초 안에 안 끝나면 그 거절을 그대로 올린다.
+    deadline = time.time() + 60
+    while True:
+        try:
+            _create_tenant_docs(ns, docs)
+            return
+        except ApiException as e:
+            if not _namespace_going_away(e) or time.time() >= deadline:
+                raise
+            time.sleep(2)
+
+
+def _create_tenant_docs(ns: str, docs: list[dict]) -> None:
+    core = k8s.core_v1()
     for doc in docs:
         kind = doc["kind"]
         try:
@@ -61,6 +61,34 @@ def _ensure_tenant_ns(build: Build) -> None:
         except ApiException as e:
             if e.status != 409:
                 raise
+
+
+# ns가 지워지는 중이거나 이미 없어서 그 안에 만들 수 없다는 거절인가.
+# 403은 권한 거절과 같은 코드라 cause로 가른다 (NamespaceLifecycle admission이 붙이는 NamespaceTerminating).
+def _namespace_going_away(e: ApiException) -> bool:
+    if e.status == 404:
+        return True
+    if e.status != 403:
+        return False
+    try:
+        causes = (json.loads(e.body or "{}").get("details") or {}).get("causes") or []
+    except (ValueError, AttributeError):
+        return False
+    return any(c.get("reason") == "NamespaceTerminating" for c in causes)
+
+
+# ns 삭제 권한도 그 ns의 RoleBinding에서 온다 (status.delete_app). RoleBinding이 빠진 ns(만들다 중간에 실패)는
+# core가 지울 수 없어서, 다시 걸고 반영을 기다린다. ns가 없거나 이미 지워지는 중이면 False — 지울 것이 없다.
+def rebind_core(ns: str) -> bool:
+    try:
+        k8s.rbac_v1().create_namespaced_role_binding(namespace=ns, body=manifests.core_binding(ns))
+    except ApiException as e:
+        if _namespace_going_away(e):
+            return False
+        if e.status != 409:
+            raise
+    _wait_for_tenant_access(ns)
+    return True
 
 
 # core의 테넌트 ns 권한은 이 ns의 RoleBinding(kodeploy-core → kodeploy-core-tenant)에서 온다.

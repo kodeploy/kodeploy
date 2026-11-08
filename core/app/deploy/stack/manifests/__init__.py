@@ -7,9 +7,10 @@ dependencies.py = 의존성 Secret (mysql·postgres·redis 자격증명, R2) + �
 
 from app.deploy.stack.manifests.build import static_dockerfile
 from app.deploy.stack.manifests.dependencies import mysql, postgres, redis, storage, volume
-from app.deploy.stack.manifests.tenant import tenant
+from app.deploy.stack.manifests.tenant import core_binding, tenant
 
 __all__ = [
+    "core_binding",
     "mysql",
     "postgres",
     "redis",

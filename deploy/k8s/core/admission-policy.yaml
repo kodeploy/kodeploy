@@ -1,6 +1,7 @@
 # core SA가 쓰는 전역 권한을 테넌트 범위로 묶는다 (rbac.yaml의 짝).
-# RBAC은 "이 이름 패턴의 ns만"을 표현할 수 없다 — namespaces create·delete와 rolebindings create는 전역으로 줄 수밖에 없어서,
-# 그 요청의 모양을 여기서 확인한다. core가 털려도 argocd·kube-system ns를 지우거나, 거기에 자기 권한을 걸 수 없다.
+# RBAC은 "이 이름 패턴의 ns만"을 표현할 수 없다 — namespaces create와 rolebindings create는 전역으로 줄 수밖에 없어서,
+# 그 요청의 모양을 여기서 확인한다. core가 털려도 argocd·kube-system 이름으로 ns를 만들거나, 거기에 자기 권한을 걸 수 없다.
+# ns 삭제는 이제 테넌트 ns의 RoleBinding으로만 받는다(전역 권한 없음) — 아래 DELETE 검사는 RBAC가 먼저 막는 것의 이중 방어다.
 # 읽기(get)는 admission을 거치지 않으므로 여기서 막지 못한다 — 그래서 Secret·exec는 RBAC에서 ns별로만 준다.
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy

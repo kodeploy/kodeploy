@@ -6,6 +6,7 @@ start_deploy가 조건 검사 → run_v2_build로 보내는지, 조건이 안 �
 
 import asyncio
 import base64
+import json
 import uuid
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -269,7 +270,6 @@ def test_tenant_ns_binds_core_before_writing_secrets(monkeypatch):
 
     order = []
     core = MagicMock()
-    core.read_namespace.side_effect = resources.ApiException(status=404)
     core.read_namespaced_secret.return_value = SimpleNamespace(data={".dockerconfigjson": "e30="})
     core.create_namespace.side_effect = lambda body: order.append(("Namespace", body["metadata"]["name"]))
     core.create_namespaced_secret.side_effect = lambda namespace, body: order.append(("Secret", body["metadata"]["name"]))
@@ -293,6 +293,146 @@ def test_tenant_ns_binds_core_before_writing_secrets(monkeypatch):
         ("Secret", "ghcr-auth"),
     ]
     assert not core.delete_namespaced_resource_quota.called    # 옛 quota 청소는 지웠다
+    assert not core.read_namespace.called                      # core엔 ns 읽기 권한이 없다
+
+
+# --- ns 읽기 없이 Terminating 판정 · RoleBinding으로 받은 ns 삭제 권한 ---
+
+def _api_error(status, cause=None):
+    from app.deploy.stack import resources
+
+    e = resources.ApiException(status=status)
+    if cause:   # apiserver 본문 모양 그대로 (NamespaceLifecycle admission이 붙이는 cause)
+        e.body = json.dumps({"kind": "Status", "reason": "Forbidden", "details": {"causes": [{"reason": cause}]}})
+    return e
+
+
+def _tenant_fakes(monkeypatch, rb_errors):
+    from app.deploy.stack import resources
+
+    order, sleeps = [], []
+    core = MagicMock()
+    core.read_namespaced_secret.return_value = SimpleNamespace(data={".dockerconfigjson": "e30="})
+    core.create_namespace.side_effect = lambda body: order.append("Namespace")
+    core.create_namespaced_secret.side_effect = lambda namespace, body: order.append("Secret")
+    errors = iter(rb_errors)
+
+    def create_rb(namespace, body):
+        order.append("RoleBinding")
+        err = next(errors, None)
+        if err:
+            raise err
+
+    rbac = MagicMock()
+    rbac.create_namespaced_role_binding.side_effect = create_rb
+    authz = MagicMock()
+    authz.create_self_subject_access_review.return_value = SimpleNamespace(status=SimpleNamespace(allowed=True))
+    monkeypatch.setattr(resources.k8s, "core_v1", lambda: core)
+    monkeypatch.setattr(resources.k8s, "rbac_v1", lambda: rbac)
+    monkeypatch.setattr(resources.k8s, "authorization_v1", lambda: authz)
+    monkeypatch.setattr(resources.time, "sleep", sleeps.append)
+    return order, sleeps, core
+
+
+def test_tenant_ns_waits_out_a_terminating_namespace(monkeypatch):
+    # 지운 직후 재배포: ns create는 409로 넘어가고 RoleBinding이 NamespaceTerminating으로 거절된다 → 처음부터 다시.
+    # 막 사라진 순간엔 404 — 역시 다시 (이번엔 ns create가 새로 만든다)
+    from app.deploy.stack import resources
+
+    order, sleeps, _ = _tenant_fakes(monkeypatch, [
+        _api_error(403, "NamespaceTerminating"),
+        _api_error(404),
+    ])
+    resources._ensure_tenant_ns(make_build())
+    assert order == ["Namespace", "RoleBinding", "Namespace", "RoleBinding", "Namespace", "RoleBinding", "Secret"]
+    assert sleeps == [2, 2]
+
+
+def test_tenant_ns_raises_plain_forbidden_without_retrying(monkeypatch):
+    # cause 없는 403은 권한 문제 — 기다려도 안 풀리니 바로 올린다
+    from app.deploy.stack import resources
+
+    order, sleeps, _ = _tenant_fakes(monkeypatch, [_api_error(403)])
+    with pytest.raises(resources.ApiException):
+        resources._ensure_tenant_ns(make_build())
+    assert order == ["Namespace", "RoleBinding"] and sleeps == []
+
+
+def test_tenant_ns_gives_up_after_the_deadline(monkeypatch):
+    from app.deploy.stack import resources
+
+    order, _, _ = _tenant_fakes(monkeypatch, [_api_error(403, "NamespaceTerminating")] * 100)
+    clock = iter(range(0, 1000, 30))                           # 확인할 때마다 30초씩 흐른다
+    monkeypatch.setattr(resources.time, "time", lambda: next(clock))
+    with pytest.raises(resources.ApiException):
+        resources._ensure_tenant_ns(make_build())
+    assert "Secret" not in order
+
+
+@pytest.mark.parametrize("error, rebound", [
+    (_api_error(404), False),                                  # ns 없음
+    (_api_error(403, "NamespaceTerminating"), False),          # 이미 지워지는 중
+    (_api_error(409), True),                                   # RoleBinding 이미 있음
+    (None, True),                                              # 빠져 있던 RoleBinding을 다시 걸었다
+])
+def test_rebind_core(monkeypatch, error, rebound):
+    from app.deploy.stack import resources
+
+    order, _, _ = _tenant_fakes(monkeypatch, [error])
+    assert resources.rebind_core("app-12345678") is rebound
+    assert order == ["RoleBinding"]
+
+
+def test_rebind_core_raises_other_errors(monkeypatch):
+    from app.deploy.stack import resources
+
+    _tenant_fakes(monkeypatch, [_api_error(403)])
+    with pytest.raises(resources.ApiException):
+        resources.rebind_core("app-12345678")
+
+
+def test_core_binding_matches_the_tenant_template():
+    # admission 정책이 허용하는 모양은 하나뿐 — 복구용 RoleBinding도 ns 프로비저닝 때와 같아야 한다
+    from app.deploy.stack import manifests
+
+    rb = manifests.core_binding("app-12345678")
+    assert rb == next(d for d in manifests.tenant("app-12345678", "u", "e30=") if d["kind"] == "RoleBinding")
+    assert rb["metadata"]["namespace"] == "app-12345678"
+    assert rb["roleRef"]["name"] == "kodeploy-core-tenant"
+
+
+@pytest.mark.parametrize("first, rebound, deletes", [
+    (None, None, 1),                                           # 바로 지워짐
+    (_api_error(404), None, 1),
+    (_api_error(403), False, 1),                               # 없는 ns·정리된 Terminating ns — 할 일 없음
+    (_api_error(403), True, 2),                                # RoleBinding만 빠진 ns — 다시 걸고 한 번 더
+])
+def test_delete_tenant_ns(monkeypatch, first, rebound, deletes):
+    from app.deploy import status
+
+    calls = []
+
+    def delete_namespace(name):
+        calls.append(name)
+        if first is not None and len(calls) == 1:
+            raise first
+
+    core = MagicMock()
+    core.delete_namespace.side_effect = delete_namespace
+    monkeypatch.setattr(status.k8s, "core_v1", lambda: core)
+    monkeypatch.setattr(status, "rebind_core", lambda ns: rebound)
+    status._delete_tenant_ns("app-12345678")
+    assert calls == ["app-12345678"] * deletes
+
+
+def test_delete_tenant_ns_raises_other_errors(monkeypatch):
+    from app.deploy import status
+
+    core = MagicMock()
+    core.delete_namespace.side_effect = _api_error(500)
+    monkeypatch.setattr(status.k8s, "core_v1", lambda: core)
+    with pytest.raises(status.ApiException):
+        status._delete_tenant_ns("app-12345678")
 
 
 # --- 앱 삭제: 빌더에 맡기고 deleted를 기다린다 ---

@@ -11,7 +11,7 @@ from app.deploy import crud
 from app.deploy.routing import domains
 from app.deploy.stack import r2
 from app.deploy.model import Build, BuildRecord, SavedQuery
-from app.deploy.stack.resources import _read_r2_token_id
+from app.deploy.stack.resources import _read_r2_token_id, rebind_core
 from app.shared import k8s
 
 # build_id로 단건 빌드 상태 조회 — app_id 주면 그 앱의 빌드만
@@ -123,11 +123,7 @@ def delete_app(db: Session, app: App) -> None:
 
     # ns 삭제는 비동기 — terminating 상태로 들어가고 finalizer 정리 끝나면 사라짐.
     # 사용자에겐 즉시 응답하고 다음 배포 시점에 대기.
-    try:
-        k8s.core_v1().delete_namespace(name=tenant_id)
-    except ApiException as e:
-        if e.status != 404:
-            raise
+    _delete_tenant_ns(tenant_id)
 
     # R2 토큰 revoke + 버킷 삭제 (앱 완전 삭제이므로 데이터도 정리). best-effort.
     if r2_token_id or app_name:
@@ -158,3 +154,17 @@ def delete_app(db: Session, app: App) -> None:
     sharing.purge(db, app.id)          # 공유 멤버·대기 초대도 같이
     db.delete(app)
     db.commit()
+
+
+# core의 ns 삭제 권한은 그 ns의 RoleBinding에서 온다 (전역 권한 없음) — 그래서 없는 ns·RoleBinding이 이미
+# 정리된 Terminating ns는 404가 아니라 403으로 보인다. 403이면 RoleBinding을 다시 걸어 본다:
+# 걸리면 RoleBinding만 빠진 ns라 한 번 더 지우고, ns가 없거나 지워지는 중이면 할 일이 없다.
+def _delete_tenant_ns(ns: str) -> None:
+    try:
+        k8s.core_v1().delete_namespace(name=ns)
+    except ApiException as e:
+        if e.status == 403:
+            if rebind_core(ns):
+                k8s.core_v1().delete_namespace(name=ns)
+        elif e.status != 404:
+            raise
