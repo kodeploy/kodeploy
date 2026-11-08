@@ -35,6 +35,7 @@ def test_valid_names_pass(name):
     "foo-api",     # {app}-api 서버 호스트 충돌 방지
     "api",         # RESERVED_NAMES
     "origin",      # RESERVED_NAMES — CF for SaaS fallback origin
+    "myhome",      # RESERVED_NAMES — 클러스터 밖 VM이 쓰는 이름
     "a" * 41,      # 길이 40 초과
     "1abc",        # 숫자 시작
     "Abc",         # 대문자
