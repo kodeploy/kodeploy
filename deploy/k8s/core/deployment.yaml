@@ -24,7 +24,7 @@ spec:
           #    :latest로 되돌리지 말 것. 태그가 움직이면 (1) 되돌릴 지점이 사라지고,
           #    (2) 모든 revision의 image 문자열이 같아져 kubectl rollout undo가 무의미해지며,
           #    (3) 기본 pull 정책 Always와 겹쳐 Pod이 재생성될 때마다 배포한 적 없는 버전이 조용히 올라온다.
-          image: ghcr.io/kodeploy/kodeploy-core:sha-2277131@sha256:01710fe4de4d548b32bfe1812fee6757d0113de081dfcbe216da1882f9856ca7
+          image: ghcr.io/kodeploy/kodeploy-core:sha-945ab6c@sha256:a93895a2e296b122e61a91d84ce7440a3f8c215d0a88d955e2a0ae93aa592cec
           # digest로 고정되면 같은 참조 = 같은 바이트라 재pull이 무의미하다. 노드 캐시를 그대로 쓴다.
           # (고정 전 :latest 상태에서도 Always보다 안전한 쪽 — 조용한 버전 교체가 일어나지 않는다.)
           imagePullPolicy: IfNotPresent
