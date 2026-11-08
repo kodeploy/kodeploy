@@ -1,9 +1,77 @@
-# VictoriaMetrics는 클러스터 밖 managed 노드(10.0.1.240)에서 systemd로 돈다
-# (ansible/playbooks/90-monitoring.yml). 여기는 클러스터 안 소비자(vmagent remote_write,
-# core metrics.py PromQL)가 기존 주소 victoriametrics.monitoring.svc:8428 그대로 접근하도록
-# selector 없는 Service + 수동 EndpointSlice로 managed IP에 연결만 한다.
-# 이사 배경: worker1(앱 최다 노드)과 모니터링이 같이 죽는 상관 장애 제거 — 앱이 죽어도
-# 장애 직전 메트릭을 managed의 VM+Grafana에서 볼 수 있게.
+# VictoriaMetrics — 클러스터 안 StatefulSet, worker2 고정.
+#
+# 2026-07~11에는 클러스터 밖 managed 노드에서 systemd로 돌았다(worker1과 같이 죽지 않게).
+# managed 노드를 없애면서(4 OCPU·24GB 무료 범위) 다시 클러스터 안으로 들였다.
+# worker2에 두는 이유는 그때와 같다: worker1은 앱과 플랫폼 MySQL이 몰린 노드라,
+# 모니터링을 분리해 두면 worker1이 죽어도 장애 직전 메트릭을 볼 수 있다.
+# 대신 클러스터 전체(master·네트워크)가 죽으면 같이 안 보인다 — 감수한 범위.
+#
+# 소비자(vmagent remote_write, core metrics.py, Grafana)는 전부
+# victoriametrics.monitoring.svc:8428 로 접근한다.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: victoriametrics
+  namespace: monitoring
+  labels:
+    app: victoriametrics
+spec:
+  serviceName: victoriametrics
+  replicas: 1
+  selector:
+    matchLabels:
+      app: victoriametrics
+  template:
+    metadata:
+      labels:
+        app: victoriametrics
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker2
+      containers:
+        - name: victoriametrics
+          image: victoriametrics/victoria-metrics:v1.117.1
+          args:
+            - -storageDataPath=/data
+            - -retentionPeriod=30d
+            # 캐시 상한 — limits.memory(1Gi)의 절반. 나머지는 쿼리·머지·페이지캐시 몫
+            - -memory.allowedBytes=512MiB
+            # 같은 타임스탬프 샘플을 하나로 합친다. 이사 때 겹친 구간을 두 번 import해도
+            # 중복이 남지 않게. 스크레이프 간격(초 단위)보다 훨씬 짧아 평소엔 영향 없음
+            - -dedup.minScrapeInterval=1ms
+          ports:
+            - containerPort: 8428
+              name: http
+          resources:
+            requests:
+              cpu: 50m
+              memory: 512Mi
+            limits:
+              cpu: 500m        # worker2는 1 OCPU — 머지·import가 앱 CPU를 다 먹지 않게
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8428
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8428
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path   # worker2 디스크에 묶인다(30일치 약 1GB)
+        resources:
+          requests:
+            storage: 5Gi
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -16,18 +84,5 @@ spec:
     - port: 8428
       targetPort: 8428
       name: http
----
-apiVersion: discovery.k8s.io/v1
-kind: EndpointSlice
-metadata:
-  name: victoriametrics-managed
-  namespace: monitoring
-  labels:
-    kubernetes.io/service-name: victoriametrics
-addressType: IPv4
-ports:
-  - name: http
-    port: 8428
-    protocol: TCP
-endpoints:
-  - addresses: ["10.0.1.240"]   # managed 노드 사설 IP (terraform output nodes.managed.private_ip)
+  selector:
+    app: victoriametrics

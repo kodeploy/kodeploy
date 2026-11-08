@@ -1,19 +1,19 @@
 ---
 # 오리진 TLS 인증서 자동 갱신 — 67-tls-selfsigned가 만든 리프 인증서는 1년짜리인데,
 # 그 플레이북은 모든 태스크가 creates: 가드라 재실행해도 갱신이 일어나지 않는다(부트스트랩 전용).
-# 만료 시점에 수동 개입(파일 삭제 후 재실행)에 의존하는 대신 managed 노드 systemd timer로 자동화.
+# 만료 시점에 수동 개입(파일 삭제 후 재실행)에 의존하는 대신 managed 그룹(지금은 master) systemd timer로 자동화.
 #
 # 왜 cert-manager가 아닌가: 갱신 대상이 리프 1장·연 1회다. 컨트롤러+CRD를 들이는 비용이
 # 이득보다 크다(4GB 노드 메모리 예산). openssl 몇 줄이면 같은 결과가 나온다.
 #
-# 왜 managed 노드인가: 항상 켜져 있고 이미 cluster-admin kubeconfig를 갖고 있다
-# (kd-mysql-tunnel이 그걸로 port-forward 중). kubeconfig만으로 kodeploy-tls Secret을
+# 왜 master인가: 항상 켜져 있고 이미 cluster-admin kubeconfig를 갖고 있다
+# (2026-11까지는 managed 노드가 맡았다 — 그 노드를 없애며 옮김). kubeconfig만으로 kodeploy-tls Secret을
 # 통째로 교체할 수 있는 노드이라, 지금(ssl=full — CF가 오리진 인증서를 검증하지 않음)
 # 시점에는 CA 키를 추가로 둬도 실질적 침해 반경 증가가 없다. 단 kubeconfig와 달리 CA 키는
 # 회전으로 무효화할 수 없는 10년짜리이고, strict 전환 시엔 오리진 사칭이 가능한 키가 되므로
 # 그때는 보관 위치를 재평가해야 한다.
 #
-# CA 정본은 레포의 .tls-selfsigned/ 다(67이 생성, gitignored). managed의 /etc/kodeploy-tls는
+# CA 정본은 레포의 .tls-selfsigned/ 다(67이 생성, gitignored). 대상 호스트의 /etc/kodeploy-tls는
 # 이 플레이북이 매 실행마다 동기화하는 파생 사본 — 두 계보가 갈릴 일이 없게 방향을 고정한다.
 # ⚠️ 정본이 이 머신 하나에만 있으므로 오프라인 백업이 필요하다(백로그).
 #
@@ -27,7 +27,7 @@
 # ⚠️ 갱신 후 진실원은 클러스터의 Secret이다. 레포의 .tls-selfsigned/tls.crt와
 #    deploy/k8s/secrets/kodeploy-tls.yaml(둘 다 gitignored)은 부트스트랩 산출물로 stale해진다.
 #    strict 모드 전환 등으로 로컬 사본이 다시 필요해지면 클러스터에서 꺼내는 쪽이 맞다.
-- name: Origin TLS 인증서 자동 갱신 (managed 노드 timer)
+- name: Origin TLS 인증서 자동 갱신 (master timer)
   hosts: managed
   become: true
   vars:

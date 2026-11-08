@@ -1,352 +1,99 @@
-# managed 노드 관측 박스: VictoriaMetrics + Grafana
+# 모니터링: VictoriaMetrics + Grafana (클러스터 안, worker2 고정)
 # ----------------------------------------------------------------------------
-# 클러스터 안(worker1 Pod)에 있던 VictoriaMetrics를 managed로 이사 — worker1(앱 최다
-# 노드)과 모니터링이 같이 죽는 상관 장애를 없앤다. 클러스터가 통째로 죽어도 장애 직전
-# 메트릭을 여기서 볼 수 있다. vmagent는 스크레이프 대상·SA 인증이 클러스터 네이티브라
-# 클러스터에 남고 remote_write로 여기에 쏜다 (Service+EndpointSlice가 주소 연결).
+# 매니페스트는 deploy/k8s/monitoring/{victoriametrics,grafana}.yaml. 이 플레이북은
+# 그 둘을 적용하고, 레포에 둘 수 없는 것(DB 암호 Secret)과 레포 디렉토리에서
+# 만들어지는 것(대시보드 ConfigMap)을 맞춘다. vmagent·kube-state-metrics는 따로 적용한다.
 #
-# 설치는 둘 다 정적 바이너리/tarball + 직접 쓴 systemd 유닛 — dnf repo 메타데이터
-# 로딩이 4GB 노드에서 OOM 나는 문제(70-cloudflare 참고)를 원천 회피하고 버전을 고정한다.
+# 2026-07~11에는 managed 노드에서 systemd로 돌았다. managed를 없애며 클러스터로 들였다
+# (배경은 victoriametrics.yaml 머리 주석).
+#
+# 실행 대상은 managed 그룹 = kubectl을 돌리는 호스트(지금은 master).
+#   ansible-playbook playbooks/90-monitoring.yml -e grafana_mysql_password='...'
+# 암호를 안 주면 기존 Secret을 그대로 둔다(처음이라 Secret이 없으면 DB 패널만 비고 Grafana는 뜬다).
+#
+# ⚠️ 사전 준비 — Grafana 읽기 전용 DB 계정. 1회성 운영 데이터라 코드에 안 박고 DB에서 직접:
+#     kubectl exec -n default sts/mysql -- mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
+#       CREATE USER IF NOT EXISTS 'grafana'@'%' IDENTIFIED BY '<암호>';
+#       GRANT SELECT ON kodeploy.build_records TO 'grafana'@'%';
+#       FLUSH PRIVILEGES;"
+#   build_records 한 테이블만 준다 — users·sessions·builds(로그·진단 전문)는 안 준다.
+#   빌드·AI 진단 계측은 저빈도 이벤트라 시계열(rate)로는 안 잡히고, "어떤 빌드가 왜"가
+#   튜닝 재료라 라벨로 못 넣는다 — 그래서 시계열과 별도로 DB 데이터소스를 둔다.
 - hosts: managed
-  become: true
+  become: false
   vars:
-    vm_version: v1.117.1              # 클러스터에서 쓰던 이미지와 동일 버전
-    vm_data_dir: /var/lib/victoriametrics
-    grafana_version: 11.2.0
-    grafana_data_dir: /var/lib/grafana
-    # 플랫폼 DB 데이터소스 — 암호가 비면 데이터소스/터널 태스크를 건너뛴다(VM 대시보드만 뜸).
-    # host는 아래 port-forward 유닛이 managed 루프백에 띄우는 로컬 포트.
-    grafana_mysql_host: 127.0.0.1
-    grafana_mysql_port: 13306
-    grafana_mysql_user: grafana
-    grafana_mysql_database: kodeploy
+    manifest_dir: "{{ playbook_dir }}/../../deploy/k8s/monitoring"
+    dashboard_files: "{{ query('fileglob', playbook_dir + '/../../deploy/grafana/dashboards/*.json') | sort }}"
     grafana_mysql_password: ""            # -e grafana_mysql_password='...' 로 주입
   tasks:
-    # ------------------------------------------------------------ VictoriaMetrics
-    - name: victoriametrics 시스템 유저
-      user:
-        name: victoriametrics
-        system: true
-        shell: /sbin/nologin
-        create_home: false
+    # StatefulSet은 내용이 같아도 apply가 늘 "configured"를 낸다 — volumeClaimTemplates가
+    # 통째 교체되는 목록이라 API 서버가 채운 volumeMode·status 때문에 매번 달라 보인다
+    # (generation은 안 바뀜). 그래서 diff로 실제 변경이 있을 때만 apply한다.
+    - name: VictoriaMetrics 변경 확인
+      command: kubectl diff -f -
+      args:
+        stdin: "{{ lookup('file', manifest_dir + '/victoriametrics.yaml') }}"
+      register: vm_diff
+      changed_when: false
+      failed_when: vm_diff.rc > 1          # 0=같음, 1=다름, 그 이상=오류
 
-    - name: VictoriaMetrics 바이너리 다운로드
-      get_url:
-        url: https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/{{ vm_version }}/victoria-metrics-linux-arm64-{{ vm_version }}.tar.gz
-        dest: /tmp/victoria-metrics-{{ vm_version }}.tar.gz
+    - name: VictoriaMetrics 적용
+      when: vm_diff.rc == 1
+      command: kubectl apply -f -
+      args:
+        stdin: "{{ lookup('file', manifest_dir + '/victoriametrics.yaml') }}"
 
-    - name: VictoriaMetrics 바이너리 설치
-      unarchive:
-        src: /tmp/victoria-metrics-{{ vm_version }}.tar.gz
-        dest: /usr/local/bin
-        remote_src: true
-        creates: /usr/local/bin/victoria-metrics-prod
+    - name: Grafana DB 암호 Secret
+      when: grafana_mysql_password | length > 0
+      command: kubectl apply -f -
+      args:
+        stdin: "{{ secret | to_json }}"
+      vars:
+        secret:
+          apiVersion: v1
+          kind: Secret
+          metadata: { name: grafana-db, namespace: monitoring }
+          type: Opaque
+          stringData: { password: "{{ grafana_mysql_password }}" }
+      register: secret_apply
+      changed_when: "' configured' in secret_apply.stdout or ' created' in secret_apply.stdout"
+      no_log: true                        # 암호가 로그로 찍히지 않게
 
-    - name: VictoriaMetrics 데이터 디렉토리
-      file:
-        path: "{{ vm_data_dir }}"
-        state: directory
-        owner: victoriametrics
-        group: victoriametrics
-        mode: "0750"
+    # 대시보드 JSON은 레포가 진실원 — 디렉토리 통째로 ConfigMap 하나를 만든다.
+    # apply가 data를 통째로 맞추므로 레포에서 지운 대시보드는 ConfigMap에서도 빠지고,
+    # file provider가 다음 스캔에 Grafana에서도 지운다.
+    - name: 대시보드 ConfigMap
+      command: kubectl apply -f -
+      args:
+        stdin: "{{ cm | to_json }}"
+      vars:
+        cm:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata: { name: grafana-dashboards, namespace: monitoring }
+          data: "{{ dict(dashboard_files | map('basename') | zip(query('file', *dashboard_files))) }}"
+      register: cm_apply
+      changed_when: "' configured' in cm_apply.stdout or ' created' in cm_apply.stdout"
 
-    # 8428은 0.0.0.0 바인드 — VCN 밖은 seclist(CF 80/443만)가 이미 막고 있고,
-    # VCN 내부→8428은 network.tf의 전용 ingress 룰로 허용된다.
-    # 메모리: 4GB 노드를 cloudflared·Grafana와 나눠 쓰므로 VM 캐시를 512MiB로 제한하고
-    # systemd MemoryHigh로 페이지캐시 포함 소프트 상한을 건다 (MemoryMax는 OOM-kill
-    # 루프 위험이 있어 안 씀).
-    - name: VictoriaMetrics systemd 유닛
-      copy:
-        dest: /etc/systemd/system/victoriametrics.service
-        content: |
-          [Unit]
-          Description=VictoriaMetrics (KoDeploy monitoring)
-          After=network-online.target
-          Wants=network-online.target
+    - name: Grafana 적용
+      command: kubectl apply -f -
+      args:
+        stdin: "{{ lookup('file', manifest_dir + '/grafana.yaml') }}"
+      register: grafana_apply
+      changed_when: "' configured' in grafana_apply.stdout or ' created' in grafana_apply.stdout"
 
-          [Service]
-          User=victoriametrics
-          ExecStart=/usr/local/bin/victoria-metrics-prod \
-            -storageDataPath={{ vm_data_dir }} \
-            -retentionPeriod=30d \
-            -memory.allowedBytes=512MiB \
-            -httpListenAddr=:8428
-          Restart=on-failure
-          RestartSec=5
-          MemoryHigh=1G
+    # 데이터소스·프로바이더는 subPath 마운트라 ConfigMap이 바뀌어도 Pod에 안 들어가고,
+    # Grafana도 기동 시에만 읽는다 → 바뀌면 재시작. 대시보드 ConfigMap은 일반 마운트라
+    # kubelet이 갱신하고 file provider가 다시 읽으므로 재시작 대상이 아니다.
+    - name: Grafana 재시작 (프로비저닝·암호 변경 시)
+      when: >-
+        'grafana-provisioning configured' in grafana_apply.stdout
+        or (secret_apply is changed)
+      command: kubectl rollout restart deploy/grafana -n monitoring
 
-          [Install]
-          WantedBy=multi-user.target
-      register: vm_unit
-
-    - name: VictoriaMetrics 시작
-      systemd:
-        name: victoriametrics
-        daemon_reload: true
-        enabled: true
-        state: "{{ vm_unit.changed | ternary('restarted', 'started') }}"
-
-    - name: VictoriaMetrics 헬스체크
-      uri:
-        url: http://127.0.0.1:8428/health
-      register: vm_health
-      until: vm_health.status == 200
-      retries: 12
-      delay: 5
-
-    # ------------------------------------------------------------ Grafana
-    - name: grafana 시스템 유저
-      user:
-        name: grafana
-        system: true
-        shell: /sbin/nologin
-        create_home: false
-
-    - name: Grafana tarball 다운로드
-      get_url:
-        url: https://dl.grafana.com/oss/release/grafana-{{ grafana_version }}.linux-arm64.tar.gz
-        dest: /tmp/grafana-{{ grafana_version }}.tar.gz
-
-    - name: Grafana 설치 (/opt)
-      unarchive:
-        src: /tmp/grafana-{{ grafana_version }}.tar.gz
-        dest: /opt
-        remote_src: true
-        creates: /opt/grafana-v{{ grafana_version }}/bin/grafana
-
-    - name: /opt/grafana 심볼릭 링크
-      file:
-        src: /opt/grafana-v{{ grafana_version }}
-        dest: /opt/grafana
-        state: link
-
-    - name: Grafana 디렉토리 (데이터·로그·프로비저닝·대시보드)
-      file:
-        path: "{{ item }}"
-        state: directory
-        owner: grafana
-        group: grafana
-        mode: "0750"
+    - name: 롤아웃 대기
+      command: kubectl rollout status {{ item }} -n monitoring --timeout=300s
       loop:
-        - "{{ grafana_data_dir }}"
-        - "{{ grafana_data_dir }}/dashboards"
-        - /var/log/grafana
-        - /etc/grafana/provisioning/datasources
-        - /etc/grafana/provisioning/dashboards
-
-    # 3000은 localhost만 바인드 — 접근은 SSH 포워딩(ssh -L 3000:localhost:3000 managed).
-    # grafana.kodeploy.com 터널 노출은 별도 결정(터널 config가 CF 대시보드 관리라).
-    - name: Grafana 설정
-      copy:
-        dest: /etc/grafana/grafana.ini
-        content: |
-          [server]
-          http_addr = 127.0.0.1
-          http_port = 3000
-
-          [paths]
-          data = {{ grafana_data_dir }}
-          logs = /var/log/grafana
-          provisioning = /etc/grafana/provisioning
-
-          [analytics]
-          reporting_enabled = false
-          check_for_updates = false
-      register: grafana_ini
-
-    - name: Grafana 데이터소스 프로비저닝 (VictoriaMetrics)
-      copy:
-        dest: /etc/grafana/provisioning/datasources/victoriametrics.yaml
-        content: |
-          apiVersion: 1
-          datasources:
-            - name: VictoriaMetrics
-              uid: victoriametrics
-              type: prometheus
-              access: proxy
-              url: http://localhost:8428
-              isDefault: true
-      register: grafana_ds
-
-    # 플랫폼 DB(build_records) 데이터소스 — 빌드·AI 진단 계측이 여기 산다.
-    # VictoriaMetrics(시계열)와 역할이 다르다: 진단은 실패한 빌드에서만 도는 저빈도
-    # 이벤트라 rate() 윈도우에 샘플이 안 차고, 무엇보다 카운터는 "어떤 빌드가 왜"를
-    # 버린다(범주 분포·개별 맥락이 품질 튜닝의 재료인데 라벨로는 못 넣는다).
-    #
-    # 경로: managed는 K8s 노드가 아니고(40-worker가 workers만 join) mysql Service는
-    #       headless라 ClusterIP도 없다. Pod IP는 Calico 오버레이라 비-노드 호스트에선
-    #       라우팅 자체가 안 된다. 그래서 아래 kd-mysql-tunnel 유닛이 kube-apiserver를
-    #       거쳐 managed 루프백(127.0.0.1:13306)에 포트를 띄운다.
-    #
-    # ⚠️ 사전 준비 — Grafana 읽기 전용 계정. 1회성 운영 데이터라 코드에 안 박고 DB에서 직접:
-    #     kubectl exec -n default sts/mysql -- mysql -uroot -p"$MYSQL_ROOT_PASSWORD" -e "
-    #       CREATE USER IF NOT EXISTS 'grafana'@'%' IDENTIFIED BY '<암호>';
-    #       GRANT SELECT ON kodeploy.build_records TO 'grafana'@'%';
-    #       FLUSH PRIVILEGES;"
-    #   build_records 한 테이블만 준다 — users·sessions·builds(로그·진단 전문)는 안 준다.
-    #   호스트를 '%'로 두는 이유: port-forward는 Pod 네트워크 네임스페이스 안 루프백으로
-    #   들어가 MySQL이 연결을 localhost로 본다. IP로 조이려 해도 조일 대상이 없다. 어차피
-    #   3306은 클러스터 밖에서 도달 불가고(테넌트는 Calico가 Pod CIDR 192.168/16을 Deny),
-    #   실질 경계는 이 GRANT 한 줄이다.
-    #
-    # 암호는 레포에 두지 않는다: -e grafana_mysql_password='...' 로 주입.
-    # 안 주면 이 태스크를 건너뛰고 VM 대시보드만 뜬다(기존 동작 그대로 폴백).
-
-    # 플랫폼 DB 터널 — kube-apiserver를 거쳐 managed 루프백에만 포트를 띄운다.
-    #
-    # 왜 NodePort가 아닌가: NodePort는 노드 3대 전부에 0.0.0.0:3xxxx를 열고, 프라이빗
-    # seclist가 VCN 내부를 전면 허용하므로 VCN 안 어디서든 raw MySQL 프로토콜에 닿는다.
-    # 방어선이 DB 비밀번호 하나로 줄고(기본 MySQL엔 rate limit이 없다) 상시 개방이 된다.
-    # port-forward는 --address 127.0.0.1이라 어떤 네트워크 인터페이스에도 안 붙는다 —
-    # 노드에 새로 열리는 포트가 0개고, 인증은 이미 managed에 있는 admin.conf가 한다.
-    #
-    # 왜 SSH 터널이 아닌가: managed엔 노드 개인키가 없다(authorized_keys만). 키를 배포하면
-    # managed 침해 시 반경이 노드 전체로 넓어진다 — 노출을 줄이려다 늘리는 셈.
-    #
-    # ⚠️ mysql Pod이 재시작하면 forward가 끊긴다. kubectl이 종료되면 Restart=always가 몇 초
-    #    안에 다시 띄우고 Service를 새 Pod으로 재해소한다(그래서 pod이 아니라 svc를 지정).
-    #    다만 kubectl 버전에 따라 종료 대신 죽은 forward를 물고 있는 사례가 알려져 있다 —
-    #    Grafana 패널이 통째로 stale하면 `systemctl restart kd-mysql-tunnel`부터 볼 것.
-    - name: 플랫폼 DB 터널 systemd 유닛 (kubectl port-forward)
-      when: grafana_mysql_password | length > 0
-      copy:
-        dest: /etc/systemd/system/kd-mysql-tunnel.service
-        content: |
-          [Unit]
-          Description=kubectl port-forward: platform MySQL for Grafana (loopback only)
-          After=network-online.target
-          Wants=network-online.target
-
-          [Service]
-          User=opc
-          Environment=KUBECONFIG=/home/opc/.kube/config
-          ExecStart=/usr/bin/kubectl port-forward --address 127.0.0.1 \
-            -n default svc/mysql {{ grafana_mysql_port }}:3306
-          Restart=always
-          RestartSec=5
-
-          [Install]
-          WantedBy=multi-user.target
-      register: mysql_tunnel_unit
-
-    - name: 플랫폼 DB 터널 활성화
-      when: grafana_mysql_password | length > 0
-      systemd:
-        name: kd-mysql-tunnel
-        daemon_reload: true
-        enabled: true
-        state: "{{ 'restarted' if mysql_tunnel_unit.changed else 'started' }}"
-
-    - name: Grafana 데이터소스 프로비저닝 (플랫폼 DB)
-      when: grafana_mysql_password | length > 0
-      copy:
-        dest: /etc/grafana/provisioning/datasources/kodeploy-db.yaml
-        owner: grafana
-        group: grafana
-        mode: "0640"                      # 자격증명 포함 — grafana만 읽게
-        content: |
-          apiVersion: 1
-          datasources:
-            - name: KoDeploy DB
-              uid: kodeploy-db
-              type: mysql
-              url: {{ grafana_mysql_host }}:{{ grafana_mysql_port }}
-              user: {{ grafana_mysql_user }}
-              jsonData:
-                database: {{ grafana_mysql_database }}
-                maxOpenConns: 4
-                maxIdleConns: 2
-              secureJsonData:
-                password: {{ grafana_mysql_password }}
-      register: grafana_db_ds
-      no_log: true                        # 암호가 diff로 찍히지 않게
-
-    - name: Grafana 대시보드 프로바이더 프로비저닝
-      copy:
-        dest: /etc/grafana/provisioning/dashboards/kodeploy.yaml
-        content: |
-          apiVersion: 1
-          providers:
-            - name: kodeploy
-              folder: KoDeploy
-              type: file
-              options:
-                path: {{ grafana_data_dir }}/dashboards
-      register: grafana_provider
-
-    # 대시보드 JSON은 레포가 진실원 — 수정은 레포에서 하고 이 플레이북으로 배포.
-    # 디렉토리 통째 동기화라 대시보드를 추가해도 이 태스크는 안 고친다.
-    # (Grafana UI에서 고친 건 다음 실행에 덮어써진다 — 그게 "레포가 진실원"의 의미다.)
-    - name: 대시보드 JSON 배포
-      copy:
-        src: "{{ playbook_dir }}/../../deploy/grafana/dashboards/"
-        dest: "{{ grafana_data_dir }}/dashboards/"
-        owner: grafana
-        group: grafana
-        mode: "0640"
-
-    # copy는 추가·갱신만 한다 — 레포에서 지운 대시보드는 그대로 남는다. 그러면 위 주석의
-    # "레포가 진실원"이 거짓이 된다. 실제로 kodeploy-overview를 시스템/유저로 쪼갠 뒤
-    # 옛 대시보드가 Grafana에 살아남아 목록에 셋이 보였다. file provider는 파일이 사라지면
-    # 다음 스캔에 대시보드도 지우므로, 파일만 맞춰주면 된다.
-    - name: 레포에 없는 대시보드 제거 (레포가 진실원)
-      vars:
-        repo_dashboards: >-
-          {{ lookup('fileglob', playbook_dir + '/../../deploy/grafana/dashboards/*.json',
-                    wantlist=True) | map('basename') | list }}
-      find:
-        paths: "{{ grafana_data_dir }}/dashboards"
-        patterns: "*.json"
-      register: deployed_dashboards
-
-    - name: 고아 대시보드 삭제
-      vars:
-        repo_dashboards: >-
-          {{ lookup('fileglob', playbook_dir + '/../../deploy/grafana/dashboards/*.json',
-                    wantlist=True) | map('basename') | list }}
-      file:
-        path: "{{ item.path }}"
-        state: absent
-      loop: "{{ deployed_dashboards.files }}"
-      loop_control:
-        label: "{{ item.path | basename }}"
-      when: item.path | basename not in repo_dashboards
-
-    - name: Grafana systemd 유닛
-      copy:
-        dest: /etc/systemd/system/grafana.service
-        content: |
-          [Unit]
-          Description=Grafana (KoDeploy monitoring)
-          After=network-online.target victoriametrics.service
-          Wants=network-online.target
-
-          [Service]
-          User=grafana
-          WorkingDirectory=/opt/grafana
-          ExecStart=/opt/grafana/bin/grafana server --homepath /opt/grafana --config /etc/grafana/grafana.ini
-          Restart=on-failure
-          RestartSec=5
-          MemoryHigh=512M
-
-          [Install]
-          WantedBy=multi-user.target
-      register: grafana_unit
-
-    # 데이터소스·프로바이더 프로비저닝 파일은 Grafana가 **기동 시에만** 읽는다 — 바뀌면 재시작해야
-    # 반영된다(대시보드 JSON은 file provider가 주기적으로 다시 읽으므로 재시작 대상이 아니다).
-    # grafana_db_ds는 암호 미주입 시 skip되는데, skip된 태스크의 registered var도 changed=false라 안전.
-    - name: Grafana 시작
-      systemd:
-        name: grafana
-        daemon_reload: true
-        enabled: true
-        state: "{{ (grafana_unit.changed or grafana_ini.changed or grafana_ds.changed or grafana_db_ds.changed or grafana_provider.changed) | ternary('restarted', 'started') }}"
-
-    - name: Grafana 헬스체크
-      uri:
-        url: http://127.0.0.1:3000/api/health
-      register: grafana_health
-      until: grafana_health.status == 200
-      retries: 12
-      delay: 5
+        - sts/victoriametrics
+        - deploy/grafana
+      changed_when: false

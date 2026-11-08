@@ -1,7 +1,7 @@
 # ============================================================================
 # outputs.tf — 출력 값
 # ----------------------------------------------------------------------------
-# tunnel_token은 ansible playbook이 받아서 managed 노드 cloudflared 설치에 사용.
+# tunnel_token은 ansible playbook이 받아서 master cloudflared 설치에 사용(70-cloudflare, hosts: managed 그룹).
 # 수동 조회: `terraform output -raw tunnel_token`
 # ============================================================================
 

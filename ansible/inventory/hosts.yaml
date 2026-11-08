@@ -9,6 +9,9 @@ all:
       hosts:
         worker1:
         worker2:
+    # kubectl로 클러스터 작업을 돌리는 호스트(playbook의 hosts: managed).
+    # 원래 managed 노드였는데, 2026-11 그 노드를 없애면서 master가 맡는다.
+    # group_vars/managed(Argo GitHub App 변수 등)도 그대로 이 그룹에 붙는다.
     managed:
       hosts:
-        managed:
+        master:

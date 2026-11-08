@@ -1,5 +1,5 @@
 # ⚠️ 부트스트랩 전용 — 모든 태스크가 creates: 가드라 재실행해도 갱신되지 않는다.
-#    리프 인증서(1년) 갱신은 68-tls-renew.yml의 managed 노드 timer가 담당한다.
+#    리프 인증서(1년) 갱신은 68-tls-renew.yml의 master timer가 담당한다.
 - name: Self-signed wildcard TLS 인증서 생성 → K8s Secret YAML로 저장
   hosts: localhost
   connection: local

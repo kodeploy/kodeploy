@@ -147,18 +147,6 @@ resource "oci_core_security_list" "public" {
     }
   }
 
-  # VCN 내부 → managed VictoriaMetrics(8428) — vmagent remote_write + core PromQL 쿼리
-  ingress_security_rules {
-    protocol  = "6" # TCP
-    source    = var.vcn_cidr
-    stateless = false
-    tcp_options {
-      min = 8428
-      max = 8428
-    }
-    description = "VCN → VictoriaMetrics (managed)"
-  }
-
   freeform_tags = { project = var.cluster_name }
 }
 

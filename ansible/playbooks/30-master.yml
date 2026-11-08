@@ -75,7 +75,7 @@
         dest: "{{ playbook_dir }}/../../kubeconfig/admin.conf"
         flat: true
 
-- name: Distribute kubeconfig to managed node
+- name: Distribute kubeconfig to the managed group (kubectl host)
   hosts: managed
   become: true
 

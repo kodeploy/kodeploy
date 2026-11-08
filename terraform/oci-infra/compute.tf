@@ -1,8 +1,11 @@
 # ============================================================================
-# compute.tf — ARM A1 인스턴스 4대 (for_each)
+# compute.tf — ARM A1 인스턴스 3대 (for_each)
 # ----------------------------------------------------------------------------
-# Always Free 한도: 4 OCPU / 24 GB (worker1 + worker2 + managed)
-# Master는 유료 풀에서 별도 과금.
+# 합계를 A1 무료 한도(4 OCPU / 24 GB) 안에 맞춘다: master 1·4 + worker1 2·10 + worker2 1·10.
+# 2026-11 managed 노드(1·4, 클러스터 밖 관리·모니터링)를 없앴다 — CPU를 2%만 쓰면서
+# 1 OCPU를 차지했다. 그 역할은 master(SSH 터널·인증서 타이머·kubectl 작업)와
+# 클러스터 안 모니터링(worker2)으로 옮겼다.
+# ⚠️ 유료 계정의 A1 무료 한도가 2026-06 축소(2·12) 대상인지는 공식 확인 전.
 # ============================================================================
 
 # 노드 정의 맵 — 각 노드의 호스트명, CPU, 메모리, 역할을 정의
@@ -11,7 +14,7 @@ locals {
     # K8s 컨트롤 플레인 노드 (API Server, etcd, scheduler 등 실행)
     master = {
       hostname  = "kodeploy-master"
-      ocpus     = 2
+      ocpus     = 1 # control plane CPU request 합계 750m. 순간 피크는 1코어를 넘을 수 있음(감수)
       memory_gb = 4
       role      = "master"
     }
@@ -29,17 +32,10 @@ locals {
       memory_gb = 10
       role      = "worker"
     }
-    # 관리용 노드 — Ansible/배포 도구 등이 실행되는 관리 전용 노드
-    managed = {
-      hostname  = "kodeploy-managed"
-      ocpus     = 1
-      memory_gb = 4
-      role      = "managed"
-    }
   }
 }
 
-# ARM A1 Flex 인스턴스 — for_each로 위 nodes 맵의 4대를 한꺼번에 생성
+# ARM A1 Flex 인스턴스 — for_each로 위 nodes 맵의 노드를 한꺼번에 생성
 # VM.Standard.A1.Flex: ARM 기반 가변 스펙 인스턴스 (OCPU/메모리 자유 조합)
 resource "oci_core_instance" "node" {
   for_each = local.nodes
@@ -61,10 +57,11 @@ resource "oci_core_instance" "node" {
     source_id   = var.image_ocid
   }
 
-  # managed는 퍼블릭 서브넷 + 공인 IP(cloudflared 설치/관리용), 나머지는 프라이빗
+  # 전부 프라이빗 서브넷, 공인 IP 없음 — 나가는 건 NAT, 들어오는 건 NLB(80/443)와
+  # cloudflared 터널(master, SSH)뿐
   create_vnic_details {
-    subnet_id        = each.value.role == "managed" ? oci_core_subnet.public.id : oci_core_subnet.private.id
-    assign_public_ip = each.value.role == "managed"
+    subnet_id        = oci_core_subnet.private.id
+    assign_public_ip = false
     hostname_label   = each.key
     display_name     = "${each.value.hostname}-vnic"
   }

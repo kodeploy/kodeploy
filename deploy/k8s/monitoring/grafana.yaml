@@ -1,0 +1,155 @@
+# Grafana — 클러스터 안 Deployment, worker2 고정 (VictoriaMetrics와 같은 노드).
+#
+# 접근: 외부 노출 없음. master에서 port-forward + SSH 포워딩
+#   ssh -L 3000:localhost:3000 master kubectl port-forward -n monitoring svc/grafana 3000:3000
+#   → http://localhost:3000
+#
+# 대시보드 JSON은 레포(deploy/grafana/dashboards/)가 진실원이다. ConfigMap grafana-dashboards는
+# ansible/playbooks/90-monitoring.yml이 그 디렉토리 통째로 만든다(레포에서 지운 대시보드는
+# ConfigMap에서도 빠진다). UI에서 고친 대시보드는 다음 배포에 덮어써진다.
+#
+# 플랫폼 DB(build_records) 데이터소스는 mysql Service로 바로 붙는다. 클러스터 밖(managed)에
+# 있을 때 쓰던 kubectl port-forward 터널은 필요 없어졌다.
+# 암호는 Secret grafana-db(키 password)에 두고 레포에는 안 둔다 — 90-monitoring.yml이 만든다.
+# DB 계정은 build_records SELECT만 가진 'grafana'@'%' (90-monitoring.yml 주석 참고).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-provisioning
+  namespace: monitoring
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: VictoriaMetrics
+        uid: victoriametrics
+        type: prometheus
+        access: proxy
+        url: http://victoriametrics.monitoring.svc:8428
+        isDefault: true
+      - name: KoDeploy DB
+        uid: kodeploy-db
+        type: mysql
+        url: mysql.default.svc:3306
+        user: grafana
+        jsonData:
+          database: kodeploy
+          maxOpenConns: 4
+          maxIdleConns: 2
+        secureJsonData:
+          password: $KODEPLOY_DB_PASSWORD
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: kodeploy
+        folder: KoDeploy
+        type: file
+        options:
+          path: /var/lib/grafana-dashboards
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: monitoring
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path   # grafana.db(로그인·환경설정) — 대시보드 자체는 ConfigMap
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate               # RWO PVC + sqlite — 두 Pod이 동시에 열면 안 된다
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: worker2
+      securityContext:
+        fsGroup: 472             # 이미지의 grafana uid — PVC 쓰기 권한
+      containers:
+        - name: grafana
+          image: grafana/grafana:11.2.0
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+            - name: KODEPLOY_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-db
+                  key: password
+                  optional: true   # Secret이 없어도 Grafana는 뜬다(DB 패널만 빔)
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/grafana
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning/datasources/datasources.yaml
+              subPath: datasources.yaml
+            - name: provisioning
+              mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml
+              subPath: dashboards.yaml
+            - name: dashboards
+              mountPath: /var/lib/grafana-dashboards
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 30
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: grafana-data
+        - name: provisioning
+          configMap:
+            name: grafana-provisioning
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: monitoring
+  labels:
+    app: grafana
+spec:
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: http
+  selector:
+    app: grafana
