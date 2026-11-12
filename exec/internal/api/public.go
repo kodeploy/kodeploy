@@ -64,11 +64,11 @@ func (s *Server) publicSession(w http.ResponseWriter, r *http.Request) {
 	rec.UserID, rec.AppID, rec.Target, rec.Op = info.UserID, info.AppID, info.Target, info.Op
 	rec.IssuedAt = audit.Time(info.IssuedAt)
 
-	if !s.acquire() {
+	if !s.acquire(s.publicSem) {
 		reject(proto.CloseTooMany, "too many sessions")
 		return
 	}
-	defer s.release()
+	defer s.release(s.publicSem)
 
 	fctx, cancel := context.WithTimeout(s.base, findTimeout)
 	t, err := s.o.Finder.Find(fctx, info.Target, info.App)

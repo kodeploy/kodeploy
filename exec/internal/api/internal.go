@@ -218,11 +218,11 @@ func (s *Server) serveInternal(w http.ResponseWriter, r *http.Request, op string
 		rec.Error = reason
 		s.record(rec, start, session.Result{CloseCode: code, ExitCode: -1})
 	}
-	if !s.acquire() {
+	if !s.acquire(s.internalSem) {
 		reject(proto.CloseTooMany, "too many sessions")
 		return
 	}
-	defer s.release()
+	defer s.release(s.internalSem)
 	// 복원은 ns(DB 하나)에 한 번에 하나만: 작업 디렉토리의 restore.dump를 같이 쓰고, 동시에 적재하면 결과를 알 수 없다
 	if op == "restore" {
 		if !s.restoring.CompareAndSwap(false, true) {

@@ -250,7 +250,7 @@ func cmdHold(args []string) error {
 	inf.register(fs)
 	url := fs.String("url", "", "공개 문 주소")
 	app := fs.String("app", "", "앱 이름")
-	n := fs.Int("n", 4, "열 세션 수 (MAX_SESSIONS+1이면 마지막이 4429)")
+	n := fs.Int("n", 4, "열 세션 수 (공개 문 MAX_SESSIONS_PUBLIC+1이면 마지막이 4429)")
 	fs.Parse(args)
 	in, err := inf.client()
 	if err != nil {

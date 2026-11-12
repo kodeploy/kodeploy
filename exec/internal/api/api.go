@@ -49,13 +49,14 @@ type Options struct {
 	Audit     *audit.Logger
 	Metrics   *audit.Metrics // nil 가능
 
-	TTYIdleTimeout  time.Duration
-	TTYMax          time.Duration
-	NonTTYMax       time.Duration
-	PingInterval    time.Duration
-	MaxSessions     int
-	RestoreMaxBytes int64
-	RestoreWorkdir  string
+	TTYIdleTimeout      time.Duration
+	TTYMax              time.Duration
+	NonTTYMax           time.Duration
+	PingInterval        time.Duration
+	MaxSessionsPublic   int // 공개 문 동시 세션 (터미널·콘솔)
+	MaxSessionsInternal int // 내부 문 동시 세션 (query·browse·dump·restore)
+	RestoreMaxBytes     int64
+	RestoreWorkdir      string
 
 	Now func() time.Time
 	Log *slog.Logger
@@ -63,9 +64,10 @@ type Options struct {
 
 // Server는 세 리스너의 핸들러와 세션 수명을 가진다.
 type Server struct {
-	o        Options
-	sem      chan struct{}
-	upgrader websocket.Upgrader
+	o           Options
+	publicSem   chan struct{}
+	internalSem chan struct{}
+	upgrader    websocket.Upgrader
 
 	mu       sync.Mutex
 	idle     *sync.Cond
@@ -89,9 +91,10 @@ func New(o Options) *Server {
 		o.Log = slog.Default()
 	}
 	s := &Server{
-		o:        o,
-		sem:      make(chan struct{}, o.MaxSessions),
-		shutdown: make(chan struct{}),
+		o:           o,
+		publicSem:   make(chan struct{}, o.MaxSessionsPublic),
+		internalSem: make(chan struct{}, o.MaxSessionsInternal),
+		shutdown:    make(chan struct{}),
 		upgrader: websocket.Upgrader{
 			Subprotocols:    []string{proto.Subprotocol},
 			ReadBufferSize:  32 << 10,
@@ -106,8 +109,8 @@ func New(o Options) *Server {
 	return s
 }
 
-// Active는 지금 열린 세션 수다(동시 세션 제한에 들어간 것).
-func (s *Server) Active() int { return len(s.sem) }
+// Active는 지금 열린 세션 수다(동시 세션 제한에 들어간 것, 두 문 합계).
+func (s *Server) Active() int { return len(s.publicSem) + len(s.internalSem) }
 
 // enter는 요청 하나를 시작한다. 종료 중이면 false.
 func (s *Server) enter() bool {
@@ -162,16 +165,17 @@ func (s *Server) Wait(ctx context.Context) error {
 // Close는 남은 자원을 정리한다(테스트·종료용).
 func (s *Server) Close() { s.cancelBase() }
 
-func (s *Server) acquire() bool {
+// acquire는 문 하나의 동시 세션 자리를 잡는다. 가득 차 있으면 false (4429).
+func (s *Server) acquire(sem chan struct{}) bool {
 	select {
-	case s.sem <- struct{}{}:
+	case sem <- struct{}{}:
 		return true
 	default:
 		return false
 	}
 }
 
-func (s *Server) release() { <-s.sem }
+func (s *Server) release(sem chan struct{}) { <-sem }
 
 func (s *Server) isDraining() bool {
 	s.mu.Lock()

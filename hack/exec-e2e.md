@@ -173,7 +173,8 @@ kubectl logs -n $NS deploy/kodeploy-exec | grep <request_id>
 |---|---|---|
 | 업로드 중 연결 끊기 | `$TC restore -internal ... -key-file ... -file big.sql.gz -abort-after 100000` | 감사 기록 close 1006, DB 그대로(행 수), `/tmp/kodeploy-restore` 비어 있음 |
 | 기대 해시 틀리게 | `$TC restore ... -file d.sql -sha 0000…(64자)` | `failed_step: upload`, `db_changed: false` |
-| 동시 세션 초과 | `$TC hold ... -url wss://api.kodeploy.com/exec/$NS/v1/sessions -app $APP -n 4` | 4번째가 `closed 4429` |
+| 동시 세션 초과 (공개 문 3) | `$TC hold ... -url wss://api.kodeploy.com/exec/$NS/v1/sessions -app $APP -n 4` | 4번째가 `closed 4429` |
+| 문마다 따로 센다 | 위 `hold -n 3`을 붙잡아 둔 채 웹 DB 콘솔에서 `SELECT 1` (내부 문, 상한 4) | 콘솔이 정상 응답 (터미널이 내부 문 자리를 쓰지 않는다) |
 | 작업 디렉토리 채우기 | 하지 않는 것을 권한다 (아래) | |
 
 작업 디렉토리는 DB 컨테이너의 `/tmp`, 곧 노드 루트 디스크다. 업로드 상한이 200 MiB라서 precheck(크기 × 2)를 실패시키려면 노드 디스크를 400 MiB 아래로 채워야 하고, 그러면 같은 노드의 모든 Pod가 위험하다. 이 경로는 단위 테스트(`exec/internal/restore` `TestPrecheckFailures`)로 갈음하거나, 로컬 k3s 실험 클러스터에서만 재현한다.

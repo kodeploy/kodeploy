@@ -92,7 +92,7 @@ func servers(t *testing.T) (pub, internal *httptest.Server) {
 	s := api.New(api.Options{
 		Namespace: ns, Key: key, Tickets: ticket.New(30*time.Second, 10), Finder: finder{}, Runner: &runner{},
 		Audit: audit.New(io.Discard), TTYIdleTimeout: time.Minute, TTYMax: time.Minute, NonTTYMax: time.Minute,
-		PingInterval: time.Second, MaxSessions: 3, RestoreMaxBytes: 1 << 20, RestoreWorkdir: "/tmp/kodeploy-restore",
+		PingInterval: time.Second, MaxSessionsPublic: 3, MaxSessionsInternal: 4, RestoreMaxBytes: 1 << 20, RestoreWorkdir: "/tmp/kodeploy-restore",
 	})
 	pub, internal = httptest.NewServer(s.Public()), httptest.NewServer(s.Internal())
 	t.Cleanup(func() { pub.Close(); internal.Close(); s.Close() })

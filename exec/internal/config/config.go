@@ -32,8 +32,10 @@ type Config struct {
 	TTYIdleTimeout time.Duration // tty만
 	TTYMax         time.Duration
 	NonTTYMax      time.Duration
-	MaxSessions    int // Pod당 동시 세션 (공개·내부 문 합계)
-	PingInterval   time.Duration
+	// Pod당 동시 세션. 문마다 따로 센다: 터미널(공개)을 열어 둔 채 DB 콘솔·덤프(내부)를 써도 서로 막지 않게
+	MaxSessionsPublic   int
+	MaxSessionsInternal int
+	PingInterval        time.Duration
 
 	RestoreMaxBytes int64
 	RestoreWorkdir  string // DB 컨테이너 안의 경로
@@ -74,19 +76,20 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 	}
 
 	c := &Config{
-		Namespace:       strings.TrimSpace(getenv("EXEC_NAMESPACE")),
-		PublicAddr:      str("PUBLIC_ADDR", ":8080"),
-		InternalAddr:    str("INTERNAL_ADDR", ":8081"),
-		MetricsAddr:     str("METRICS_ADDR", ":9090"),
-		TicketTTL:       duration("TICKET_TTL", 30*time.Second),
-		TicketMax:       int(integer("TICKET_MAX", 1000)),
-		TTYIdleTimeout:  duration("TTY_IDLE_TIMEOUT", 15*time.Minute),
-		TTYMax:          duration("TTY_MAX", 2*time.Hour),
-		NonTTYMax:       duration("NONTTY_MAX", 30*time.Minute),
-		MaxSessions:     int(integer("MAX_SESSIONS", 3)),
-		PingInterval:    duration("PING_INTERVAL", 30*time.Second),
-		RestoreMaxBytes: integer("RESTORE_MAX_BYTES", DefaultRestoreMaxBytes),
-		RestoreWorkdir:  str("RESTORE_WORKDIR", "/tmp/kodeploy-restore"),
+		Namespace:           strings.TrimSpace(getenv("EXEC_NAMESPACE")),
+		PublicAddr:          str("PUBLIC_ADDR", ":8080"),
+		InternalAddr:        str("INTERNAL_ADDR", ":8081"),
+		MetricsAddr:         str("METRICS_ADDR", ":9090"),
+		TicketTTL:           duration("TICKET_TTL", 30*time.Second),
+		TicketMax:           int(integer("TICKET_MAX", 1000)),
+		TTYIdleTimeout:      duration("TTY_IDLE_TIMEOUT", 15*time.Minute),
+		TTYMax:              duration("TTY_MAX", 2*time.Hour),
+		NonTTYMax:           duration("NONTTY_MAX", 30*time.Minute),
+		MaxSessionsPublic:   int(integer("MAX_SESSIONS_PUBLIC", 3)),
+		MaxSessionsInternal: int(integer("MAX_SESSIONS_INTERNAL", 4)),
+		PingInterval:        duration("PING_INTERVAL", 30*time.Second),
+		RestoreMaxBytes:     integer("RESTORE_MAX_BYTES", DefaultRestoreMaxBytes),
+		RestoreWorkdir:      str("RESTORE_WORKDIR", "/tmp/kodeploy-restore"),
 	}
 	if c.Namespace == "" {
 		errs = append(errs, errors.New("EXEC_NAMESPACE is required (downward API)"))

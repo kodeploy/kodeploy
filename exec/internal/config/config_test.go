@@ -31,8 +31,8 @@ func TestDefaults(t *testing.T) {
 	if c.TTYIdleTimeout != 15*time.Minute || c.TTYMax != 2*time.Hour || c.NonTTYMax != 30*time.Minute {
 		t.Errorf("limits: %v %v %v", c.TTYIdleTimeout, c.TTYMax, c.NonTTYMax)
 	}
-	if c.MaxSessions != 3 || c.PingInterval != 30*time.Second {
-		t.Errorf("sessions/ping: %d %v", c.MaxSessions, c.PingInterval)
+	if c.MaxSessionsPublic != 3 || c.MaxSessionsInternal != 4 || c.PingInterval != 30*time.Second {
+		t.Errorf("sessions/ping: %d %d %v", c.MaxSessionsPublic, c.MaxSessionsInternal, c.PingInterval)
 	}
 	if c.RestoreMaxBytes != 200*1024*1024 || c.RestoreWorkdir != "/tmp/kodeploy-restore" {
 		t.Errorf("restore: %d %s", c.RestoreMaxBytes, c.RestoreWorkdir)
@@ -51,7 +51,8 @@ func TestErrors(t *testing.T) {
 		{"short key", map[string]string{"EXEC_NAMESPACE": "x"}, []byte("short"), nil, "at least 32"},
 		{"key missing", map[string]string{"EXEC_NAMESPACE": "x"}, nil, errors.New("no such file"), "EXEC_HMAC_KEY_FILE"},
 		{"bad duration", map[string]string{"EXEC_NAMESPACE": "x", "TTY_MAX": "soon"}, goodKey, nil, "TTY_MAX"},
-		{"bad int", map[string]string{"EXEC_NAMESPACE": "x", "MAX_SESSIONS": "0"}, goodKey, nil, "MAX_SESSIONS"},
+		{"bad int", map[string]string{"EXEC_NAMESPACE": "x", "MAX_SESSIONS_PUBLIC": "0"}, goodKey, nil, "MAX_SESSIONS_PUBLIC"},
+		{"bad int internal", map[string]string{"EXEC_NAMESPACE": "x", "MAX_SESSIONS_INTERNAL": "x"}, goodKey, nil, "MAX_SESSIONS_INTERNAL"},
 		{"relative workdir", map[string]string{"EXEC_NAMESPACE": "x", "RESTORE_WORKDIR": "tmp/x"}, goodKey, nil, "RESTORE_WORKDIR"},
 		{"root workdir", map[string]string{"EXEC_NAMESPACE": "x", "RESTORE_WORKDIR": "/"}, goodKey, nil, "RESTORE_WORKDIR"},
 	}

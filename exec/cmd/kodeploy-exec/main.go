@@ -71,21 +71,22 @@ func serve(log *slog.Logger) error {
 	var srv *api.Server
 	metrics := audit.NewMetrics(func() int { return srv.Active() }, tickets.Stats)
 	srv = api.New(api.Options{
-		Namespace:       cfg.Namespace,
-		Key:             cfg.HMACKey,
-		Tickets:         tickets,
-		Finder:          target.NewFinder(cs, cfg.Namespace),
-		Runner:          &session.KubeRunner{Config: rc, Client: cs, NS: cfg.Namespace},
-		Audit:           audit.New(os.Stdout),
-		Metrics:         metrics,
-		TTYIdleTimeout:  cfg.TTYIdleTimeout,
-		TTYMax:          cfg.TTYMax,
-		NonTTYMax:       cfg.NonTTYMax,
-		PingInterval:    cfg.PingInterval,
-		MaxSessions:     cfg.MaxSessions,
-		RestoreMaxBytes: cfg.RestoreMaxBytes,
-		RestoreWorkdir:  cfg.RestoreWorkdir,
-		Log:             log,
+		Namespace:           cfg.Namespace,
+		Key:                 cfg.HMACKey,
+		Tickets:             tickets,
+		Finder:              target.NewFinder(cs, cfg.Namespace),
+		Runner:              &session.KubeRunner{Config: rc, Client: cs, NS: cfg.Namespace},
+		Audit:               audit.New(os.Stdout),
+		Metrics:             metrics,
+		TTYIdleTimeout:      cfg.TTYIdleTimeout,
+		TTYMax:              cfg.TTYMax,
+		NonTTYMax:           cfg.NonTTYMax,
+		PingInterval:        cfg.PingInterval,
+		MaxSessionsPublic:   cfg.MaxSessionsPublic,
+		MaxSessionsInternal: cfg.MaxSessionsInternal,
+		RestoreMaxBytes:     cfg.RestoreMaxBytes,
+		RestoreWorkdir:      cfg.RestoreWorkdir,
+		Log:                 log,
 	})
 	defer srv.Close()
 

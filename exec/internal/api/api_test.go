@@ -154,7 +154,7 @@ func (e *env) waitAudit(t *testing.T, lines int) string {
 	}
 }
 
-func newEnv(t *testing.T, maxSessions int, targets map[string]target.Target) *env {
+func newEnv(t *testing.T, maxPublic, maxInternal int, targets map[string]target.Target) *env {
 	t.Helper()
 	if targets == nil {
 		targets = map[string]target.Target{
@@ -167,7 +167,7 @@ func newEnv(t *testing.T, maxSessions int, targets map[string]target.Target) *en
 	e.s = New(Options{
 		Namespace: ns, Key: key, Tickets: e.tickets, Finder: fakeFinder{targets}, Runner: e.runner,
 		Audit: audit.New(e.auditBuf), TTYIdleTimeout: time.Minute, TTYMax: time.Minute, NonTTYMax: time.Minute,
-		PingInterval: time.Second, MaxSessions: maxSessions, RestoreMaxBytes: 1 << 20, RestoreWorkdir: "/tmp/kodeploy-restore",
+		PingInterval: time.Second, MaxSessionsPublic: maxPublic, MaxSessionsInternal: maxInternal, RestoreMaxBytes: 1 << 20, RestoreWorkdir: "/tmp/kodeploy-restore",
 	})
 	e.pub = httptest.NewServer(e.s.Public())
 	e.int = httptest.NewServer(e.s.Internal())
@@ -248,7 +248,7 @@ func dialPublic(t *testing.T, e *env, path string, protocols []string, hdr http.
 var sessionPath = "/exec/" + ns + "/v1/sessions"
 
 func TestPublicShell(t *testing.T) {
-	e := newEnv(t, 3, nil)
+	e := newEnv(t, 3, 4, nil)
 	tk := e.ticketFor(t, shellBody)
 	c, resp, err := dialPublic(t, e, sessionPath, []string{proto.Subprotocol, proto.TicketPrefix + tk}, nil)
 	if err != nil {
@@ -286,7 +286,7 @@ func TestPublicShell(t *testing.T) {
 }
 
 func TestPublicRejects(t *testing.T) {
-	e := newEnv(t, 3, nil)
+	e := newEnv(t, 3, 4, nil)
 
 	// 서브프로토콜 없음: 업그레이드하지 않는다
 	_, resp, err := dialPublic(t, e, sessionPath, nil, nil)
@@ -325,7 +325,7 @@ func TestPublicRejects(t *testing.T) {
 
 func TestPublicNoTarget(t *testing.T) {
 	targets := map[string]target.Target{"app": {Pod: "web-1", Container: "app", Kind: target.App}}
-	e := newEnv(t, 3, targets)
+	e := newEnv(t, 3, 4, targets)
 	tk := e.ticketFor(t, shellBody)
 	delete(targets, "app") // 발급 뒤 Pod가 사라졌다
 	c, _, _ := dialPublic(t, e, sessionPath, []string{proto.Subprotocol, proto.TicketPrefix + tk}, nil)
@@ -335,7 +335,7 @@ func TestPublicNoTarget(t *testing.T) {
 }
 
 func TestTooManySessions(t *testing.T) {
-	e := newEnv(t, 1, nil)
+	e := newEnv(t, 1, 1, nil)
 	e.runner.block = make(chan struct{})
 	t1, t2 := e.ticketFor(t, shellBody), e.ticketFor(t, shellBody)
 	c1, _, _ := dialPublic(t, e, sessionPath, []string{proto.Subprotocol, proto.TicketPrefix + t1}, nil)
@@ -351,8 +351,58 @@ func TestTooManySessions(t *testing.T) {
 	readAll(t, c1)
 }
 
+// 동시 세션은 문마다 따로 센다: 터미널이 공개 문 자리를 다 써도 내부 문(DB 콘솔·덤프)은 열린다. 그 반대도 같다
+func TestSessionLimitsPerDoor(t *testing.T) {
+	e := newEnv(t, 1, 1, nil)
+	e.runner.block = make(chan struct{})
+	tk := e.ticketFor(t, shellBody)
+	shell, _, _ := dialPublic(t, e, sessionPath, []string{proto.Subprotocol, proto.TicketPrefix + tk}, nil)
+	shell.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, _, err := shell.ReadMessage(); err != nil { // 공개 문 1/1
+		t.Fatal(err)
+	}
+
+	// 내부 문 복원 하나가 upload에서 기다린다 (내부 문 1/1). 공개 문이 가득 차 있어도 열린다
+	data := []byte("CREATE TABLE users (id int);\n")
+	rp := restorePath(data)
+	rs, _, err := dialInternal(t, e, rp, signed("GET", rp, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs.WriteMessage(websocket.BinaryMessage, proto.Frame(proto.ChStdin, data))
+	deadline := time.Now().Add(3 * time.Second)
+	for !slices.ContainsFunc(e.runner.execs(), func(x session.Exec) bool { return strings.Contains(x.Command[2], "cat >") }) {
+		if time.Now().After(deadline) {
+			t.Fatal("restore did not reach upload")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// 내부 문 두 번째는 4429, 공개 문 두 번째도 4429
+	qp := "/internal/v1/sessions/query"
+	q, _, err := dialInternal(t, e, qp, signed("GET", qp, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, code := readAll(t, q); code != proto.CloseTooMany {
+		t.Fatalf("internal over limit: %d", code)
+	}
+	tk2 := e.ticketFor(t, shellBody)
+	p2, _, _ := dialPublic(t, e, sessionPath, []string{proto.Subprotocol, proto.TicketPrefix + tk2}, nil)
+	if _, code := readAll(t, p2); code != proto.CloseTooMany {
+		t.Fatalf("public over limit: %d", code)
+	}
+
+	rs.WriteMessage(websocket.BinaryMessage, proto.CloseFrame(proto.ChStdin))
+	if _, code := readAll(t, rs); code != proto.CloseNormal {
+		t.Fatalf("restore: %d", code)
+	}
+	close(e.runner.block)
+	readAll(t, shell)
+}
+
 func TestIssueTicketErrors(t *testing.T) {
-	e := newEnv(t, 3, map[string]target.Target{"app": {Pod: "web-1", Container: "app", Kind: target.App}})
+	e := newEnv(t, 3, 4, map[string]target.Target{"app": {Pod: "web-1", Container: "app", Kind: target.App}})
 	cases := []struct {
 		name string
 		body string
@@ -382,7 +432,7 @@ func TestIssueTicketErrors(t *testing.T) {
 
 // 서명 밖 값(X-Kodeploy-Request-Id)과 기록용 값(app_id)은 실행에 영향이 없다
 func TestUnsignedValuesRecordOnly(t *testing.T) {
-	e := newEnv(t, 3, nil)
+	e := newEnv(t, 3, 4, nil)
 	var seen []session.Exec
 	for _, appID := range []string{"a1", "zzz"} {
 		body := strings.Replace(shellBody, `"a1"`, `"`+appID+`"`, 1)
@@ -415,7 +465,7 @@ func dialInternal(t *testing.T, e *env, path string, hdr http.Header) (*websocke
 }
 
 func TestInternalQuery(t *testing.T) {
-	e := newEnv(t, 3, nil)
+	e := newEnv(t, 3, 4, nil)
 	path := "/internal/v1/sessions/query"
 	hdr := signed("GET", path, nil)
 	hdr.Set(HeaderRequestID, "req-1")
@@ -443,7 +493,7 @@ func TestInternalQuery(t *testing.T) {
 }
 
 func TestInternalRejects(t *testing.T) {
-	e := newEnv(t, 3, nil)
+	e := newEnv(t, 3, 4, nil)
 	// 서명 없음 401
 	if _, resp, err := dialInternal(t, e, "/internal/v1/sessions/dump", nil); err == nil || resp.StatusCode != 401 {
 		t.Fatalf("unsigned: %v", resp)
@@ -479,7 +529,7 @@ func TestInternalRejects(t *testing.T) {
 }
 
 func TestInternalRestore(t *testing.T) {
-	e := newEnv(t, 3, nil)
+	e := newEnv(t, 3, 4, nil)
 	data := []byte("CREATE TABLE users (id int);\n")
 	sum := sha256.Sum256(data)
 	p := fmt.Sprintf("/internal/v1/sessions/restore/%d/%s", len(data), strings.ToUpper(hex.EncodeToString(sum[:])))
@@ -516,7 +566,7 @@ func restorePath(data []byte) string {
 
 // load 도중 끊겨 결과를 모르면 백업을 남기고, 결과 JSON에 Pod·컨테이너·경로를 싣는다
 func TestInternalRestoreKeepsBackup(t *testing.T) {
-	e := newEnv(t, 3, nil)
+	e := newEnv(t, 3, 4, nil)
 	e.runner.loadErr = errors.New("stream reset")
 	data := []byte("CREATE TABLE users (id int);\n")
 	p := restorePath(data)
@@ -550,7 +600,7 @@ func TestInternalRestoreKeepsBackup(t *testing.T) {
 
 // 복원은 한 번에 하나: 진행 중이면 두 번째는 4429
 func TestInternalRestoreOneAtATime(t *testing.T) {
-	e := newEnv(t, 3, nil)
+	e := newEnv(t, 3, 4, nil)
 	data := []byte("CREATE TABLE users (id int);\n")
 	p := restorePath(data)
 	c1, _, err := dialInternal(t, e, p, signed("GET", p, nil))
@@ -589,7 +639,7 @@ func TestInternalRestoreOneAtATime(t *testing.T) {
 }
 
 func TestShutdown(t *testing.T) {
-	e := newEnv(t, 3, nil)
+	e := newEnv(t, 3, 4, nil)
 	ops := httptest.NewServer(e.s.Ops())
 	defer ops.Close()
 	e.runner.block = make(chan struct{})
