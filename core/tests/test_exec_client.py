@@ -360,21 +360,78 @@ def test_restore_kept_backup_is_reported(wired, monkeypatch, tmp_path):
     assert ev["backup_pod"] == "mysql-0" and ev["backup_path"].endswith("abcdef.sql.gz")
 
 
-def test_restore_retries_when_exec_not_up_yet(monkeypatch, tmp_path):
+# 초기 복원: 고정 재시도 대신 exec Pod Ready를 기다린 뒤 한 번 보낸다. 연결 실패는 다시 보내지 않는다
+def test_initial_restore_waits_for_exec_then_sends_once(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "EXEC_AGENT_RESTORE", True)
     monkeypatch.setattr(snapshots, "_RETRY_DELAY", 0)
-    token = _stage(monkeypatch, tmp_path, b"x")
-    attempts = []
+    order, events = [], []
+
+    async def wait_ready(ns, timeout):
+        order.append(("wait", ns, timeout))
+        return state["ready"]
 
     async def restore_file(ns, path, size, sha, **who):
-        attempts.append(1)
-        if len(attempts) == 1:
-            raise exec_client.ExecError("연결 거부", connect_failed=True)
+        order.append(("send", ns))
+        if not state["up"]:
+            raise exec_client.ExecError("exec 서비스에 연결할 수 없습니다")
         return json.loads(_result("Success"))
 
+    monkeypatch.setattr(exec_client, "wait_ready", wait_ready)
     monkeypatch.setattr(exec_client, "restore_file", restore_file)
-    assert asyncio.run(snapshots.restore_staged(NS, token))["ok"]
-    assert len(attempts) == 2
+    monkeypatch.setattr(exec_client, "log_event", lambda **f: events.append(f))
+
+    state = {"ready": True, "up": True}
+    token = _stage(monkeypatch, tmp_path, b"x")
+    assert asyncio.run(snapshots.restore_staged(NS, token, wait_exec=120))["ok"]
+    assert order == [("wait", NS, 120), ("send", NS)]
+
+    # 120초 안에 Ready가 아니어도 한 번은 보낸다. 그래도 연결이 안 되면 재시도 없이 실패
+    order.clear()
+    state.update(ready=False, up=False)
+    token = _stage(monkeypatch, tmp_path, b"x")
+    with pytest.raises(snapshots.SnapshotError, match="연결할 수 없습니다"):
+        asyncio.run(snapshots.restore_staged(NS, token, wait_exec=120))
+    assert order == [("wait", NS, 120), ("send", NS)]
+    assert events[-1]["event"] == "exec_not_ready" and not list(tmp_path.glob(f"{token}*"))
+
+    # 업로드 복원(wait_exec 없음)은 기다리지 않는다
+    order.clear()
+    state.update(ready=True, up=True)
+    token = _stage(monkeypatch, tmp_path, b"x")
+    asyncio.run(snapshots.restore_staged(NS, token))
+    assert order == [("send", NS)]
+
+
+def test_wait_ready_reads_pod_conditions(monkeypatch):
+    def pod(phase="Running", ready="True", deleting=False):
+        return SimpleNamespace(
+            metadata=SimpleNamespace(deletion_timestamp="2026-11-13T00:00:00Z" if deleting else None),
+            status=SimpleNamespace(phase=phase, conditions=[SimpleNamespace(type="Ready", status=ready)]))
+
+    polls = [[], [pod(ready="False")], [pod(deleting=True)], [pod()]]
+    seen = []
+
+    class Core:
+        def __init__(self, api):
+            pass
+
+        async def list_namespaced_pod(self, namespace, label_selector):
+            seen.append((namespace, label_selector))
+            return SimpleNamespace(items=polls[min(len(seen) - 1, len(polls) - 1)])
+
+    async def noop():
+        return None
+
+    monkeypatch.setattr(exec_client, "_ensure_loaded", noop)
+    monkeypatch.setattr(exec_client.client, "ApiClient", lambda: _NullCtx())
+    monkeypatch.setattr(exec_client.client, "CoreV1Api", Core)
+    monkeypatch.setattr(exec_client, "_READY_POLL", 0)
+    assert asyncio.run(exec_client.wait_ready(NS, 5))
+    assert len(seen) == 4 and seen[0] == (NS, "kodeploy.com/component=exec")
+
+    seen.clear()
+    polls[:] = [[pod(ready="False")]]
+    assert not asyncio.run(exec_client.wait_ready(NS, 0.05))
 
 
 def test_flags_off_by_default(monkeypatch):

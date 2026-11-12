@@ -344,13 +344,20 @@ async def wait_db_ready(ns: str, db_type: str, timeout: int = 180) -> bool:
 
 # stage된 덤프를 복원하고 임시 파일을 제거 (성공/실패 무관).
 # restore_via_exec(ns)면 kodeploy-exec 내부 문(restore 단계식)으로 보낸다. 업로드 복원도 먼저 stage를 거친다.
-async def restore_staged(ns: str, token: str, *, user_id: str = "", app_id: str = "") -> dict:
+# wait_exec: 새 경로면 먼저 exec Pod가 Ready가 될 때까지 최대 이만큼(초) 기다린다 — 첫 배포의 초기 복원용.
+# 시간이 지나도 Ready가 아니면 그래도 한 번 보내고, 실패하면 그 실패로 끝난다.
+async def restore_staged(ns: str, token: str, *, user_id: str = "", app_id: str = "", wait_exec: float = 0) -> dict:
     path = _staged_path(token)
     if not os.path.exists(path):
         raise SnapshotError("초기 데이터 파일을 찾을 수 없습니다 (만료 또는 중복 소비)")
 
     if restore_via_exec(ns):
         try:
+            if wait_exec:
+                from app.exec import client as exec_client
+
+                if not await exec_client.wait_ready(ns, wait_exec):
+                    exec_client.log_event(event="exec_not_ready", ns=ns, op="restore", waited_s=wait_exec)
             return await _restore_via_exec(ns, path, user_id, app_id)
         finally:
             discard_staged(token)
@@ -376,7 +383,8 @@ def restore_via_exec(ns: str) -> bool:
     return app_config.exec_agent_on(app_config.EXEC_AGENT_RESTORE, ns)
 
 
-# db_changed=false인 실패면 다시 보낸다 (지시서 4-6). 세션을 열지도 못한 실패(exec Pod가 막 뜨는 중)도 같다.
+# db_changed=false인 실패(precheck·backup·upload·verify)면 다시 보낸다 (지시서 4-6).
+# exec에 연결하지 못한 실패는 다시 보내지 않는다 — 첫 배포처럼 exec가 막 뜨는 경우는 restore_staged(wait_exec)가 먼저 기다린다.
 RESTORE_RETRIES = 2
 _RETRY_DELAY = 5
 
@@ -392,8 +400,6 @@ async def _restore_via_exec(ns: str, path: str, user_id: str, app_id: str) -> di
         try:
             res = await exec_client.restore_file(ns, path, size, sha, user_id=user_id, app_id=app_id)
         except exec_client.ExecError as e:
-            if e.connect_failed and attempt < RESTORE_RETRIES:
-                continue
             raise SnapshotError(e.message) from e
         if res.get("status") == "Success":
             return {"ok": True, "output": _restore_summary(res), "result": res}

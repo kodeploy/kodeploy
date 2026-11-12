@@ -149,11 +149,14 @@ kubectl rollout restart deploy/kodeploy-core -n default
 | `EXEC_AGENT_DUMP` | 켜기 전·후 덤프를 받아 날짜 줄만 빼고 비교 (아래) | 내용 같음 |
 | `EXEC_AGENT_RESTORE` | 덤프를 복원하고 결과의 표별 행 수를 `SELECT COUNT(*)`와 비교 | 행 수 같음 |
 | `EXEC_AGENT_TERMINAL` | 7번 | |
+| 초기 복원 (새 앱 첫 배포 + 덤프) | 0절 12번 뒤(`*`)에 새 테스트 앱을 DB·덤프와 함께 배포. 새 앱 ns는 배포 때 생겨 카나리 목록에 미리 넣을 수 없다 | 빌드 행에 오류 없음, core 로그에 `exec_not_ready`가 없거나 있어도 복원 성공, 표별 행 수가 덤프와 같음 |
 
 ```sh
 # 덤프 비교 (mysqldump 끝의 "-- Dump completed on ..." 줄, pg_dump는 그대로)
 diff <(zcat old.sql.gz | grep -v '^-- Dump completed') <(zcat new.sql.gz | grep -v '^-- Dump completed')
 ```
+
+초기 복원은 core가 exec Pod Ready(`kodeploy.com/component=exec`, pods list)를 최대 120초 기다린 뒤 한 번 보낸다. 그래도 Ready가 아니면 그냥 보내고, 연결이 안 되면 그 실패로 끝난다(빌드 행 error). 연결 실패는 다시 보내지 않고, `db_changed=false` 실패만 최대 2회 다시 보낸다.
 
 core 로그와 exec 감사 기록을 request_id로 이어 보는 법:
 

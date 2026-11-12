@@ -56,13 +56,11 @@ _CLOSE_TEXT = {
 class ExecError(Exception):
     """exec 호출 실패. code는 WebSocket close 코드(있으면), http_status는 core가 돌려줄 HTTP 상태."""
 
-    def __init__(self, message: str, *, code: int | None = None, http_status: int = 502, connect_failed: bool = False):
+    def __init__(self, message: str, *, code: int | None = None, http_status: int = 502):
         super().__init__(message)
         self.message = message
         self.code = code
         self.http_status = http_status
-        # 세션을 열기 전에 실패했다 (연결 거부·핸드셰이크 실패) — 원격에서 아무것도 돌지 않았다
-        self.connect_failed = connect_failed
 
 
 def _close_error(code: int | None) -> ExecError:
@@ -140,6 +138,38 @@ async def db_type(ns: str) -> str | None:
             if any(p.status and p.status.phase == "Running" for p in pods.items):
                 return kind
     return None
+
+
+# exec Pod가 Ready인지 — 첫 배포의 초기 복원은 exec Pod와 DB가 같이 뜨는 중에 시작된다. pods list만 쓴다.
+EXEC_SELECTOR = "kodeploy.com/component=exec"
+READY_TIMEOUT = 120.0
+_READY_POLL = 2.0
+
+
+def _pod_ready(p) -> bool:
+    if p.metadata is not None and p.metadata.deletion_timestamp is not None:
+        return False                                             # 종료 중 (SIGTERM 뒤 503)
+    if not p.status or p.status.phase != "Running":
+        return False
+    return any(c.type == "Ready" and c.status == "True" for c in p.status.conditions or [])
+
+
+async def wait_ready(ns: str, timeout: float = READY_TIMEOUT) -> bool:
+    """ns의 kodeploy-exec Pod 하나가 Ready가 될 때까지 기다린다. timeout 안에 안 되면 False."""
+    await _ensure_loaded()
+    deadline = time.monotonic() + timeout
+    async with client.ApiClient() as api:
+        core = client.CoreV1Api(api)
+        while True:
+            try:
+                pods = await core.list_namespaced_pod(namespace=ns, label_selector=EXEC_SELECTOR)
+                if any(_pod_ready(p) for p in pods.items):
+                    return True
+            except ApiException:
+                pass                                             # 잠깐의 apiserver 오류는 다음 확인에서
+            if time.monotonic() >= deadline:
+                return False
+            await asyncio.sleep(min(_READY_POLL, max(0.0, deadline - time.monotonic())))
 
 
 # --- 티켓 (공개 문용) ----------------------------------------------------------
@@ -221,11 +251,10 @@ class _Session:
             if e.status == 401:
                 _keys.pop(self.ns, None)
             raise ExecError(f"exec 세션을 열지 못했습니다 ({e.status})",
-                            http_status=503 if e.status == 503 else 502, connect_failed=True) from e
+                            http_status=503 if e.status == 503 else 502) from e
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             await self._http.close()
-            raise ExecError("exec 서비스에 연결할 수 없습니다 — 이 앱의 kodeploy-exec가 떠 있는지 확인하세요",
-                            connect_failed=True) from e
+            raise ExecError("exec 서비스에 연결할 수 없습니다 — 이 앱의 kodeploy-exec가 떠 있는지 확인하세요") from e
         return self
 
     async def __aexit__(self, *exc):

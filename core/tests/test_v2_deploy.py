@@ -992,7 +992,7 @@ TOKEN = "a" * 32
 @pytest.fixture
 def dumps(monkeypatch):
     """stage된 덤프 처리를 기록한다 — 파일·DB Pod 대신."""
-    state = SimpleNamespace(discarded=[], restored=[], ready=True, restore_error=None, sent=[])
+    state = SimpleNamespace(discarded=[], restored=[], ready=True, restore_error=None, sent=[], who=[])
     monkeypatch.setattr(v2.snapshots, "discard_staged", lambda t: state.discarded.append(t))
 
     async def wait_db_ready(ns, db_type):
@@ -1002,6 +1002,7 @@ def dumps(monkeypatch):
         if state.restore_error:
             raise state.restore_error
         state.restored.append((ns, token))
+        state.who.append(who)
         return {}
 
     async def submit(payload):
@@ -1056,6 +1057,7 @@ def test_restore_after_deploy_then_restarts_the_app(monkeypatch, dumps):
     v2._pending_dumps["3f9a2c1d"] = TOKEN
     asyncio.run(v2.restore_initial_dump("3f9a2c1d"))
     assert dumps.restored == [("app-9abcdef0", TOKEN)]
+    assert dumps.who[0]["wait_exec"] == 120                       # 새 경로면 exec Pod Ready를 최대 120초 기다린다
     restart = dumps.sent[0]
     assert restart["kind"] == "config" and restart["namespace"] == "app-9abcdef0"
     assert set(restart["values"]) == {"envRevision"} and restart["actor"] == UID.hex[:8]

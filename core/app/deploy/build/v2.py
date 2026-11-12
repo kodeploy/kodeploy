@@ -34,6 +34,7 @@ from app.deploy.routing.hostnames import _slot_hostnames
 from app.deploy.stack import env as env_module
 from app.deploy.stack import manifests
 from app.deploy.stack.resources import _apply_storage, _apply_volume, _ensure_tenant_ns, ensure_dep_secrets
+from app.exec import client as exec_client
 from app.shared.db import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -364,8 +365,10 @@ async def restore_initial_dump(build_id: str) -> None:
             error = "초기 데이터 복원 실패: DB 준비 타임아웃"
         else:
             try:
+                # 새 경로(kodeploy-exec)면 exec Pod가 DB와 같이 뜨는 중일 수 있어 Ready를 먼저 기다린다
                 await snapshots.restore_staged(build.tenant_id, token, user_id=build.user_id_str,
-                                               app_id=str(build.app_id) if build.app_id else "")
+                                               app_id=str(build.app_id) if build.app_id else "",
+                                               wait_exec=exec_client.READY_TIMEOUT)
             except Exception as e:
                 error = f"초기 데이터 복원 실패: {e}"
         if error:
