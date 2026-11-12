@@ -145,18 +145,20 @@ def test_routes_reach_browse(monkeypatch):
 
     seen = {}
 
-    async def fake_browse(ns, spec):
-        seen.update(ns=ns, spec=spec)
+    async def fake_browse(ns, spec, **who):
+        seen.update(ns=ns, spec=spec, who=who)
         return {"ok": True}
 
-    async def fake_tables(ns):
+    async def fake_tables(ns, **who):
         return {"tables": [], "ns": ns}
 
     monkeypatch.setattr(dbbrowse, "browse", fake_browse)
     monkeypatch.setattr(dbbrowse, "list_tables", fake_tables)
     api = FastAPI()
     api.include_router(deploy_router.router)
-    api.dependency_overrides[deploy_router.current_app] = lambda: SimpleNamespace(namespace="tenant-x")
+    api.dependency_overrides[deploy_router.current_app] = lambda: SimpleNamespace(namespace="tenant-x", id="app-1")
+    # exec 경로의 core 기록(request_id와 함께 남기는 user_id·app_id)용
+    api.dependency_overrides[deploy_router.get_current_user] = lambda: SimpleNamespace(id="user-1")
     c = TestClient(api)
 
     assert c.get("/deploy/app/db/tables").json() == {"tables": [], "ns": "tenant-x"}

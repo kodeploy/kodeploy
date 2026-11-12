@@ -445,9 +445,10 @@ async def app_redis_terminal(ws: WebSocket):
 async def db_query(
     req: DbQueryRequest,
     app: App = Depends(current_app),
+    user: User = Depends(get_current_user),
 ) -> dict:
     try:
-        return await dbquery.run_query(app.namespace, req.sql, offset=req.offset)
+        return await dbquery.run_query(app.namespace, req.sql, offset=req.offset, user_id=str(user.id), app_id=str(app.id))
     except dbquery.QueryError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -455,9 +456,9 @@ async def db_query(
 # DB 탐색 — SQL 없이 표를 고르고 컬럼·조건·정렬로 행을 본다. 읽기 전용 세션에서만 돈다.
 # db/query와 같은 권한(주인)·같은 exec 길. /{build_id}보다 위에 등록(위와 같은 이유).
 @router.get("/app/db/tables")
-async def db_tables(app: App = Depends(current_app)) -> dict:
+async def db_tables(app: App = Depends(current_app), user: User = Depends(get_current_user)) -> dict:
     try:
-        return await dbbrowse.list_tables(app.namespace)
+        return await dbbrowse.list_tables(app.namespace, user_id=str(user.id), app_id=str(app.id))
     except dbquery.QueryError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -466,11 +467,12 @@ async def db_tables(app: App = Depends(current_app)) -> dict:
 async def db_browse(
     req: DbBrowseRequest,
     app: App = Depends(current_app),
+    user: User = Depends(get_current_user),
 ) -> dict:
     spec = req.model_dump()
     spec["schema"] = spec.pop("schema_name")
     try:
-        return await dbbrowse.browse(app.namespace, spec)
+        return await dbbrowse.browse(app.namespace, spec, user_id=str(user.id), app_id=str(app.id))
     except dbquery.QueryError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -794,7 +796,7 @@ def github_detect(
 # DB 스냅샷 추출 — 현재 앱 MySQL을 mysqldump → .sql.gz 다운로드 스트림.
 # /{build_id} GET 핸들러보다 위에 등록해야 "db"가 build_id로 잡히지 않음.
 @router.get("/db/export")
-async def db_export(app: App = Depends(current_app)):
+async def db_export(app: App = Depends(current_app), user: User = Depends(get_current_user)):
     tenant_id = app.namespace
     try:
         await snapshots.ensure_db(tenant_id)             # 스트리밍 시작 전 검증
@@ -803,7 +805,7 @@ async def db_export(app: App = Depends(current_app)):
     ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     filename = f"{app.name}-{ts}.sql.gz"
     return StreamingResponse(
-        snapshots.export_stream(tenant_id),
+        snapshots.export_stream(tenant_id, user_id=str(user.id), app_id=str(app.id)),
         media_type="application/gzip",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
@@ -832,6 +834,7 @@ async def db_stage_dump(
 async def db_restore(
     file: UploadFile = File(...),
     app: App = Depends(current_app),
+    user: User = Depends(get_current_user),
 ):
     tenant_id = app.namespace
 
@@ -843,6 +846,10 @@ async def db_restore(
             yield data
 
     try:
+        if config.EXEC_AGENT_RESTORE:
+            # 새 경로: 업로드도 stage를 먼저 거친다 — 크기·sha256(exec의 기대값)을 알고, 재시도에 다시 보낼 수 있다
+            token = await snapshots.stage_dump(_chunks())
+            return await snapshots.restore_staged(tenant_id, token, user_id=str(user.id), app_id=str(app.id))
         return await snapshots.restore(tenant_id, _chunks())
     except snapshots.SnapshotError as e:
         raise HTTPException(status_code=400, detail=str(e))

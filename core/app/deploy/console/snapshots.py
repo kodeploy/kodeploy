@@ -12,6 +12,8 @@ stdin EOF는 ws close로 신호(터미널/`kubectl cp`와 동일한 방식).
 
 import asyncio
 import base64
+import hashlib
+import json
 import os
 import re
 import shlex
@@ -21,6 +23,8 @@ import uuid
 import aiohttp
 from kubernetes_asyncio import client, config
 from kubernetes_asyncio.stream import WsApiClient
+
+from app import config as app_config
 
 _RESTORE_PATH = "/tmp/kd_restore.dump"
 _EXIT_MARK = "__KD_EXIT__"
@@ -142,15 +146,30 @@ def _load_cmd(t: dict) -> list[str]:
 
 # export 전 사전 검증 — DB 파드 없으면 스트리밍 시작 전에 에러로 끊기 위함.
 async def ensure_db(ns: str) -> None:
-    await _ensure_loaded()
-    async with client.ApiClient() as api:
-        t = await _detect_target(client.CoreV1Api(api), ns)
+    if app_config.EXEC_AGENT_DUMP:
+        from app.exec import client as exec_client
+        t = await exec_client.db_type(ns)
+    else:
+        await _ensure_loaded()
+        async with client.ApiClient() as api:
+            t = await _detect_target(client.CoreV1Api(api), ns)
     if not t:
         raise SnapshotError("DB가 활성화돼 있지 않습니다 — DB(MySQL/PostgreSQL)를 추가한 앱에서만 스냅샷이 가능합니다.")
 
 
 # dump | gzip stdout을 청크로 yield (FastAPI StreamingResponse용).
-async def export_stream(ns: str):
+# EXEC_AGENT_DUMP가 켜져 있으면 kodeploy-exec 내부 문(dump)으로 받는다. 거기선 pipefail이 있고,
+# 채널 3 exit code가 0이 아니면 예외로 끊는다 — 응답이 정상 종료되지 않아 잘린 파일이 완료로 저장되지 않는다.
+async def export_stream(ns: str, *, user_id: str = "", app_id: str = ""):
+    if app_config.EXEC_AGENT_DUMP:
+        from app.exec import client as exec_client
+        try:
+            async for chunk in exec_client.dump_stream(ns, user_id=user_id, app_id=app_id):
+                yield chunk
+        except exec_client.ExecError as e:
+            raise SnapshotError(e.message) from e
+        return
+
     await _ensure_loaded()
     async with client.ApiClient() as api:
         t = await _detect_target(client.CoreV1Api(api), ns)
@@ -244,14 +263,18 @@ def _staged_path(token: str) -> str:
 
 # 업로드 덤프를 core 로컬 임시 디스크에 저장하고 토큰 반환.
 # 배포 요청엔 이 토큰만 실어 보내고, mysql Ready 후 restore_staged로 소비.
+# stage할 때 크기와 sha256을 같이 계산해 <token>.json에 둔다 — exec 복원의 기대값(경로의 size·sha256)이다.
 async def stage_dump(chunks) -> str:
     os.makedirs(_STAGE_DIR, exist_ok=True)
     token = uuid.uuid4().hex
     path = os.path.join(_STAGE_DIR, f"{token}.dump")
+    h, size = hashlib.sha256(), 0
     try:
         with open(path, "wb") as f:
             async for chunk in _limited(chunks):
                 f.write(chunk)
+                h.update(chunk)
+                size += len(chunk)
     except SnapshotError:
         # 상한 초과 — 부분 저장분 삭제 후 그대로 전파 (디스크에 잔재 안 남김)
         try:
@@ -259,15 +282,41 @@ async def stage_dump(chunks) -> str:
         except OSError:
             pass
         raise
+    with open(_meta_path(path), "w") as f:
+        json.dump({"size": size, "sha256": h.hexdigest()}, f)
     return token
+
+
+def _meta_path(dump_path: str) -> str:
+    return dump_path[: -len(".dump")] + ".json"
+
+
+# stage 때 남긴 크기·sha256. 없으면(이 코드 전에 stage된 파일) 지금 계산한다.
+def _staged_meta(path: str) -> tuple[int, str]:
+    try:
+        with open(_meta_path(path)) as f:
+            meta = json.load(f)
+        return int(meta["size"]), str(meta["sha256"])
+    except (OSError, ValueError, KeyError):
+        h, size = hashlib.sha256(), 0
+        with open(path, "rb") as f:
+            for b in iter(lambda: f.read(256 * 1024), b""):
+                h.update(b)
+                size += len(b)
+        return size, h.hexdigest()
 
 
 # stage된 임시 덤프 삭제 (복원 성공/실패/취소 무관 — 누적 방지).
 def discard_staged(token: str) -> None:
     try:
-        os.remove(_staged_path(token))
-    except (OSError, SnapshotError):
-        pass
+        path = _staged_path(token)
+    except SnapshotError:
+        return
+    for p in (path, _meta_path(path)):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
 
 
 # 테넌트 ns의 DB 파드(mysql/postgres)가 Running + Ready 될 때까지 폴링. 타임아웃이면 False.
@@ -294,10 +343,17 @@ async def wait_db_ready(ns: str, db_type: str, timeout: int = 180) -> bool:
 
 
 # stage된 덤프를 복원하고 임시 파일을 제거 (성공/실패 무관).
-async def restore_staged(ns: str, token: str) -> dict:
+# EXEC_AGENT_RESTORE가 켜져 있으면 kodeploy-exec 내부 문(restore 단계식)으로 보낸다. 업로드 복원도 먼저 stage를 거친다.
+async def restore_staged(ns: str, token: str, *, user_id: str = "", app_id: str = "") -> dict:
     path = _staged_path(token)
     if not os.path.exists(path):
         raise SnapshotError("초기 데이터 파일을 찾을 수 없습니다 (만료 또는 중복 소비)")
+
+    if app_config.EXEC_AGENT_RESTORE:
+        try:
+            return await _restore_via_exec(ns, path, user_id, app_id)
+        finally:
+            discard_staged(token)
 
     async def _file_chunks():
         with open(path, "rb") as f:
@@ -311,3 +367,53 @@ async def restore_staged(ns: str, token: str) -> dict:
         return await restore(ns, _file_chunks())
     finally:
         discard_staged(token)
+
+
+# --- kodeploy-exec 복원 (EXEC_AGENT_RESTORE) ---------------------------------
+
+# db_changed=false인 실패면 다시 보낸다 (지시서 4-6). 세션을 열지도 못한 실패(exec Pod가 막 뜨는 중)도 같다.
+RESTORE_RETRIES = 2
+_RETRY_DELAY = 5
+
+
+async def _restore_via_exec(ns: str, path: str, user_id: str, app_id: str) -> dict:
+    from app.exec import client as exec_client
+
+    size, sha = _staged_meta(path)
+    last: dict | None = None
+    for attempt in range(1 + RESTORE_RETRIES):
+        if attempt:
+            await asyncio.sleep(_RETRY_DELAY)
+        try:
+            res = await exec_client.restore_file(ns, path, size, sha, user_id=user_id, app_id=app_id)
+        except exec_client.ExecError as e:
+            if e.connect_failed and attempt < RESTORE_RETRIES:
+                continue
+            raise SnapshotError(e.message) from e
+        if res.get("status") == "Success":
+            return {"ok": True, "output": _restore_summary(res), "result": res}
+        last = res
+        if res.get("db_changed"):
+            break
+    raise SnapshotError(_restore_failure(last or {}))
+
+
+def _restore_summary(res: dict) -> str:
+    tables = res.get("tables") or []
+    lines = [f"복원 완료 — 표 {len(tables)}개"]
+    lines += [f"{t.get('name')}: {t.get('rows')}행" for t in tables[:20]]
+    if len(tables) > 20:
+        lines.append(f"… 외 {len(tables) - 20}개")
+    return "\n".join(lines)
+
+
+def _restore_failure(res: dict) -> str:
+    step = res.get("failed_step") or "?"
+    detail = next((s.get("detail") for s in res.get("steps") or [] if s.get("name") == step), "")
+    msg = f"복원 실패 ({step})" + (f": {detail}" if detail else "")
+    if res.get("output"):
+        msg += "\n" + res["output"]
+    if res.get("db_changed"):
+        rolled = any(s.get("name") == "rollback" and s.get("ok") for s in res.get("steps") or [])
+        msg += "\n" + ("백업으로 되돌렸습니다" if rolled else "DB가 일부 바뀌었을 수 있습니다") + " (자동 재시도하지 않았습니다)"
+    return msg

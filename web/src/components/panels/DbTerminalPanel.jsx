@@ -6,7 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { TERM_FONT_FAMILY, xtermTheme } from "../../lib/xtermTheme.js";
 import { useTheme } from "../../contexts/ThemeContext.jsx";
 
-import { wsPath } from "../../api/deploy.js";
+import { openTerminalSocket } from "../../lib/terminalSocket.js";
 
 // bare=true면 자체 헤더를 숨김 — DbConsolePanel의 [표|터미널] 토글 안에 끼울 때 헤더 중복 방지.
 export default function DbTerminalPanel({ bare = false }) {
@@ -38,26 +38,18 @@ export default function DbTerminalPanel({ bare = false }) {
       if (!disposed) fitAddon.fit();
     });
 
-    const ws = new WebSocket(wsPath("/deploy/app/db-terminal"));
-
-    // 현재 xterm 크기를 백엔드로 보내 파드 pty 크기를 맞춤 → mysql 등이 실제 폭으로 출력 정렬
-    const sendResize = () => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ __resize: { cols: term.cols, rows: term.rows } }));
-      }
-    };
-
-    ws.onopen = () => {
-      term.write("\x1b[1;34mDB 연결됨\x1b[0m\r\n");
-      sendResize();
-    };
-    ws.onmessage = (e) => term.write(e.data);
-    ws.onclose = (e) => term.write(`\r\n\x1b[1;31m연결 종료${e.reason ? `: ${e.reason}` : ""}\x1b[0m\r\n`);
-    ws.onerror = () => term.write("\r\n\x1b[1;31m연결 실패\x1b[0m\r\n");
-    term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(data);
+    // 옛 경로(core 중계)와 새 경로(kodeploy-exec, 플래그)를 같은 모양으로 연다 — lib/terminalSocket.js.
+    // 연결되면 현재 xterm 크기를 보내 파드 pty 크기를 맞춤 → mysql 등이 실제 폭으로 출력 정렬
+    const sock = openTerminalSocket({
+      term,
+      target: "db",
+      legacyPath: "/deploy/app/db-terminal",
+      onOpen: () => term.write("\x1b[1;34mDB 연결됨\x1b[0m\r\n"),
+      onClose: (reason) => term.write(`\r\n\x1b[1;31m연결 종료${reason ? `: ${reason}` : ""}\x1b[0m\r\n`),
+      onError: (message) => term.write(`\r\n\x1b[1;31m연결 실패${message ? `: ${message}` : ""}\x1b[0m\r\n`),
     });
-    term.onResize(() => sendResize());
+    term.onData((data) => sock.input(data));
+    term.onResize(() => sock.resize());
 
     const ro = new ResizeObserver(() => fitAddon.fit());
     ro.observe(containerRef.current);
@@ -65,7 +57,7 @@ export default function DbTerminalPanel({ bare = false }) {
     return () => {
       disposed = true;
       ro.disconnect();
-      ws.close();
+      sock.close();
       term.dispose();
     };
   }, []);

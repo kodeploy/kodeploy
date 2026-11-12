@@ -364,7 +364,8 @@ async def restore_initial_dump(build_id: str) -> None:
             error = "초기 데이터 복원 실패: DB 준비 타임아웃"
         else:
             try:
-                await snapshots.restore_staged(build.tenant_id, token)
+                await snapshots.restore_staged(build.tenant_id, token, user_id=build.user_id_str,
+                                               app_id=str(build.app_id) if build.app_id else "")
             except Exception as e:
                 error = f"초기 데이터 복원 실패: {e}"
         if error:

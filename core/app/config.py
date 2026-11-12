@@ -36,6 +36,16 @@ BUILD_REGISTRY_CACHE_ENABLED = os.getenv("BUILD_REGISTRY_CACHE", "false").lower(
 BUILDER_URL = os.getenv("BUILDER_URL", "http://kodeploy-builder.default.svc:8080").rstrip("/")
 BUILDER_HMAC_SECRET = os.getenv("BUILDER_HMAC_SECRET", "")
 
+# kodeploy-exec — 테넌트 ns마다 뜨는 exec 게이트웨이 (exec/, kodeploy-charts templates/exec.yaml).
+# 기능별 플래그, 기본 off. off면 옛 경로(core가 직접 pods/exec), on이면 exec의 내부 문·공개 문을 쓴다.
+EXEC_AGENT_TERMINAL = os.getenv("EXEC_AGENT_TERMINAL", "false").lower() == "true"
+EXEC_AGENT_QUERY = os.getenv("EXEC_AGENT_QUERY", "false").lower() == "true"
+EXEC_AGENT_BROWSE = os.getenv("EXEC_AGENT_BROWSE", "false").lower() == "true"
+EXEC_AGENT_DUMP = os.getenv("EXEC_AGENT_DUMP", "false").lower() == "true"
+EXEC_AGENT_RESTORE = os.getenv("EXEC_AGENT_RESTORE", "false").lower() == "true"
+# 웹이 붙는 공개 문 기준 주소. 경로는 /exec/<ns>/v1/sessions (테넌트 HTTPRoute가 그 ns의 exec Pod로 보낸다)
+EXEC_PUBLIC_URL = os.getenv("EXEC_PUBLIC_URL", "wss://api.kodeploy.com").rstrip("/")
+
 # --- kubelet 직접 조회 (관리자 노드 현황, admin/service.py) ---
 # 노드마다 자체 서명인 kubelet 서빙 CA 묶음 — ConfigMap kubelet-serving-ca 마운트 (ansible 69-kubelet-serving-ca.yml)
 KUBELET_CA_FILE = os.getenv("KUBELET_CA_FILE", "/etc/kodeploy/kubelet-ca/ca.crt")

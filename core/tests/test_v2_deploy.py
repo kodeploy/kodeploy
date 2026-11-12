@@ -998,7 +998,7 @@ def dumps(monkeypatch):
     async def wait_db_ready(ns, db_type):
         return state.ready
 
-    async def restore_staged(ns, token):
+    async def restore_staged(ns, token, **who):
         if state.restore_error:
             raise state.restore_error
         state.restored.append((ns, token))

@@ -19,6 +19,29 @@ export function wsPath(path) {
   return `${API_BASE.replace(/^http/, "ws")}${scoped(path)}`;
 }
 
+// 새 터미널 경로(kodeploy-exec)를 쓸지 — 서버 플래그 EXEC_AGENT_TERMINAL. 한 번만 묻고 기억한다.
+// 못 물으면 옛 경로로 간다.
+let execFeatures = null;
+export function getExecFeatures() {
+  if (!execFeatures) {
+    execFeatures = request("/exec/features").catch(() => ({ terminal: false }));
+  }
+  return execFeatures;
+}
+
+// 지금 보고 있는 앱이 있어야 티켓을 받을 수 있다 (앱 화면 밖이면 옛 경로).
+export function hasActiveApp() {
+  return Boolean(activeAppId);
+}
+
+// 터미널 1회용 티켓 → { ticket, url, protocol, expires_in }. target: app | db | redis
+export function createExecTicket(target, cols, rows) {
+  return request(`/apps/${activeAppId}/exec-tickets`, {
+    method: "POST",
+    body: JSON.stringify({ target, cols, rows }),
+  });
+}
+
 async function request(path, { appId, ...options } = {}) {
   const res = await fetch(`${API_BASE}${scoped(path, appId)}`, {
     credentials: "include",                       // cookie session 첨부
