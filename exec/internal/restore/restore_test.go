@@ -6,12 +6,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/kodeploy/kodeploy/exec/internal/ops"
 	"github.com/kodeploy/kodeploy/exec/internal/target"
@@ -34,11 +37,16 @@ type fakeDB struct {
 	countSQL   string
 	cleanupRan bool
 	cleanupErr error
+	argv       map[string][]string // 명령 이름 → 마지막 argv
 }
 
 func (f *fakeDB) exec(ctx context.Context, cmd ops.Cmd, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	f.mu.Lock()
 	f.calls = append(f.calls, cmd.Name)
+	if f.argv == nil {
+		f.argv = map[string][]string{}
+	}
+	f.argv[cmd.Name] = cmd.Argv
 	f.mu.Unlock()
 	switch cmd.Name {
 	case "restore.precheck":
@@ -95,9 +103,21 @@ func (f *fakeDB) exec(ctx context.Context, cmd ops.Cmd, stdin io.Reader, stdout,
 	return 127, fmt.Errorf("unexpected command %s", cmd.Name)
 }
 
+const backupName = "backup-20261113T000000Z-abcdef.sql.gz"
+
 func params(kind target.Kind, data []byte) Params {
 	sum := sha256.Sum256(data)
-	return Params{Kind: kind, Workdir: "/w", Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:])}
+	return Params{Kind: kind, Workdir: "/w", Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Backup: backupName}
+}
+
+// removedBackup은 cleanup이 지운 백업 이름이다 ($2, 비었으면 남겼다)
+func (f *fakeDB) removedBackup(t *testing.T) string {
+	t.Helper()
+	a := f.argv["restore.cleanup"]
+	if len(a) != 6 || a[4] != "/w" {
+		t.Fatalf("cleanup argv %q", a)
+	}
+	return a[5]
 }
 
 func names(steps []Step) string {
@@ -246,6 +266,13 @@ func TestMySQLLoadFailRollback(t *testing.T) {
 	if res.Status != "Failure" || res.FailedStep != "check" || !res.DBChanged {
 		t.Fatalf("%+v", res)
 	}
+	// 백업·rollback·cleanup이 같은 백업 이름을 쓰고, 되돌렸으니 백업은 지운다
+	if f.argv["restore.backup"][5] != backupName || f.argv["restore.rollback"][5] != backupName {
+		t.Fatalf("backup name: %q %q", f.argv["restore.backup"], f.argv["restore.rollback"])
+	}
+	if res.Backup != nil || f.removedBackup(t) != backupName {
+		t.Fatalf("rolled back: backup must be removed: %+v", res.Backup)
+	}
 	if got := names(res.Steps); got != "precheck:ok backup:ok upload:ok verify:ok load:fail check:fail rollback:ok cleanup:ok" {
 		t.Fatalf("steps %s", got)
 	}
@@ -253,10 +280,18 @@ func TestMySQLLoadFailRollback(t *testing.T) {
 		t.Fatalf("output %q", res.Output)
 	}
 
+	// rollback 실패: DB 상태를 모른다 — 백업을 남기고 위치를 싣는다
 	f = &fakeDB{availKB: 1 << 20, loadExit: 1, rbExit: 1}
 	res = Run(context.Background(), f.exec, bytes.NewReader(dump), params(target.MySQL, dump))
 	if res.FailedStep != "rollback" || !strings.Contains(res.Output, "rollback failed") {
 		t.Fatalf("rollback fail: %+v", res)
+	}
+	if res.Backup == nil || res.Backup.Path != "/w/"+backupName || f.removedBackup(t) != "" {
+		t.Fatalf("rollback fail: backup must be kept: %+v", res.Backup)
+	}
+	last := res.Steps[len(res.Steps)-1]
+	if last.Name != "cleanup" || !last.OK || last.Detail != "backup kept: /w/"+backupName {
+		t.Fatalf("cleanup step %+v", last)
 	}
 }
 
@@ -283,6 +318,55 @@ func TestLoadInterrupted(t *testing.T) {
 		if c == "restore.rollback" {
 			t.Fatal("rollback must be skipped when load outcome is unknown")
 		}
+	}
+	// 결과를 모른다: 백업은 남기고(덤프만 지운다) 위치를 결과에 싣는다
+	if res.Backup == nil || res.Backup.Path != "/w/"+backupName || f.removedBackup(t) != "" {
+		t.Fatalf("backup must be kept: %+v", res.Backup)
+	}
+	b, _ := json.Marshal(res)
+	if !strings.Contains(string(b), `"backup":{"path":"/w/`+backupName+`"}`) {
+		t.Fatalf("json %s", b)
+	}
+
+	// PostgreSQL: 끊긴 뒤에도 적재가 끝나면 커밋된다 — db_changed=true (재시도 금지). 백업은 원래 없다
+	f = &fakeDB{availKB: 1 << 20, loadExit: -1, loadErr: errors.New("stream closed")}
+	res = Run(context.Background(), f.exec, bytes.NewReader(dump), params(target.Postgres, dump))
+	if res.FailedStep != "load" || !res.DBChanged || res.Backup != nil {
+		t.Fatalf("postgres interrupted: %+v", res)
+	}
+}
+
+// 결과를 아는 실패·성공에서는 백업을 남기지 않는다
+func TestBackupRemovedWhenOutcomeKnown(t *testing.T) {
+	for name, f := range map[string]*fakeDB{
+		"success":     {availKB: 1 << 20, tables: "users\n"},
+		"backup fail": {availKB: 1 << 20, backupExit: 2},
+		"verify fail": {availKB: 1 << 20, corrupt: true},
+	} {
+		res := Run(context.Background(), f.exec, bytes.NewReader(dump), params(target.MySQL, dump))
+		if res.Backup != nil || f.removedBackup(t) != backupName {
+			t.Fatalf("%s: backup %+v removed %q", name, res.Backup, f.removedBackup(t))
+		}
+	}
+	b, _ := json.Marshal(Result{Status: "Success"})
+	if strings.Contains(string(b), "backup") {
+		t.Fatalf("backup must be omitted: %s", b)
+	}
+}
+
+func TestBackupName(t *testing.T) {
+	now := time.Date(2026, 11, 13, 1, 2, 3, 0, time.FixedZone("KST", 9*3600))
+	a, b := BackupName(now), BackupName(now)
+	if !regexp.MustCompile(`^backup-20261112T160203Z-[0-9a-f]{6}\.sql\.gz$`).MatchString(a) || a == b {
+		t.Fatalf("%q %q", a, b)
+	}
+	// Run은 이름이 없으면 만든다
+	f := &fakeDB{availKB: 1 << 20, tables: "users\n"}
+	p := params(target.MySQL, dump)
+	p.Backup = ""
+	Run(context.Background(), f.exec, bytes.NewReader(dump), p)
+	if n := f.argv["restore.backup"][5]; !strings.HasPrefix(n, "backup-") || f.removedBackup(t) != n {
+		t.Fatalf("generated name %q", n)
 	}
 }
 

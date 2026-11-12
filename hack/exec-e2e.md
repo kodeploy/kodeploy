@@ -166,8 +166,10 @@ kubectl logs -n $NS deploy/kodeploy-exec | grep <request_id>
 
 ```sh
 kubectl logs -n $NS deploy/kodeploy-exec | tail -5                       # 감사 기록 (close_code, exit_code)
-kubectl exec -n $NS sts/mysql -- ls -la /tmp/kodeploy-restore             # cleanup 확인
+kubectl exec -n $NS sts/mysql -- ls -la /tmp/kodeploy-restore             # cleanup 확인 (restore.dump 없음)
 ```
+
+`/tmp/kodeploy-restore`에 `backup-*.sql.gz`가 남아 있는 건 결과를 모르는 복원(load 중 연결 끊김, rollback 실패)뿐이다. 그때는 아래 "복원 백업이 남았을 때"를 따른다.
 
 남길 것: 장애별 before/after (행 수, 결과 JSON, close 코드).
 
@@ -208,6 +210,52 @@ asyncio.run(main())'
 ```
 
 통과: `DENIED 403`.
+
+## 복원 백업이 남았을 때 (수동 복구)
+
+MySQL 복원이 load 도중 끊기거나(연결 끊김·시간 초과) rollback이 실패하면 exec는 DB 상태를 모른다. 그때는 복원 전 백업을 지우지 않고 남긴다.
+
+- 위치는 복원 결과 JSON의 `backup`(`pod`, `container`, `path`)에 있다.
+- core 로그에는 `exec_session` 줄의 `backup_pod`·`backup_path`로, exec 로그(stderr)에는 `restore outcome unknown; backup kept`로 남는다.
+- 사용자에게는 복원 실패 메시지에 같은 경로가 나간다.
+- PostgreSQL은 백업 단계가 없다. 연결이 끊겨도 적재는 한 트랜잭션이라 끝까지 가면 커밋되고, 아니면 롤백된다. 3번 확인만 하면 된다.
+
+**백업은 DB 컨테이너의 `/tmp`(컨테이너 쓰기 레이어)에 있다. 컨테이너가 재시작되면 사라지므로 1번부터 한다.**
+
+```sh
+POD=mysql-0                                                     # 결과의 backup.pod
+BK=/tmp/kodeploy-restore/backup-20261113T010203Z-a1b2c3.sql.gz  # 결과의 backup.path
+
+# 1. 백업을 클러스터 밖으로 꺼낸다 (mysql 이미지에 tar가 없을 수 있어 kubectl cp 대신 cat)
+kubectl exec -n $NS $POD -c mysql -- cat "$BK" > ./restore-backup.sql.gz
+gzip -t ./restore-backup.sql.gz && ls -l ./restore-backup.sql.gz
+
+# 2. 끊긴 적재가 아직 도는지 본다. 컨테이너 안 적재는 연결이 끊겨도 계속 돈다
+kubectl exec -n $NS $POD -c mysql -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root -e "SHOW FULL PROCESSLIST"'
+#    Command=Query인 줄이 남아 있으면 끝날 때까지 기다린다 (중간에 되돌리면 둘이 섞인다)
+
+# 3. 지금 DB를 본다: 표 목록과 행 수가 올린 덤프대로인지
+kubectl exec -n $NS $POD -c mysql -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root "$MYSQL_DATABASE" -e "SHOW TABLES"'
+```
+
+4. 판단한다.
+   - **덤프대로 다 들어갔다** (적재가 끝까지 갔다): 되돌리지 않는다. 5번으로 간다.
+   - **아니다**: 백업으로 되돌린다. exec rollback과 같은 명령이다. DB를 비우고 백업을 넣는다.
+
+```sh
+kubectl exec -n $NS $POD -c mysql -- bash -c 'set -o pipefail; export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; db="$MYSQL_DATABASE";
+  mysql -u root -e "DROP DATABASE IF EXISTS \`$db\`; CREATE DATABASE \`$db\`" && gunzip -c "$1" | mysql -u root "$db"' sh "$BK"
+# 컨테이너 안 파일이 이미 없으면 1번에서 꺼낸 사본으로:
+#   gunzip -c ./restore-backup.sql.gz | kubectl exec -i -n $NS $POD -c mysql -- sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql -u root "$MYSQL_DATABASE"'
+#   (이 경우 DROP/CREATE DATABASE를 먼저 따로 돌린다)
+```
+
+5. 앱을 다시 띄워 새 데이터로 연결하게 한다. 백업 파일은 확인이 끝나면 지운다. 꺼낸 사본(`./restore-backup.sql.gz`)도 개인 데이터가 든 파일이니 지운다.
+
+```sh
+kubectl rollout restart deploy/$APP -n $NS
+kubectl exec -n $NS $POD -c mysql -- rm -f "$BK"
+```
 
 ## 되돌리기
 

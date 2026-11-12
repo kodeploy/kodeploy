@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -70,6 +71,8 @@ type Server struct {
 	idle     *sync.Cond
 	draining bool
 	inFlight int // 업그레이드 뒤 세션까지 포함한 진행 중 요청
+
+	restoring atomic.Bool // 복원은 한 번에 하나
 
 	shutdown   chan struct{}
 	stopOnce   sync.Once

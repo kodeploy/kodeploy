@@ -257,10 +257,10 @@ class _Session:
         except (ConnectionError, aiohttp.ClientError, RuntimeError):
             pass
 
-    def log(self, close_code: int, exit_code: int | None) -> None:
+    def log(self, close_code: int, exit_code: int | None, **extra) -> None:
         log_event(event="exec_session", ns=self.ns, request_id=self.rid, user_id=self.user_id,
                   app_id=self.app_id, op=self.op, close_code=close_code, exit_code=exit_code,
-                  duration_ms=int((time.monotonic() - self.started) * 1000))
+                  duration_ms=int((time.monotonic() - self.started) * 1000), **extra)
 
 
 async def _bytes_chunks(data: bytes):
@@ -357,7 +357,9 @@ async def restore_file(ns: str, path: str, size: int, sha256: str, *, user_id: s
                 parsed = json.loads(result[0])
             except ValueError:
                 parsed = None
-        s.log(code, 0 if parsed and parsed.get("status") == "Success" else 1)
+        backup = (parsed or {}).get("backup") or {}
+        extra = {"backup_pod": backup.get("pod"), "backup_path": backup.get("path")} if backup.get("path") else {}
+        s.log(code, 0 if parsed and parsed.get("status") == "Success" else 1, **extra)
     if parsed is None:
         raise _close_error(code)
     return parsed

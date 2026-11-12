@@ -27,8 +27,8 @@ func allCmds(t *testing.T) []Cmd {
 		}
 		out = append(out, c)
 	}
-	out = append(out, Shell("web"), RedisConsole(), RestorePrecheck("/w"), RestoreBackup("/w"), RestoreUpload("/w"),
-		RestoreVerify("/w"), RestoreGzipTest("/w"), RestoreRollback("/w"), RestoreCleanup("/w"))
+	out = append(out, Shell("web"), RedisConsole(), RestorePrecheck("/w"), RestoreBackup("/w", "backup-x.sql.gz"), RestoreUpload("/w"),
+		RestoreVerify("/w"), RestoreGzipTest("/w"), RestoreRollback("/w", "backup-x.sql.gz"), RestoreCleanup("/w", "backup-x.sql.gz"))
 	for _, k := range []target.Kind{target.MySQL, target.Postgres} {
 		add(DBConsole(k))
 		add(Query(k))
@@ -261,4 +261,35 @@ func errorsAs(err error, target **exec.ExitError) bool {
 		*target = e
 	}
 	return ok
+}
+
+// cleanup: 덤프는 늘 지우고, 백업은 이름을 받았을 때만 지운다 (비면 남긴다). 다른 복원이 남긴 백업은 건드리지 않는다
+func TestRestoreCleanupKeepsBackup(t *testing.T) {
+	run := func(c Cmd) {
+		t.Helper()
+		if out, err := exec.Command(c.Argv[0], c.Argv[1:]...).CombinedOutput(); err != nil {
+			t.Fatalf("%s: %v %s", c.Name, err, out)
+		}
+	}
+	exists := func(p string) bool { _, err := os.Stat(p); return err == nil }
+	dir := t.TempDir()
+	files := []string{"restore.dump", "backup-a.sql.gz", "backup-old.sql.gz"}
+	for _, f := range files {
+		os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o600)
+	}
+	run(RestoreCleanup(dir, ""))
+	if exists(filepath.Join(dir, "restore.dump")) || !exists(filepath.Join(dir, "backup-a.sql.gz")) {
+		t.Fatal("keep: dump must go, backup must stay")
+	}
+	os.WriteFile(filepath.Join(dir, "restore.dump"), []byte("x"), 0o600)
+	run(RestoreCleanup(dir, "backup-a.sql.gz"))
+	if exists(filepath.Join(dir, "restore.dump")) || exists(filepath.Join(dir, "backup-a.sql.gz")) || !exists(filepath.Join(dir, "backup-old.sql.gz")) {
+		t.Fatal("remove: dump and this backup must go, other backups stay")
+	}
+	// 백업·rollback은 이름을 셸 문자열이 아니라 $2로 받는다
+	for _, c := range []Cmd{RestoreBackup("/w", "backup-$(id).sql.gz"), RestoreRollback("/w", "backup-$(id).sql.gz")} {
+		if strings.Contains(c.Argv[2], "$(id)") || c.Argv[5] != "backup-$(id).sql.gz" || !strings.Contains(c.Argv[2], `"$1/$2"`) {
+			t.Fatalf("%s argv %q", c.Name, c.Argv)
+		}
+	}
 }

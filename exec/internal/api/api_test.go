@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,11 +54,12 @@ func (f fakeFinder) Find(_ context.Context, tg, app string) (target.Target, erro
 
 // fakeRunner는 명령 스크립트를 보고 흉내 낸다. 받은 Exec를 기록한다.
 type fakeRunner struct {
-	mu    sync.Mutex
-	seen  []session.Exec
-	stdin [][]byte
-	block chan struct{} // shell 세션을 붙잡아 둘 때
-	file  []byte        // 복원 작업 파일
+	mu      sync.Mutex
+	seen    []session.Exec
+	stdin   [][]byte
+	block   chan struct{} // shell 세션을 붙잡아 둘 때
+	file    []byte        // 복원 작업 파일
+	loadErr error         // 복원 load가 끝나지 못한 것처럼 (연결 끊김)
 }
 
 func (f *fakeRunner) Run(ctx context.Context, e session.Exec) error {
@@ -85,6 +88,8 @@ func (f *fakeRunner) Run(ctx context.Context, e session.Exec) error {
 			}
 		}
 		return utilexec.CodeExitError{Err: errors.New("exit"), Code: 2}
+	case strings.Contains(script, `gunzip -c "$f"`): // restore.load
+		return f.loadErr
 	case strings.Contains(script, "df -Pk"):
 		fmt.Fprint(e.Stdout, "Filesystem 1024-blocks Used Available Capacity Mounted on\noverlay 1 1 1048576 1% /\n")
 	case strings.Contains(script, `cat > "$1/restore.dump"`):
@@ -501,6 +506,85 @@ func TestInternalRestore(t *testing.T) {
 	}
 	if !bytes.Equal(e.runner.uploaded(), data) {
 		t.Fatalf("uploaded %q", e.runner.uploaded())
+	}
+}
+
+func restorePath(data []byte) string {
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("/internal/v1/sessions/restore/%d/%s", len(data), hex.EncodeToString(sum[:]))
+}
+
+// load 도중 끊겨 결과를 모르면 백업을 남기고, 결과 JSON에 Pod·컨테이너·경로를 싣는다
+func TestInternalRestoreKeepsBackup(t *testing.T) {
+	e := newEnv(t, 3, nil)
+	e.runner.loadErr = errors.New("stream reset")
+	data := []byte("CREATE TABLE users (id int);\n")
+	p := restorePath(data)
+	c, _, err := dialInternal(t, e, p, signed("GET", p, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.WriteMessage(websocket.BinaryMessage, proto.Frame(proto.ChStdin, data))
+	c.WriteMessage(websocket.BinaryMessage, proto.CloseFrame(proto.ChStdin))
+	out, _ := readAll(t, c)
+	var res struct {
+		FailedStep string `json:"failed_step"`
+		DBChanged  bool   `json:"db_changed"`
+		Backup     struct {
+			Pod, Container, Path string
+		} `json:"backup"`
+	}
+	if err := json.Unmarshal(out[proto.ChStatus], &res); err != nil {
+		t.Fatalf("status: %s", out[proto.ChStatus])
+	}
+	if res.FailedStep != "load" || !res.DBChanged || res.Backup.Pod != "mysql-0" || res.Backup.Container != "mysql" ||
+		!regexp.MustCompile(`^/tmp/kodeploy-restore/backup-\d{8}T\d{6}Z-[0-9a-f]{6}\.sql\.gz$`).MatchString(res.Backup.Path) {
+		t.Fatalf("result %s", out[proto.ChStatus])
+	}
+	execs := e.runner.execs()
+	last := execs[len(execs)-1].Command
+	if !strings.Contains(last[2], `rm -f "$1/restore.dump"`) || last[5] != "" {
+		t.Fatalf("cleanup must keep the backup: %q", last)
+	}
+}
+
+// 복원은 한 번에 하나: 진행 중이면 두 번째는 4429
+func TestInternalRestoreOneAtATime(t *testing.T) {
+	e := newEnv(t, 3, nil)
+	data := []byte("CREATE TABLE users (id int);\n")
+	p := restorePath(data)
+	c1, _, err := dialInternal(t, e, p, signed("GET", p, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c1.WriteMessage(websocket.BinaryMessage, proto.Frame(proto.ChStdin, data)) // CLOSE 전: upload에서 기다린다
+	deadline := time.Now().Add(3 * time.Second)
+	for !slices.ContainsFunc(e.runner.execs(), func(x session.Exec) bool { return strings.Contains(x.Command[2], "cat >") }) {
+		if time.Now().After(deadline) {
+			t.Fatal("first restore did not reach upload")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	c2, _, err := dialInternal(t, e, p, signed("GET", p, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, code := readAll(t, c2); code != proto.CloseTooMany {
+		t.Fatalf("second restore: %d", code)
+	}
+	c1.WriteMessage(websocket.BinaryMessage, proto.CloseFrame(proto.ChStdin))
+	if out, code := readAll(t, c1); code != proto.CloseNormal || !strings.Contains(string(out[proto.ChStatus]), `"status":"Success"`) {
+		t.Fatalf("first restore: %d %s", code, out[proto.ChStatus])
+	}
+	// 끝나면 다음 복원을 받는다
+	c3, _, err := dialInternal(t, e, p, signed("GET", p, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c3.WriteMessage(websocket.BinaryMessage, proto.Frame(proto.ChStdin, data))
+	c3.WriteMessage(websocket.BinaryMessage, proto.CloseFrame(proto.ChStdin))
+	if _, code := readAll(t, c3); code != proto.CloseNormal {
+		t.Fatalf("third restore: %d", code)
 	}
 }
 

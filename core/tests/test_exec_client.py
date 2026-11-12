@@ -337,6 +337,23 @@ def test_restore_retries_only_while_db_unchanged(wired, monkeypatch, tmp_path):
     assert len(fake.calls) == 1
 
 
+def test_restore_kept_backup_is_reported(wired, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "EXEC_AGENT_RESTORE", True)
+    res = json.loads(_result("Failure", "load", db_changed=True))
+    res["backup"] = {"pod": "mysql-0", "container": "mysql",
+                     "path": "/tmp/kodeploy-restore/backup-20261113T000000Z-abcdef.sql.gz"}
+    fake = FakeExec()
+    fake.reply["restore"] = ([(3, json.dumps(res).encode())], 1000)
+    token = _stage(monkeypatch, tmp_path, b"x")
+    with pytest.raises(snapshots.SnapshotError) as e:
+        run(fake, lambda: snapshots.restore_staged(NS, token), monkeypatch)
+    msg = str(e.value)
+    assert "복원 전 백업을 남겼습니다: mysql-0:/tmp/kodeploy-restore/backup-20261113T000000Z-abcdef.sql.gz" in msg
+    assert "자동 재시도하지 않았습니다" in msg and len(fake.calls) == 1
+    ev = wired.events[-1]
+    assert ev["backup_pod"] == "mysql-0" and ev["backup_path"].endswith("abcdef.sql.gz")
+
+
 def test_restore_retries_when_exec_not_up_yet(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "EXEC_AGENT_RESTORE", True)
     monkeypatch.setattr(snapshots, "_RETRY_DELAY", 0)

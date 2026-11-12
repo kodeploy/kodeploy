@@ -184,11 +184,12 @@ func (s *Server) restoreSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "size exceeds limit", http.StatusBadRequest)
 		return
 	}
-	p := restore.Params{Workdir: s.o.RestoreWorkdir, Size: size, SHA256: strings.ToLower(sum)}
+	p := restore.Params{Workdir: s.o.RestoreWorkdir, Size: size, SHA256: strings.ToLower(sum),
+		Backup: restore.BackupName(s.o.Now())}
 	s.serveInternal(w, r, "restore", func(t target.Target) (session.Job, session.Options, error) {
 		p.Kind = t.Kind
 		// 세션 수준 상한은 전역 상한(받는 쪽 방어). 기대 크기 초과는 restore가 upload 실패로 돌려준다
-		return restoreJob(s.o.Runner, t, p), session.Options{Stdin: true, MaxStdin: s.o.RestoreMaxBytes}, nil
+		return s.restoreJob(t, p), session.Options{Stdin: true, MaxStdin: s.o.RestoreMaxBytes}, nil
 	})
 }
 
@@ -222,6 +223,14 @@ func (s *Server) serveInternal(w http.ResponseWriter, r *http.Request, op string
 		return
 	}
 	defer s.release()
+	// 복원은 ns(DB 하나)에 한 번에 하나만: 작업 디렉토리의 restore.dump를 같이 쓰고, 동시에 적재하면 결과를 알 수 없다
+	if op == "restore" {
+		if !s.restoring.CompareAndSwap(false, true) {
+			reject(proto.CloseTooMany, "restore already running")
+			return
+		}
+		defer s.restoring.Store(false)
+	}
 
 	fctx, cancel := context.WithTimeout(s.base, findTimeout)
 	t, err := s.o.Finder.Find(fctx, "db", "")
@@ -260,7 +269,8 @@ type countWriter int64
 func (c *countWriter) Write(p []byte) (int, error) { *c += countWriter(len(p)); return len(p), nil }
 
 // restoreJob은 복원 상태기계를 세션 작업으로 감싼다. 결과(실패 포함)는 채널 3 JSON이다 (지시서 3-5).
-func restoreJob(r session.Runner, t target.Target, p restore.Params) session.Job {
+func (s *Server) restoreJob(t target.Target, p restore.Params) session.Job {
+	r := s.o.Runner
 	return func(ctx context.Context, jio session.JobIO) (session.Outcome, error) {
 		ex := func(ctx context.Context, cmd ops.Cmd, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 			e := session.Exec{Pod: t.Pod, Container: t.Container, Command: cmd.Argv, Stdout: stdout, Stderr: stderr}
@@ -277,6 +287,11 @@ func restoreJob(r session.Runner, t target.Target, p restore.Params) session.Job
 			return -1, err
 		}
 		res := restore.Run(ctx, ex, jio.Stdin, p)
+		if res.Backup != nil {
+			res.Backup.Pod, res.Backup.Container = t.Pod, t.Container
+			s.o.Log.Warn("restore outcome unknown; backup kept",
+				"pod", t.Pod, "container", t.Container, "path", res.Backup.Path, "failed_step", res.FailedStep)
+		}
 		b, _ := json.Marshal(res)
 		code := 0
 		if res.Status != "Success" {

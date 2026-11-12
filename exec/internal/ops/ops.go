@@ -135,11 +135,12 @@ func RestorePrecheck(workdir string) Cmd {
 	return Cmd{Name: "restore.precheck", Argv: sh("/bin/sh", script, workdir)}
 }
 
-// RestoreBackup은 MySQL 현재 DB를 작업 디렉토리에 덤프한다 (rollback용).
-func RestoreBackup(workdir string) Cmd {
+// RestoreBackup은 MySQL 현재 DB를 작업 디렉토리의 $2(복원마다 다른 이름)로 덤프한다 (rollback용).
+// 이름이 복원마다 달라서, 남겨 둔 백업(결과를 모르는 복원)을 다음 복원이 덮어쓰지 않는다.
+func RestoreBackup(workdir, name string) Cmd {
 	const script = `set -o pipefail; export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; ` +
-		`mysqldump -u root --single-transaction --routines --triggers --no-tablespaces "$MYSQL_DATABASE" | gzip -c > "$1/backup.sql.gz"`
-	return Cmd{Name: "restore.backup", Argv: sh("/bin/bash", script, workdir)}
+		`mysqldump -u root --single-transaction --routines --triggers --no-tablespaces "$MYSQL_DATABASE" | gzip -c > "$1/$2"`
+	return Cmd{Name: "restore.backup", Argv: sh("/bin/bash", script, workdir, name)}
 }
 
 // RestoreUpload는 stdin을 작업 디렉토리의 restore.dump로 쓴다.
@@ -208,17 +209,20 @@ func RestoreCount(kind target.Kind) (Cmd, error) {
 	return Cmd{}, fmt.Errorf("restore count: unsupported kind %q", kind)
 }
 
-// RestoreRollback은 MySQL을 backup 파일로 되돌린다. load가 만든 표까지 지우려고 DB를 다시 만든 뒤 적재한다.
+// RestoreRollback은 MySQL을 백업 파일($2)로 되돌린다. load가 만든 표까지 지우려고 DB를 다시 만든 뒤 적재한다.
 // DB 이름은 차트가 넣은 env(MYSQL_DATABASE = app)이고 사용자 입력이 아니다.
-func RestoreRollback(workdir string) Cmd {
+func RestoreRollback(workdir, backup string) Cmd {
 	script := `set -o pipefail; export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; db="$MYSQL_DATABASE"; [ -n "$db" ] || exit 2; ` +
 		"mysql -u root -e \"DROP DATABASE IF EXISTS \\`$db\\`; CREATE DATABASE \\`$db\\`\" && " +
-		`gunzip -c "$1/backup.sql.gz" | mysql -u root "$db"`
-	return Cmd{Name: "restore.rollback", Argv: sh("/bin/bash", script, workdir)}
+		`gunzip -c "$1/$2" | mysql -u root "$db"`
+	return Cmd{Name: "restore.rollback", Argv: sh("/bin/bash", script, workdir, backup)}
 }
 
-// RestoreCleanup은 덤프와 백업 파일을 지운다. 성공이든 실패든 항상 돈다.
-func RestoreCleanup(workdir string) Cmd {
-	const script = `rm -f "$1/restore.dump" "$1/backup.sql.gz"`
-	return Cmd{Name: "restore.cleanup", Argv: sh("/bin/sh", script, workdir)}
+// RestoreCleanup은 덤프를 지우고, backup이 비어 있지 않으면 그 백업 파일도 지운다. 성공이든 실패든 항상 돈다.
+// 결과를 모르는 복원(load 중 연결 끊김, rollback 실패)이면 restore 패키지가 backup을 비워 넘겨 백업을 남긴다.
+// 덤프는 그때도 지운다: 아직 도는 적재가 파일을 열고 있어도 unlink는 그 적재에 영향이 없고,
+// 다음 복원의 upload가 같은 파일을 덮어써 도는 적재에 섞이는 일을 막는다.
+func RestoreCleanup(workdir, backup string) Cmd {
+	const script = `rm -f "$1/restore.dump" || exit 1; if [ -n "$2" ]; then rm -f "$1/$2"; fi`
+	return Cmd{Name: "restore.cleanup", Argv: sh("/bin/sh", script, workdir, backup)}
 }

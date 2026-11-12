@@ -7,18 +7,25 @@
 //
 // db_changed는 core가 재시도해도 되는지 판단하는 값이다.
 //   - load 전 실패(precheck·backup·upload·verify): false
-//   - PostgreSQL load 실패: false (ON_ERROR_STOP=1 + 한 트랜잭션이라 이미 롤백됨)
+//   - PostgreSQL load가 exit code로 실패: false (ON_ERROR_STOP=1 + 한 트랜잭션이라 이미 롤백됨)
 //   - MySQL은 load가 시작되면 true. rollback이 성공해도 true로 둔다: backup 뒤에 앱이 쓴 내용은
 //     rollback으로 사라졌을 수 있어서 "손대지 않은 상태"라고 할 수 없다. 자동 재시도도 막는다.
+//   - load 도중 연결이 끊기면 두 DB 모두 true다. 컨테이너 안 적재는 계속 돌 수 있고(PostgreSQL도 끝나면 커밋된다),
+//     결과를 모른다.
+//
+// 백업 파일(MySQL)은 복원마다 다른 이름이다. 결과를 모르는 경우(load 중 연결 끊김, rollback 실패)에는
+// cleanup이 백업을 지우지 않고 남기고, 결과 JSON의 backup에 위치를 싣는다. 수동 복구는 kodeploy hack/exec-e2e.md.
 package restore
 
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +44,15 @@ type Params struct {
 	Workdir string
 	Size    int64
 	SHA256  string // 소문자 hex
+	// Backup은 작업 디렉토리 안 백업 파일 이름이다. 비우면 Run이 BackupName으로 만든다.
+	Backup string
+}
+
+// BackupName은 복원마다 다른 백업 파일 이름이다: backup-<UTC 시각>-<무작위 6자>.sql.gz
+func BackupName(now time.Time) string {
+	b := make([]byte, 3)
+	_, _ = rand.Read(b)
+	return "backup-" + now.UTC().Format("20060102T150405Z") + "-" + hex.EncodeToString(b) + ".sql.gz"
 }
 
 // 채널 3 결과 (지시서 3-5)
@@ -58,6 +74,15 @@ type Result struct {
 	Tables     []Table `json:"tables"`
 	Output     string  `json:"output"`
 	DBChanged  bool    `json:"db_changed"`
+	// Backup은 결과를 모르는 MySQL 복원에서 지우지 않고 남긴 백업이다. 그 밖에는 없다.
+	Backup *Backup `json:"backup,omitempty"`
+}
+
+// Backup은 남긴 백업의 위치다. Pod·Container는 api가 채운다 (restore는 대상 Pod를 모른다).
+type Backup struct {
+	Pod       string `json:"pod,omitempty"`
+	Container string `json:"container,omitempty"`
+	Path      string `json:"path"`
 }
 
 const (
@@ -74,6 +99,8 @@ type run struct {
 	exec ExecFunc
 	p    Params
 	res  Result
+	// keepBackup: 복원 결과를 모른다 — cleanup이 백업을 지우지 않는다
+	keepBackup bool
 }
 
 func (r *run) step(name string, ok bool, detail string) {
@@ -85,6 +112,9 @@ func (r *run) step(name string, ok bool, detail string) {
 
 // Run은 복원을 끝까지 돌린다. 실패도 Result로 돌려준다(cleanup은 항상 돈다).
 func Run(ctx context.Context, exec ExecFunc, upload io.Reader, p Params) Result {
+	if p.Backup == "" {
+		p.Backup = BackupName(time.Now())
+	}
 	r := &run{ctx: ctx, exec: exec, p: p, res: Result{Status: "Failure", Steps: []Step{}, Tables: []Table{}}}
 	r.steps(upload)
 	r.cleanup()
@@ -101,7 +131,7 @@ func (r *run) steps(upload io.Reader) {
 	}
 
 	if p.Kind == target.MySQL {
-		if code, out, err := r.run(ops.RestoreBackup(p.Workdir), nil); err != nil || code != 0 {
+		if code, out, err := r.run(ops.RestoreBackup(p.Workdir, p.Backup), nil); err != nil || code != 0 {
 			r.step("backup", false, describe(code, err, out))
 			return
 		}
@@ -134,8 +164,9 @@ func (r *run) steps(upload io.Reader) {
 	code, err := r.exec(r.ctx, cmd, nil, io.Discard, errLines)
 	r.res.Output = errLines.String()
 	if err != nil {
-		// 적재 도중 연결이 끊겨 결과를 모른다. 컨테이너 안 적재가 계속 돌 수 있어 rollback하지 않는다.
-		r.res.DBChanged = p.Kind == target.MySQL
+		// 적재 도중 연결이 끊겨 결과를 모른다. 컨테이너 안 적재가 계속 돌 수 있어 rollback하지 않고 백업을 남긴다.
+		r.res.DBChanged = true
+		r.keepBackup = true
 		r.step("load", false, "load did not finish: "+err.Error()+"; rollback skipped")
 		return
 	}
@@ -277,8 +308,9 @@ func (r *run) verify(gz bool) (string, bool) {
 func (r *run) rollback() {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), rollbackTimeout)
 	defer cancel()
-	code, out, err := runWith(ctx, r.exec, ops.RestoreRollback(r.p.Workdir), nil)
+	code, out, err := runWith(ctx, r.exec, ops.RestoreRollback(r.p.Workdir, r.p.Backup), nil)
 	if err != nil || code != 0 {
+		r.keepBackup = true // DROP DATABASE 뒤에 멈췄을 수 있다 — 백업이 유일한 사본이다
 		r.step("rollback", false, describe(code, err, out))
 		r.res.FailedStep = "rollback"
 		r.res.Output = strings.TrimSpace(r.res.Output + "\nrollback failed: " + describe(code, err, out))
@@ -288,15 +320,23 @@ func (r *run) rollback() {
 }
 
 // cleanup은 덤프와 백업 파일을 지운다. 성공이든 실패든 항상 돈다.
+// 결과를 모르는 MySQL 복원이면 백업은 남기고 위치를 결과에 싣는다.
 func (r *run) cleanup() {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.ctx), cleanupTimeout)
 	defer cancel()
-	code, out, err := runWith(ctx, r.exec, ops.RestoreCleanup(r.p.Workdir), nil)
+	remove, detail := r.p.Backup, ""
+	if r.keepBackup && r.p.Kind == target.MySQL {
+		remove = ""
+		r.res.Backup = &Backup{Path: path.Join(r.p.Workdir, r.p.Backup)}
+		detail = "backup kept: " + r.res.Backup.Path
+	}
+	code, out, err := runWith(ctx, r.exec, ops.RestoreCleanup(r.p.Workdir, remove), nil)
 	if err != nil || code != 0 {
-		r.res.Steps = append(r.res.Steps, Step{Name: "cleanup", OK: false, Detail: describe(code, err, out)})
+		r.res.Steps = append(r.res.Steps, Step{Name: "cleanup", OK: false,
+			Detail: strings.TrimPrefix(detail+"; "+describe(code, err, out), "; ")})
 		return
 	}
-	r.res.Steps = append(r.res.Steps, Step{Name: "cleanup", OK: true})
+	r.res.Steps = append(r.res.Steps, Step{Name: "cleanup", OK: true, Detail: detail})
 }
 
 // tables는 표 목록과 행 수다. 실패해도 복원 결과는 바꾸지 않고 detail에 남긴다.

@@ -416,4 +416,10 @@ def _restore_failure(res: dict) -> str:
     if res.get("db_changed"):
         rolled = any(s.get("name") == "rollback" and s.get("ok") for s in res.get("steps") or [])
         msg += "\n" + ("백업으로 되돌렸습니다" if rolled else "DB가 일부 바뀌었을 수 있습니다") + " (자동 재시도하지 않았습니다)"
+    # 결과를 모르는 MySQL 복원(load 중 연결 끊김·rollback 실패): exec가 복원 전 백업을 DB 컨테이너에 남겼다.
+    # 컨테이너 /tmp라 재시작하면 사라진다 — 수동 복구는 kodeploy hack/exec-e2e.md "복원 백업이 남았을 때".
+    backup = res.get("backup") or {}
+    if backup.get("path"):
+        msg += (f"\n복원 결과를 알 수 없어 복원 전 백업을 남겼습니다: {backup.get('pod', '?')}:{backup['path']}"
+                " — 운영자 확인이 필요합니다 (DB 컨테이너가 재시작되면 사라집니다)")
     return msg
