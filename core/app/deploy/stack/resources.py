@@ -12,7 +12,7 @@ from app.deploy.stack import manifests, r2
 from app.deploy.model import Build
 from app.shared import k8s
 
-# 테넌트 ns 프로비저닝 (Namespace + core RoleBinding + ghcr-auth Secret). idempotent create(409 skip).
+# 테넌트 ns 프로비저닝 (Namespace + core RoleBinding + ghcr-auth·kodeploy-exec-hmac Secret). idempotent create(409 skip).
 # 이미 있는 ns도 매 배포 RoleBinding을 다시 시도한다 — 빠져 있으면 여기서 채워진다.
 # ResourceQuota는 쓰지 않는다 — 컴포넌트·limit이 차트로 고정이라 ns 상한이 구조적으로 정해진다
 # (옛 quota 잔재는 2026-10에 클러스터에서 0개 확인 후 청소 코드도 지웠다).
@@ -30,6 +30,9 @@ def _ensure_tenant_ns(build: Build) -> None:
         user_id=build.user_id_str,
         dockerconfigjson_b64=secret.data[".dockerconfigjson"],
     )
+    # kodeploy-exec 내부 문 키. ns를 만드는 길은 여기 하나이고 빌더 제출 전에 돌아서,
+    # Argo가 exec Deployment를 그리기 전에 Secret이 있다. 이미 있으면 409로 그대로 둔다.
+    docs.append(manifests.exec_hmac(ns))
 
     # 직전 delete_app으로 ns가 Terminating 중일 수 있다. core는 ns를 읽을 권한이 없어서 만들기의 거절로 판정한다:
     # ns create는 409로 넘어가고, 그 안의 첫 생성(RoleBinding)이 NamespaceTerminating 403(막 사라졌으면 404)으로

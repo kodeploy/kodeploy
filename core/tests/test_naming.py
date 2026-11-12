@@ -32,6 +32,8 @@ def test_valid_names_pass(name):
 
 @pytest.mark.parametrize("name", [
     "app-x",       # 자동 생성 prefix 예약
+    "kodeploy-exec",  # 테넌트 ns 안 플랫폼 리소스 이름 (kodeploy- prefix 예약)
+    "kodeploy-x",
     "foo-api",     # {app}-api 서버 호스트 충돌 방지
     "api",         # RESERVED_NAMES
     "origin",      # RESERVED_NAMES — CF for SaaS fallback origin

@@ -276,7 +276,7 @@ def test_tenant_ns_binds_core_before_writing_secrets(monkeypatch):
     rbac = MagicMock()
     rbac.create_namespaced_role_binding.side_effect = lambda namespace, body: order.append(
         ("RoleBinding", body["roleRef"]["name"], [(s["kind"], s["name"], s["namespace"]) for s in body["subjects"]]))
-    allowed = iter([False, True])                              # 첫 확인은 아직 반영 전
+    allowed = iter([False, True, True])                        # 첫 확인은 아직 반영 전
     authz = MagicMock()
     authz.create_self_subject_access_review.side_effect = lambda body: order.append("review") or SimpleNamespace(
         status=SimpleNamespace(allowed=next(allowed)))
@@ -291,6 +291,8 @@ def test_tenant_ns_binds_core_before_writing_secrets(monkeypatch):
         ("RoleBinding", "kodeploy-core-tenant", [("ServiceAccount", "kodeploy-core", "default")]),
         "review", "review",
         ("Secret", "ghcr-auth"),
+        "review",
+        ("Secret", "kodeploy-exec-hmac"),                     # kodeploy-exec 내부 문 키 (exec Pod가 마운트)
     ]
     assert not core.delete_namespaced_resource_quota.called    # 옛 quota 청소는 지웠다
     assert not core.read_namespace.called                      # core엔 ns 읽기 권한이 없다
@@ -344,7 +346,7 @@ def test_tenant_ns_waits_out_a_terminating_namespace(monkeypatch):
         _api_error(404),
     ])
     resources._ensure_tenant_ns(make_build())
-    assert order == ["Namespace", "RoleBinding", "Namespace", "RoleBinding", "Namespace", "RoleBinding", "Secret"]
+    assert order == ["Namespace", "RoleBinding", "Namespace", "RoleBinding", "Namespace", "RoleBinding", "Secret", "Secret"]
     assert sleeps == [2, 2]
 
 
@@ -1084,3 +1086,32 @@ def test_restore_without_a_held_dump_does_nothing(monkeypatch, dumps):
     db = _restore_db(monkeypatch, make_build())
     asyncio.run(v2.restore_initial_dump("3f9a2c1d"))
     assert dumps.restored == [] and dumps.sent == [] and not db.method_calls
+
+
+def test_exec_hmac_secret_is_random_32_bytes_per_tenant():
+    import base64
+
+    from app.deploy.stack import manifests
+
+    a, b = manifests.exec_hmac("tenant-0a1b2c3d"), manifests.exec_hmac("tenant-0a1b2c3d")
+    assert a["metadata"]["name"] == "kodeploy-exec-hmac" and a["metadata"]["namespace"] == "tenant-0a1b2c3d"
+    key = base64.b64decode(a["data"]["hmac"])
+    assert len(key) == 32
+    assert a["data"]["hmac"] != b["data"]["hmac"]              # 만들 때마다 새 키
+
+
+def test_exec_hmac_secret_kept_when_present(monkeypatch):
+    # 이미 있는 키를 바꾸면 떠 있는 exec Pod와 어긋난다 — 409면 그대로 둔다
+    from app.deploy.stack import resources
+
+    core = MagicMock()
+    core.read_namespaced_secret.return_value = SimpleNamespace(data={".dockerconfigjson": "e30="})
+    core.create_namespaced_secret.side_effect = resources.ApiException(status=409)
+    rbac = MagicMock()
+    authz = MagicMock()
+    authz.create_self_subject_access_review.return_value = SimpleNamespace(status=SimpleNamespace(allowed=True))
+    monkeypatch.setattr(resources.k8s, "core_v1", lambda: core)
+    monkeypatch.setattr(resources.k8s, "rbac_v1", lambda: rbac)
+    monkeypatch.setattr(resources.k8s, "authorization_v1", lambda: authz)
+    resources._ensure_tenant_ns(make_build())
+    assert not core.replace_namespaced_secret.called and not core.patch_namespaced_secret.called

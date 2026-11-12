@@ -1,6 +1,13 @@
-"""테넌트 ns 프로비저닝 매니페스트 (Namespace + core RoleBinding + ghcr-auth Secret)."""
+"""테넌트 ns 프로비저닝 매니페스트 (Namespace + core RoleBinding + ghcr-auth Secret + kodeploy-exec HMAC Secret)."""
 
-from app.deploy.stack.manifests._renderer import render_all
+import base64
+import secrets
+
+from app.deploy.stack.manifests._renderer import render, render_all
+
+# kodeploy-exec 내부 문 서명 키. 차트의 exec Deployment가 이 Secret을 /etc/kodeploy-exec/hmac로 마운트한다.
+EXEC_HMAC_SECRET = "kodeploy-exec-hmac"
+EXEC_HMAC_KEY = "hmac"
 
 
 # 테넌트 ns 한 묶음 — Namespace, RoleBinding(core 권한), Secret(ghcr-auth) 3개 dict 반환 (이 순서로 만든다).
@@ -26,3 +33,14 @@ def tenant(
 def core_binding(tenant_id: str) -> dict:
     docs = tenant(tenant_id=tenant_id, user_id="", dockerconfigjson_b64="")
     return next(d for d in docs if d["kind"] == "RoleBinding")
+
+
+# kodeploy-exec HMAC Secret — 테넌트마다 무작위 32바이트. ns 프로비저닝 때 같이 만든다 (이미 있으면 409로 둔다).
+def exec_hmac(tenant_id: str) -> dict:
+    return render(
+        "exec_hmac.yaml.j2",
+        tenant_id=tenant_id,
+        secret_name=EXEC_HMAC_SECRET,
+        key_name=EXEC_HMAC_KEY,
+        key_b64=base64.b64encode(secrets.token_bytes(32)).decode(),
+    )

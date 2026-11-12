@@ -1,0 +1,86 @@
+name: Build Exec Image
+
+# build-builder.yml을 본떴다. 다른 점: 이미지 digest를 출력만 하고 매니페스트에 고정 커밋을 하지 않는다.
+# exec는 테넌트 ns마다 차트(kodeploy-charts)가 그리므로, digest 반영은 사람이 kodeploy-charts의
+# charts/app/platform/exec.yaml에 PR로 한다 (main 머지 = Argo가 전 테넌트에 배포).
+on:
+  push:
+    branches: [main]
+    paths:
+      - "exec/**"
+      - ".github/workflows/build-exec.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write             # GHCR push
+
+concurrency:
+  group: build-exec
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: exec/go.mod
+          cache-dependency-path: exec/go.sum
+
+      - name: vet + test
+        working-directory: exec
+        run: |
+          go vet ./...
+          go test -race ./...
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 태그 계산
+        id: vars
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"       # GHCR 경로는 소문자만
+          echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/${owner}/kodeploy-exec" >> "$GITHUB_OUTPUT"
+
+      - name: 빌드 + push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: ./exec
+          platforms: linux/arm64
+          push: true
+          # latest는 main에서만. 다른 브랜치에서 수동 실행하면 sha 태그만 올린다 (E2E용)
+          tags: |
+            ${{ steps.vars.outputs.image }}:${{ steps.vars.outputs.tag }}
+            ${{ github.ref == 'refs/heads/main' && format('{0}:latest', steps.vars.outputs.image) || '' }}
+
+      - name: digest 안내
+        run: |
+          DIGEST="${{ steps.build.outputs.digest }}"
+          IMAGE="${{ steps.vars.outputs.image }}"
+          echo "digest: ${DIGEST}"
+          {
+            echo "### kodeploy-exec 이미지 빌드 완료"
+            echo ""
+            echo '```'
+            echo "${IMAGE}@${DIGEST}"
+            echo '```'
+            echo ""
+            echo "차트 반영 (사람이, kodeploy-charts 브랜치에서 PR로):"
+            echo '```sh'
+            echo "# charts/app/platform/exec.yaml"
+            echo "image: ${IMAGE}@${DIGEST}"
+            echo '```'
+            echo ""
+            echo "VAP(kodeploy-exec-pod-shape)가 태그 없는 ghcr.io/kodeploy/kodeploy-exec@sha256: 형식만 받는다."
+          } >> "$GITHUB_STEP_SUMMARY"
