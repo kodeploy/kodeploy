@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
@@ -36,6 +37,10 @@ type Config struct {
 	MaxSessionsPublic   int
 	MaxSessionsInternal int
 	PingInterval        time.Duration
+
+	// 공개 문 Origin 허용 목록 (scheme://host[:port]). Origin 헤더가 있으면 여기 있어야 하고, 없으면(CLI) 통과.
+	// 비어 있으면 Origin을 보내는 클라이언트(브라우저)는 전부 막힌다.
+	AllowedOrigins []string
 
 	RestoreMaxBytes int64
 	RestoreWorkdir  string // DB 컨테이너 안의 경로
@@ -91,6 +96,17 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 		RestoreMaxBytes:     integer("RESTORE_MAX_BYTES", DefaultRestoreMaxBytes),
 		RestoreWorkdir:      str("RESTORE_WORKDIR", "/tmp/kodeploy-restore"),
 	}
+	for _, o := range strings.Split(getenv("EXEC_ALLOWED_ORIGINS"), ",") {
+		o = strings.TrimSpace(o)
+		if o == "" {
+			continue
+		}
+		if !validOrigin(o) {
+			errs = append(errs, fmt.Errorf("EXEC_ALLOWED_ORIGINS: %q is not scheme://host[:port]", o))
+			continue
+		}
+		c.AllowedOrigins = append(c.AllowedOrigins, o)
+	}
 	if c.Namespace == "" {
 		errs = append(errs, errors.New("EXEC_NAMESPACE is required (downward API)"))
 	}
@@ -113,4 +129,11 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 		return nil, err
 	}
 	return c, nil
+}
+
+// validOrigin은 브라우저가 보내는 Origin 모양(http·https, 호스트, 경로·쿼리 없음)인지 본다.
+func validOrigin(o string) bool {
+	u, err := url.Parse(o)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" &&
+		u.Path == "" && u.RawQuery == "" && u.Fragment == "" && u.User == nil && !strings.HasSuffix(o, "/")
 }

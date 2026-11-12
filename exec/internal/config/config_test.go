@@ -39,6 +39,18 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
+func TestAllowedOrigins(t *testing.T) {
+	c, err := Load(env(map[string]string{"EXEC_NAMESPACE": "x"}), keyFile(goodKey, nil))
+	if err != nil || len(c.AllowedOrigins) != 0 {
+		t.Fatalf("default must be empty (browsers blocked): %v %v", c, err)
+	}
+	c, err = Load(env(map[string]string{"EXEC_NAMESPACE": "x",
+		"EXEC_ALLOWED_ORIGINS": " https://app.kodeploy.com, http://localhost:5173 ,,"}), keyFile(goodKey, nil))
+	if err != nil || strings.Join(c.AllowedOrigins, "|") != "https://app.kodeploy.com|http://localhost:5173" {
+		t.Fatalf("%v %v", c.AllowedOrigins, err)
+	}
+}
+
 func TestErrors(t *testing.T) {
 	cases := []struct {
 		name string
@@ -55,6 +67,9 @@ func TestErrors(t *testing.T) {
 		{"bad int internal", map[string]string{"EXEC_NAMESPACE": "x", "MAX_SESSIONS_INTERNAL": "x"}, goodKey, nil, "MAX_SESSIONS_INTERNAL"},
 		{"relative workdir", map[string]string{"EXEC_NAMESPACE": "x", "RESTORE_WORKDIR": "tmp/x"}, goodKey, nil, "RESTORE_WORKDIR"},
 		{"root workdir", map[string]string{"EXEC_NAMESPACE": "x", "RESTORE_WORKDIR": "/"}, goodKey, nil, "RESTORE_WORKDIR"},
+		{"origin with path", map[string]string{"EXEC_NAMESPACE": "x", "EXEC_ALLOWED_ORIGINS": "https://app.kodeploy.com/"}, goodKey, nil, "EXEC_ALLOWED_ORIGINS"},
+		{"origin wildcard", map[string]string{"EXEC_NAMESPACE": "x", "EXEC_ALLOWED_ORIGINS": "*"}, goodKey, nil, "EXEC_ALLOWED_ORIGINS"},
+		{"origin scheme", map[string]string{"EXEC_NAMESPACE": "x", "EXEC_ALLOWED_ORIGINS": "ftp://a.example"}, goodKey, nil, "EXEC_ALLOWED_ORIGINS"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -30,7 +30,7 @@ exec는 카나리로 넓힌다. 두 목록을 같이 맞춘다.
 | 4 | 기존 테넌트 HMAC 키 | `core/.venv/bin/python hack/backfill-exec-hmac.py` (dry-run) → `--apply` | 마지막 줄 `missing=0` |
 | 5 | AppProject (kodeploy-charts 브랜치) | `kubectl apply -f argocd/appproject.yaml` | `kubectl get appproject kodeploy-apps -n argocd -o yaml`에 Role·ServiceAccount |
 | 6 | vmagent | `kubectl apply -f deploy/k8s/monitoring/vmagent.yaml && kubectl rollout restart deploy/vmagent -n monitoring` | VM에서 `up{job="kodeploy-exec"}` |
-| 7 | 차트 값 채우기 (kodeploy-charts PR 브랜치) | `charts/app/platform/exec.yaml`의 `image`, `apiserver.ip`, `envoySelector`, `nodeNets` 확인, **`rollout.namespaces: [$NS]`** (`all: false` 그대로) | `tests/exec_check.py` 통과, 마지막 줄 `repo values render exec in: ['tenant-…']` |
+| 7 | 차트 값 채우기 (kodeploy-charts PR 브랜치) | `charts/app/platform/exec.yaml`의 `image`, `apiserver.ip`, `envoySelector`, `nodeNets`·`allowedOrigins`(core `ALLOWED_ORIGINS`와 같은지) 확인, **`rollout.namespaces: [$NS]`** (`all: false` 그대로) | `tests/exec_check.py` 통과, 마지막 줄 `repo values render exec in: ['tenant-…']` |
 | 8 | 테스트 앱 ns에 서버 측 dry-run | 아래 "머지 전 dry-run" | 오류 없음 |
 | 9 | 차트 PR 머지 | GitHub에서 머지 → Argo가 sync. exec는 `$NS`에만 생긴다 | 9절 1번 (`$NS` 하나) |
 | 10 | 9절 2~4번 | `$NS`에서 | |
@@ -110,7 +110,7 @@ kubectl run np-test -n $NS --rm -i --restart=Never --image=busybox:1.36 \
 
 남길 것: 출력 전문.
 
-### [ ] 4. testclient로 공개 문: 재사용·만료 4401, 다른 ns 4403, 한글·바이너리 출력, 창 크기
+### [ ] 4. testclient로 공개 문: 재사용·만료 4401, 다른 ns 4403, Origin, 한글·바이너리 출력, 창 크기
 
 ```sh
 # 내부 문 키 (끝나면 지운다) + 내부 문·공개 문 port-forward (Pod 네트워크 정책을 거치지 않는다)
@@ -128,7 +128,9 @@ rm /tmp/exec-hmac.key; kill %1
 
 `-url`은 실제 경로(Cloudflare → Envoy → 테넌트 HTTPRoute)를 탄다. 다른 ns 4403은 같은 Pod에 다른 ns 경로로 붙어야 나온다(Envoy를 거치면 그 ns의 Pod로 가서 티켓이 없으니 4401).
 
-통과: `PASS` 10줄(`-other-ns-url`·`-expiry`를 뺐으면 8줄), `all public-door checks passed`.
+Origin 확인은 두 가지다. 목록 밖 Origin(`https://evil.example`)은 업그레이드 없이 403이어야 하고, 그 티켓에 허용 Origin(`-origin`, 기본 `https://app.kodeploy.com`)을 붙이면 열려야 한다. 거부된 시도가 티켓을 쓰지 않았다는 뜻이다.
+
+통과: `PASS` 12줄(`-other-ns-url`·`-expiry`를 뺐으면 10줄), `all public-door checks passed`.
 
 남길 것: 출력 전문.
 

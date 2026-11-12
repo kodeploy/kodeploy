@@ -30,13 +30,25 @@ func (s *Server) publicSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer s.leave()
+	tk := ticketFrom(r)
+	// Origin이 있으면 허용 목록만, 없으면(CLI) 통과. 업그레이드하지 않고 403 — 티켓은 쓰지 않은 채로 남는다
+	if origin := r.Header.Get("Origin"); !s.originAllowed(origin) {
+		http.Error(w, "origin not allowed", http.StatusForbidden)
+		rec := audit.Record{Event: "session", Door: "public", NS: s.o.Namespace, Error: "origin not allowed: " + trim(origin, 100)}
+		if tk != "" {
+			rec.TicketSHA256 = ticket.Hash(tk)
+		}
+		now := audit.Time(s.o.Now())
+		rec.StartedAt, rec.EndedAt = now, now
+		s.o.Audit.Write(rec)
+		return
+	}
 	// kodeploy.exec.v1이 협상되지 않으면(옛 클라이언트) 업그레이드하지 않는다
 	if !offers(r, proto.Subprotocol) {
 		http.Error(w, "subprotocol "+proto.Subprotocol+" required", http.StatusBadRequest)
 		return
 	}
-	tk := ticketFrom(r)
-	ws, err := s.upgrader.Upgrade(w, r, nil)
+	ws, err := s.publicUp.Upgrade(w, r, nil)
 	if err != nil {
 		return // Upgrade가 이미 응답했다
 	}

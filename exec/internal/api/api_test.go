@@ -167,7 +167,8 @@ func newEnv(t *testing.T, maxPublic, maxInternal int, targets map[string]target.
 	e.s = New(Options{
 		Namespace: ns, Key: key, Tickets: e.tickets, Finder: fakeFinder{targets}, Runner: e.runner,
 		Audit: audit.New(e.auditBuf), TTYIdleTimeout: time.Minute, TTYMax: time.Minute, NonTTYMax: time.Minute,
-		PingInterval: time.Second, MaxSessionsPublic: maxPublic, MaxSessionsInternal: maxInternal, RestoreMaxBytes: 1 << 20, RestoreWorkdir: "/tmp/kodeploy-restore",
+		PingInterval: time.Second, MaxSessionsPublic: maxPublic, MaxSessionsInternal: maxInternal,
+		AllowedOrigins: []string{"https://app.kodeploy.com", "http://localhost:5173"}, RestoreMaxBytes: 1 << 20, RestoreWorkdir: "/tmp/kodeploy-restore",
 	})
 	e.pub = httptest.NewServer(e.s.Public())
 	e.int = httptest.NewServer(e.s.Internal())
@@ -320,6 +321,38 @@ func TestPublicRejects(t *testing.T) {
 	}
 	if _, code := readAll(t, c); code != proto.CloseNormal {
 		t.Fatalf("authorization header: %d", code)
+	}
+}
+
+// Origin: 없으면 통과(CLI), 있으면 허용 목록만. 막힌 요청은 업그레이드 없이 403이고 티켓은 남는다
+func TestPublicOrigin(t *testing.T) {
+	e := newEnv(t, 3, 4, nil)
+	tk := e.ticketFor(t, shellBody)
+	protocols := []string{proto.Subprotocol, proto.TicketPrefix + tk}
+	for _, bad := range []string{"https://evil.example", "null", "https://app.kodeploy.com.evil.example", "http://app.kodeploy.com"} {
+		_, resp, err := dialPublic(t, e, sessionPath, protocols, http.Header{"Origin": {bad}})
+		if err == nil || resp == nil || resp.StatusCode != http.StatusForbidden {
+			t.Fatalf("origin %q: %v %v", bad, resp, err)
+		}
+	}
+	logs := e.waitAudit(t, 5) // ticket 1 + 거부 4
+	if !strings.Contains(logs, `"error":"origin not allowed: https://evil.example"`) || !strings.Contains(logs, ticket.Hash(tk)) {
+		t.Fatalf("audit: %s", logs)
+	}
+	// 거부된 시도로 티켓이 쓰이지 않았다: 허용 Origin(대소문자 무관)으로 그대로 붙는다
+	c, _, err := dialPublic(t, e, sessionPath, protocols, http.Header{"Origin": {"HTTPS://App.Kodeploy.com"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, code := readAll(t, c); code != proto.CloseNormal {
+		t.Fatalf("allowed origin: %d", code)
+	}
+	// Origin 없음(CLI)은 통과 — 나머지 공개 문 테스트가 모두 이 경우다. 내부 문은 Origin을 보지 않는다
+	p := "/internal/v1/sessions/query"
+	hdr := signed("GET", p, nil)
+	hdr.Set("Origin", "https://evil.example")
+	if _, resp, err := dialInternal(t, e, p, hdr); err != nil {
+		t.Fatalf("internal door with origin: %v %v", resp, err)
 	}
 }
 

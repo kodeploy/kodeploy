@@ -53,8 +53,9 @@ type Options struct {
 	TTYMax              time.Duration
 	NonTTYMax           time.Duration
 	PingInterval        time.Duration
-	MaxSessionsPublic   int // 공개 문 동시 세션 (터미널·콘솔)
-	MaxSessionsInternal int // 내부 문 동시 세션 (query·browse·dump·restore)
+	MaxSessionsPublic   int      // 공개 문 동시 세션 (터미널·콘솔)
+	MaxSessionsInternal int      // 내부 문 동시 세션 (query·browse·dump·restore)
+	AllowedOrigins      []string // 공개 문 Origin 허용 목록. Origin이 있으면 여기 있어야 한다
 	RestoreMaxBytes     int64
 	RestoreWorkdir      string
 
@@ -67,7 +68,8 @@ type Server struct {
 	o           Options
 	publicSem   chan struct{}
 	internalSem chan struct{}
-	upgrader    websocket.Upgrader
+	publicUp    websocket.Upgrader
+	internalUp  websocket.Upgrader
 
 	mu       sync.Mutex
 	idle     *sync.Cond
@@ -95,14 +97,20 @@ func New(o Options) *Server {
 		publicSem:   make(chan struct{}, o.MaxSessionsPublic),
 		internalSem: make(chan struct{}, o.MaxSessionsInternal),
 		shutdown:    make(chan struct{}),
-		upgrader: websocket.Upgrader{
-			Subprotocols:    []string{proto.Subprotocol},
-			ReadBufferSize:  32 << 10,
-			WriteBufferSize: 32 << 10,
-			// 인증은 티켓(공개 문)·HMAC(내부 문)이다. 쿠키 같은 자동 자격증명이 없으니(라우트가 Cookie를 지운다)
-			// Origin으로 막을 이유가 없고, CLI는 Origin을 보내지 않는다.
-			CheckOrigin: func(*http.Request) bool { return true },
-		},
+	}
+	s.publicUp = websocket.Upgrader{
+		Subprotocols:    []string{proto.Subprotocol},
+		ReadBufferSize:  32 << 10,
+		WriteBufferSize: 32 << 10,
+		// publicSession이 업그레이드 전에 같은 규칙으로 먼저 본다(거부를 기록하려고). 여기는 이중 확인이다
+		CheckOrigin: func(r *http.Request) bool { return s.originAllowed(r.Header.Get("Origin")) },
+	}
+	s.internalUp = websocket.Upgrader{
+		Subprotocols:    []string{proto.Subprotocol},
+		ReadBufferSize:  32 << 10,
+		WriteBufferSize: 32 << 10,
+		// 내부 문은 HMAC 서명이 인증이고, core는 Origin을 보내지 않는다
+		CheckOrigin: func(*http.Request) bool { return true },
 	}
 	s.idle = sync.NewCond(&s.mu)
 	s.base, s.cancelBase = context.WithCancel(context.Background())
@@ -197,6 +205,21 @@ func (s *Server) Ops() http.Handler {
 		mux.Handle("GET /metrics", s.o.Metrics)
 	}
 	return mux
+}
+
+// originAllowed는 공개 문 Origin 규칙이다: 헤더가 없으면(CLI·서버 측 클라이언트) 통과, 있으면 허용 목록만.
+// 티켓이 인증이고 라우트가 Cookie를 지우지만, 다른 사이트 페이지가 훔친 티켓으로 붙는 길까지 막는다.
+// 브라우저는 Origin을 소문자 scheme·host로 보내지만 대소문자는 가리지 않는다.
+func (s *Server) originAllowed(origin string) bool {
+	if origin == "" {
+		return true
+	}
+	for _, o := range s.o.AllowedOrigins {
+		if strings.EqualFold(o, origin) {
+			return true
+		}
+	}
+	return false
 }
 
 // offers는 클라이언트가 서브프로토콜 p를 제안했는지 본다.

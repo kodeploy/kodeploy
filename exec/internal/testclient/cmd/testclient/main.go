@@ -7,7 +7,7 @@
 //	run           내부 세션 query·browse·dump              -internal -key-file -op [-sql | -in] [-out]
 //	restore       내부 세션 restore (크기·sha256은 계산)    -internal -key-file -file [-sha] [-abort-after N]
 //	hold          공개 문 세션 n개 동시에 열기 (4429 확인)   -internal -key-file -url -app -n
-//	check-public  9절 4번 자동 확인 (PASS/FAIL)             -internal -key-file -url -app [-other-ns-url] [-expiry]
+//	check-public  9절 4번 자동 확인 (PASS/FAIL)             -internal -key-file -url -app [-origin] [-other-ns-url] [-expiry]
 //
 // 판정은 상태 코드가 아니라 출력 본문의 sentinel로 한다. sentinel은 입력 echo에 나오지 않는 값이다
 // (예: 입력 "echo kd-$((6*7))" → 출력에만 "kd-42").
@@ -304,6 +304,7 @@ func cmdCheckPublic(args []string) error {
 	app := fs.String("app", "", "앱 이름")
 	otherNS := fs.String("other-ns-url", "", "같은 Pod에 다른 ns 경로로 붙는 주소 (port-forward, 4403 확인)")
 	expiry := fs.Bool("expiry", false, "티켓 만료(31초 대기) 확인")
+	origin := fs.String("origin", "https://app.kodeploy.com", "허용 목록에 있는 Origin (차트 platform/exec.yaml allowedOrigins)")
 	fs.Parse(args)
 	in, err := inf.client()
 	if err != nil {
@@ -360,7 +361,18 @@ func cmdCheckPublic(args []string) error {
 	}
 	k.check(err == nil && res.CloseCode == 1000 && res.ExitCode == 0, "Authorization: Ticket", fmt.Sprintf("close=%d exit=%d %v", res.CloseCode, res.ExitCode, err))
 
-	// 5) 다른 ns 경로 → 4403 (같은 Pod에 직접 붙어야 한다: Envoy를 거치면 그 ns의 Pod로 가서 4401)
+	// 5) Origin: 목록 밖이면 업그레이드 없이 403이고 티켓은 남는다. 같은 티켓으로 허용 Origin이면 열린다
+	tO, _ := issue(ctx, in, *app, "app", 80, 24)
+	_, err = testclient.DialPublicOrigin(ctx, *url, tO, false, "https://evil.example")
+	k.check(err != nil && strings.Contains(err.Error(), "handshake: 403"), "foreign Origin → 403", fmt.Sprint(err))
+	c, err = testclient.DialPublicOrigin(ctx, *url, tO, false, *origin)
+	if err == nil {
+		c.Stdin([]byte("exit 0\n"))
+		res, _ = c.Read(15*time.Second, nil)
+	}
+	k.check(err == nil && res.CloseCode == 1000 && res.ExitCode == 0, "allowed Origin, same ticket", fmt.Sprintf("close=%d exit=%d %v", res.CloseCode, res.ExitCode, err))
+
+	// 6) 다른 ns 경로 → 4403 (같은 Pod에 직접 붙어야 한다: Envoy를 거치면 그 ns의 Pod로 가서 4401)
 	if *otherNS != "" {
 		tN, _ := issue(ctx, in, *app, "app", 80, 24)
 		c, err = testclient.DialPublic(ctx, *otherNS, tN, false)
@@ -370,7 +382,7 @@ func cmdCheckPublic(args []string) error {
 		k.check(err == nil && res.CloseCode == 4403, "other namespace → 4403", fmt.Sprintf("close=%d %v", res.CloseCode, err))
 	}
 
-	// 6) 만료 (30초) → 4401
+	// 7) 만료 (30초) → 4401
 	if *expiry {
 		tE, _ := issue(ctx, in, *app, "app", 80, 24)
 		fmt.Println("...waiting 31s for ticket expiry")

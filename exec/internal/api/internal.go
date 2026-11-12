@@ -205,7 +205,7 @@ func (s *Server) serveInternal(w http.ResponseWriter, r *http.Request, op string
 		http.Error(w, "subprotocol "+proto.Subprotocol+" required", http.StatusBadRequest)
 		return
 	}
-	ws, err := s.upgrader.Upgrade(w, r, nil)
+	ws, err := s.internalUp.Upgrade(w, r, nil)
 	if err != nil {
 		return
 	}

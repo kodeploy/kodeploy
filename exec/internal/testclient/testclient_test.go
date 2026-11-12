@@ -92,7 +92,7 @@ func servers(t *testing.T) (pub, internal *httptest.Server) {
 	s := api.New(api.Options{
 		Namespace: ns, Key: key, Tickets: ticket.New(30*time.Second, 10), Finder: finder{}, Runner: &runner{},
 		Audit: audit.New(io.Discard), TTYIdleTimeout: time.Minute, TTYMax: time.Minute, NonTTYMax: time.Minute,
-		PingInterval: time.Second, MaxSessionsPublic: 3, MaxSessionsInternal: 4, RestoreMaxBytes: 1 << 20, RestoreWorkdir: "/tmp/kodeploy-restore",
+		PingInterval: time.Second, MaxSessionsPublic: 3, MaxSessionsInternal: 4, AllowedOrigins: []string{"https://app.kodeploy.com"}, RestoreMaxBytes: 1 << 20, RestoreWorkdir: "/tmp/kodeploy-restore",
 	})
 	pub, internal = httptest.NewServer(s.Public()), httptest.NewServer(s.Internal())
 	t.Cleanup(func() { pub.Close(); internal.Close(); s.Close() })
@@ -135,6 +135,21 @@ func TestTicketAndPublicShell(t *testing.T) {
 	if _, err := bad.Ticket(ctx, TicketRequest{App: "web", Target: "app", Op: "shell"}); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("bad key: %v", err)
 	}
+
+	// Origin (check-public 5번): 목록 밖은 handshake 403, 같은 티켓으로 허용 Origin이면 열린다
+	tk, _ = in.Ticket(ctx, TicketRequest{App: "web", Target: "app", Op: "shell"})
+	if _, err := DialPublicOrigin(ctx, url, tk.Ticket, false, "https://evil.example"); err == nil || !strings.Contains(err.Error(), "handshake: 403") {
+		t.Fatalf("foreign origin: %v", err)
+	}
+	c, err = DialPublicOrigin(ctx, url, tk.Ticket, false, "https://app.kodeploy.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Stdin([]byte("exit 0\n"))
+	if res, err := c.Read(5*time.Second, nil); err != nil || res.CloseCode != 1000 {
+		t.Fatalf("allowed origin: %+v %v", res, err)
+	}
+	c.Close()
 }
 
 func TestInternalQueryAndRestore(t *testing.T) {

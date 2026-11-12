@@ -84,6 +84,7 @@ func serve(log *slog.Logger) error {
 		PingInterval:        cfg.PingInterval,
 		MaxSessionsPublic:   cfg.MaxSessionsPublic,
 		MaxSessionsInternal: cfg.MaxSessionsInternal,
+		AllowedOrigins:      cfg.AllowedOrigins,
 		RestoreMaxBytes:     cfg.RestoreMaxBytes,
 		RestoreWorkdir:      cfg.RestoreWorkdir,
 		Log:                 log,

@@ -107,10 +107,18 @@ func RestorePath(size int64, sha256 string) string {
 }
 
 // DialPublic은 공개 문에 붙는다. viaHeader면 Authorization: Ticket, 아니면 서브프로토콜 ticket.<t>.
-// ticket이 비어 있으면 티켓 없이 붙는다(4401 확인용).
+// ticket이 비어 있으면 티켓 없이 붙는다(4401 확인용). Origin 헤더는 보내지 않는다(CLI).
 func DialPublic(ctx context.Context, wsURL, ticket string, viaHeader bool) (*Conn, error) {
+	return DialPublicOrigin(ctx, wsURL, ticket, viaHeader, "")
+}
+
+// DialPublicOrigin은 브라우저처럼 Origin 헤더를 붙여 공개 문에 붙는다 (origin이 비면 DialPublic과 같다).
+func DialPublicOrigin(ctx context.Context, wsURL, ticket string, viaHeader bool, origin string) (*Conn, error) {
 	protocols := []string{proto.Subprotocol}
 	h := http.Header{}
+	if origin != "" {
+		h.Set("Origin", origin)
+	}
 	switch {
 	case ticket == "":
 	case viaHeader:
