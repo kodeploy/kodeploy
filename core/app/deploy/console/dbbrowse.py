@@ -103,7 +103,7 @@ MAX_SQL_BYTES = exec_client.BROWSE_MAX_BYTES
 
 
 async def _target(ns: str) -> dict:
-    if config.EXEC_AGENT_BROWSE:
+    if config.exec_agent_on(config.EXEC_AGENT_BROWSE, ns):
         # 새 경로는 DB 종류만 알면 된다 (비밀번호는 exec가 컨테이너 env에서 읽는다)
         kind = await exec_client.db_type(ns)
         t = {"db_type": kind} if kind else None
@@ -118,10 +118,10 @@ async def _target(ns: str) -> dict:
     return t
 
 
-# EXEC_AGENT_BROWSE가 켜져 있으면 kodeploy-exec 내부 문(browse)으로 돌린다. 옵션(읽기 전용·시간 제한)은 같다.
+# EXEC_AGENT_BROWSE가 켜져 있고 ns가 EXEC_AGENT_NAMESPACES에 들면 kodeploy-exec 내부 문(browse)으로 돌린다. 옵션(읽기 전용·시간 제한)은 같다.
 async def _run(ns: str, t: dict, sql: str, user_id: str = "", app_id: str = "") -> tuple[list[str], list[list[str]], int]:
     started = time.perf_counter()
-    if config.EXEC_AGENT_BROWSE:
+    if config.exec_agent_on(config.EXEC_AGENT_BROWSE, ns):
         try:
             stdout, stderr, code = await exec_client.run_capture(ns, "browse", sql, user_id=user_id, app_id=app_id)
         except exec_client.ExecError as e:

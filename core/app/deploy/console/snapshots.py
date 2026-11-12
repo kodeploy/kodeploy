@@ -146,7 +146,7 @@ def _load_cmd(t: dict) -> list[str]:
 
 # export 전 사전 검증 — DB 파드 없으면 스트리밍 시작 전에 에러로 끊기 위함.
 async def ensure_db(ns: str) -> None:
-    if app_config.EXEC_AGENT_DUMP:
+    if app_config.exec_agent_on(app_config.EXEC_AGENT_DUMP, ns):
         from app.exec import client as exec_client
         t = await exec_client.db_type(ns)
     else:
@@ -158,10 +158,10 @@ async def ensure_db(ns: str) -> None:
 
 
 # dump | gzip stdout을 청크로 yield (FastAPI StreamingResponse용).
-# EXEC_AGENT_DUMP가 켜져 있으면 kodeploy-exec 내부 문(dump)으로 받는다. 거기선 pipefail이 있고,
+# EXEC_AGENT_DUMP가 켜져 있고 ns가 EXEC_AGENT_NAMESPACES에 들면 kodeploy-exec 내부 문(dump)으로 받는다. 거기선 pipefail이 있고,
 # 채널 3 exit code가 0이 아니면 예외로 끊는다 — 응답이 정상 종료되지 않아 잘린 파일이 완료로 저장되지 않는다.
 async def export_stream(ns: str, *, user_id: str = "", app_id: str = ""):
-    if app_config.EXEC_AGENT_DUMP:
+    if app_config.exec_agent_on(app_config.EXEC_AGENT_DUMP, ns):
         from app.exec import client as exec_client
         try:
             async for chunk in exec_client.dump_stream(ns, user_id=user_id, app_id=app_id):
@@ -343,13 +343,13 @@ async def wait_db_ready(ns: str, db_type: str, timeout: int = 180) -> bool:
 
 
 # stage된 덤프를 복원하고 임시 파일을 제거 (성공/실패 무관).
-# EXEC_AGENT_RESTORE가 켜져 있으면 kodeploy-exec 내부 문(restore 단계식)으로 보낸다. 업로드 복원도 먼저 stage를 거친다.
+# restore_via_exec(ns)면 kodeploy-exec 내부 문(restore 단계식)으로 보낸다. 업로드 복원도 먼저 stage를 거친다.
 async def restore_staged(ns: str, token: str, *, user_id: str = "", app_id: str = "") -> dict:
     path = _staged_path(token)
     if not os.path.exists(path):
         raise SnapshotError("초기 데이터 파일을 찾을 수 없습니다 (만료 또는 중복 소비)")
 
-    if app_config.EXEC_AGENT_RESTORE:
+    if restore_via_exec(ns):
         try:
             return await _restore_via_exec(ns, path, user_id, app_id)
         finally:
@@ -370,6 +370,11 @@ async def restore_staged(ns: str, token: str, *, user_id: str = "", app_id: str 
 
 
 # --- kodeploy-exec 복원 (EXEC_AGENT_RESTORE) ---------------------------------
+
+def restore_via_exec(ns: str) -> bool:
+    """EXEC_AGENT_RESTORE가 켜져 있고 ns가 EXEC_AGENT_NAMESPACES에 드는가 (업로드 복원 라우트도 같은 판단을 쓴다)."""
+    return app_config.exec_agent_on(app_config.EXEC_AGENT_RESTORE, ns)
+
 
 # db_changed=false인 실패면 다시 보낸다 (지시서 4-6). 세션을 열지도 못한 실패(exec Pod가 막 뜨는 중)도 같다.
 RESTORE_RETRIES = 2

@@ -846,7 +846,7 @@ async def db_restore(
             yield data
 
     try:
-        if config.EXEC_AGENT_RESTORE:
+        if snapshots.restore_via_exec(tenant_id):
             # 새 경로: 업로드도 stage를 먼저 거친다 — 크기·sha256(exec의 기대값)을 알고, 재시도에 다시 보낼 수 있다
             token = await snapshots.stage_dump(_chunks())
             return await snapshots.restore_staged(tenant_id, token, user_id=str(user.id), app_id=str(app.id))

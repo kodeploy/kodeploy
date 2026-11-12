@@ -1,5 +1,6 @@
 // 터미널 WebSocket — 옛 경로(core가 중계, 텍스트)와 새 경로(kodeploy-exec, 채널 프레임)를 같은 모양으로 감싼다.
-// 서버 플래그 EXEC_AGENT_TERMINAL이 켜져 있으면 새 경로: core에서 티켓을 받아 exec 공개 문에 바로 붙는다.
+// 이 앱에 새 경로가 켜져 있으면(/apps/{id}/exec-features — 플래그 EXEC_AGENT_TERMINAL + 카나리 ns 목록)
+// core에서 티켓을 받아 exec 공개 문에 바로 붙는다. 아니면 옛 경로.
 //
 // 새 경로 프레임 (exec 게이트웨이 지시서 3-3): 바이너리, 첫 바이트가 채널 번호
 //   0 stdin, 1 stdout, 2 stderr, 3 종료 상태 JSON, 4 창 크기 {"Width","Height"}

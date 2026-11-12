@@ -43,8 +43,18 @@ EXEC_AGENT_QUERY = os.getenv("EXEC_AGENT_QUERY", "false").lower() == "true"
 EXEC_AGENT_BROWSE = os.getenv("EXEC_AGENT_BROWSE", "false").lower() == "true"
 EXEC_AGENT_DUMP = os.getenv("EXEC_AGENT_DUMP", "false").lower() == "true"
 EXEC_AGENT_RESTORE = os.getenv("EXEC_AGENT_RESTORE", "false").lower() == "true"
+# 켠 기능을 새 경로로 보낼 테넌트 ns (쉼표 구분). "*"면 전부, 비면 아무 데도 (플래그를 켜도 옛 경로).
+# 차트 platform/exec.yaml의 rollout(카나리)과 같은 목록으로 맞춘다 — exec Pod가 없는 ns를 새 경로로 보내지 않게.
+EXEC_AGENT_NAMESPACES = frozenset(
+    ns.strip() for ns in os.getenv("EXEC_AGENT_NAMESPACES", "").split(",") if ns.strip()
+)
 # 웹이 붙는 공개 문 기준 주소. 경로는 /exec/<ns>/v1/sessions (테넌트 HTTPRoute가 그 ns의 exec Pod로 보낸다)
 EXEC_PUBLIC_URL = os.getenv("EXEC_PUBLIC_URL", "wss://api.kodeploy.com").rstrip("/")
+
+
+def exec_agent_on(flag: bool, ns: str) -> bool:
+    """기능 플래그(EXEC_AGENT_*)가 켜져 있고 ns가 EXEC_AGENT_NAMESPACES에 들면 새 경로(kodeploy-exec)를 쓴다."""
+    return bool(flag) and ("*" in EXEC_AGENT_NAMESPACES or ns in EXEC_AGENT_NAMESPACES)
 
 # --- kubelet 직접 조회 (관리자 노드 현황, admin/service.py) ---
 # 노드마다 자체 서명인 kubelet 서빙 CA 묶음 — ConfigMap kubelet-serving-ca 마운트 (ansible 69-kubelet-serving-ca.yml)

@@ -21,6 +21,12 @@ KEY = b"k" * 32
 NS = "tenant-0a1b2c3d"
 
 
+@pytest.fixture(autouse=True)
+def canary(monkeypatch):
+    """테스트 ns를 카나리 목록에 넣는다 (플래그를 켠 테스트가 새 경로로 가게)."""
+    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({NS}))
+
+
 class FakeExec:
     """exec 내부 문 흉내. op마다 돌려줄 프레임·close 코드를 정해 둔다."""
 
@@ -371,9 +377,53 @@ def test_restore_retries_when_exec_not_up_yet(monkeypatch, tmp_path):
     assert len(attempts) == 2
 
 
-def test_flags_off_by_default():
+def test_flags_off_by_default(monkeypatch):
+    monkeypatch.undo()                                           # canary fixture 전 값
     for name in ("EXEC_AGENT_TERMINAL", "EXEC_AGENT_QUERY", "EXEC_AGENT_BROWSE", "EXEC_AGENT_DUMP", "EXEC_AGENT_RESTORE"):
         assert getattr(config, name) is False, name
+    assert config.EXEC_AGENT_NAMESPACES == frozenset()          # 기본은 어느 ns도 새 경로로 가지 않는다
+
+
+# 카나리: 플래그가 켜져 있어도 EXEC_AGENT_NAMESPACES에 든 ns만 새 경로
+def test_exec_agent_on_namespaces(monkeypatch):
+    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({NS}))
+    assert config.exec_agent_on(True, NS) and not config.exec_agent_on(True, "tenant-ffffffff")
+    assert not config.exec_agent_on(False, NS)
+    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({"*"}))
+    assert config.exec_agent_on(True, "tenant-ffffffff") and not config.exec_agent_on(False, NS)
+    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset())
+    assert not config.exec_agent_on(True, NS)
+
+
+def test_flag_on_outside_canary_uses_old_path(wired, monkeypatch):
+    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({"tenant-ffffffff"}))
+    for name in ("EXEC_AGENT_QUERY", "EXEC_AGENT_BROWSE", "EXEC_AGENT_DUMP", "EXEC_AGENT_RESTORE"):
+        monkeypatch.setattr(config, name, True)
+    called = []
+
+    async def db_type(ns):
+        called.append(ns)
+        return "mysql"
+
+    async def detect(core, ns):
+        return None                                              # 옛 경로: DB 없음으로 끝낸다
+
+    async def noop():
+        return None
+
+    monkeypatch.setattr(exec_client, "db_type", db_type)
+    for mod in (dbquery, dbbrowse, snapshots):
+        monkeypatch.setattr(mod, "_detect_target", detect)
+        monkeypatch.setattr(mod, "_ensure_loaded", noop)
+        monkeypatch.setattr(mod.client, "ApiClient", lambda: _NullCtx())
+    with pytest.raises(dbquery.QueryError, match="DB가 활성화돼 있지 않습니다"):
+        asyncio.run(dbquery.run_query(NS, "SELECT 1"))
+    with pytest.raises(dbquery.QueryError, match="DB가 활성화돼 있지 않습니다"):
+        asyncio.run(dbbrowse._target(NS))
+    with pytest.raises(snapshots.SnapshotError, match="DB가 활성화돼 있지 않습니다"):
+        asyncio.run(snapshots.ensure_db(NS))
+    assert not snapshots.restore_via_exec(NS) and snapshots.restore_via_exec("tenant-ffffffff")
+    assert called == []                                          # exec 쪽은 부르지 않았다
 
 
 # --- POST /apps/{id}/exec-tickets ------------------------------------------------
@@ -435,6 +485,24 @@ def test_exec_ticket_rules(ticket_api, monkeypatch):
     ticket_api.access = (ticket_api.app, "owner", True)
     assert c.post(URL, json={"target": "app"}, headers=ORIGIN).status_code == 200
     assert ticket_api.audited == ["POST /apps/{app_id}/exec-tickets"]
+    # 카나리 밖 ns(exec Pod가 없다)는 404
+    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({"tenant-ffffffff"}))
+    assert c.post(URL, json={"target": "app"}, headers=ORIGIN).status_code == 404
+    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({NS}))
     # 플래그 off면 엔드포인트가 없는 것과 같다
     monkeypatch.setattr(config, "EXEC_AGENT_TERMINAL", False)
     assert c.post(URL, json={"target": "app"}, headers=ORIGIN).status_code == 404
+
+
+def test_exec_features_per_app(ticket_api, monkeypatch):
+    c = ticket_api.client
+    path = "/apps/11111111-1111-1111-1111-111111111111/exec-features"
+    ticket_api.access = (ticket_api.app, "editor", False)
+    assert c.get(path).json() == {"terminal": True}
+    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({"tenant-ffffffff"}))
+    assert c.get(path).json() == {"terminal": False}             # 카나리 밖 → 웹은 옛 경로
+    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({"*"}))
+    monkeypatch.setattr(config, "EXEC_AGENT_TERMINAL", False)
+    assert c.get(path).json() == {"terminal": False}
+    ticket_api.access = None
+    assert c.get(path).status_code == 404

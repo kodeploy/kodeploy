@@ -149,7 +149,7 @@ def _parse_csv(stdout: str) -> tuple[list[str], list[list[str]]]:
 
 # 고수준 API — router가 호출. tenant ns의 DB 파드에 SQL을 돌려 구조화된 결과를 반환.
 # offset: SELECT/WITH 쿼리에서 다음 페이지를 보기 위한 시작 위치(페이지네이션). 그 외는 무시.
-# EXEC_AGENT_QUERY가 켜져 있으면 kodeploy-exec 내부 문(query)으로 돌린다. 명령·옵션·파서는 같다.
+# EXEC_AGENT_QUERY가 켜져 있고 ns가 EXEC_AGENT_NAMESPACES에 들면 kodeploy-exec 내부 문(query)으로 돌린다. 명령·옵션·파서는 같다.
 async def run_query(ns: str, sql: str, offset: int = 0, *, user_id: str = "", app_id: str = "") -> dict:
     sql = (sql or "").strip()
     if not sql:
@@ -158,7 +158,7 @@ async def run_query(ns: str, sql: str, offset: int = 0, *, user_id: str = "", ap
         raise QueryError(f"SQL이 너무 깁니다 (최대 {MAX_SQL_LENGTH}자)")
     offset = max(0, int(offset))
 
-    use_exec = config.EXEC_AGENT_QUERY
+    use_exec = config.exec_agent_on(config.EXEC_AGENT_QUERY, ns)
     if use_exec:
         # 새 경로는 DB 종류만 알면 된다 (비밀번호는 exec가 컨테이너 env에서 읽는다)
         kind = await exec_client.db_type(ns)

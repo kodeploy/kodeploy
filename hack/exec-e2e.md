@@ -16,19 +16,28 @@ TC="go run ./internal/testclient/cmd/testclient"   # exec/ 디렉토리에서
 
 앞 단계가 뒤 단계의 전제다. 순서를 바꾸면 exec Pod가 ContainerCreating(Secret 없음)이나 거부(VAP·AppProject)에 걸린다.
 
+exec는 카나리로 넓힌다. 두 목록을 같이 맞춘다.
+- **차트** `platform/exec.yaml`의 `rollout.namespaces`: exec Pod를 그릴 ns.
+- **core** configMap의 `EXEC_AGENT_NAMESPACES`: 켠 플래그를 새 경로로 보낼 ns. 쉼표로 구분하고, 전부면 `*`다.
+
+넓힐 때는 차트 먼저(exec Pod가 뜬 뒤), 그다음 core다. 좁힐 때는 반대로 한다. core 목록에만 있고 차트에 없는 ns는 새 경로가 exec를 못 찾아 실패한다.
+
 | 순서 | 할 일 | 명령 | 확인 |
 |---|---|---|---|
 | 1 | kodeploy `feat/exec-gateway` 머지 → CI | main 머지. `Build Exec Image`(exec), `Build Core Image`(core), `Deploy Web`(web)이 돈다 | exec 워크플로 요약의 `ghcr.io/kodeploy/kodeploy-exec@sha256:...` |
-| 2 | core 반영 (플래그 전부 off) | `git pull && kubectl apply -f deploy/k8s/core/deployment.yaml` | 새 테넌트 배포 때 `kodeploy-exec-hmac`이 생기는지 |
+| 2 | core 반영 (플래그 전부 off, `EXEC_AGENT_NAMESPACES` 없음) | `git pull && kubectl apply -f deploy/k8s/core/deployment.yaml` | 새 테넌트 배포 때 `kodeploy-exec-hmac`이 생기는지 |
 | 3 | VAP | `kubectl apply --dry-run=server -f deploy/k8s/core/exec-admission-policy.yaml` → `kubectl apply -f ...` | `kubectl get validatingadmissionpolicy kodeploy-exec-pod-shape` |
 | 4 | 기존 테넌트 HMAC 키 | `core/.venv/bin/python hack/backfill-exec-hmac.py` (dry-run) → `--apply` | 마지막 줄 `missing=0` |
 | 5 | AppProject (kodeploy-charts 브랜치) | `kubectl apply -f argocd/appproject.yaml` | `kubectl get appproject kodeploy-apps -n argocd -o yaml`에 Role·ServiceAccount |
 | 6 | vmagent | `kubectl apply -f deploy/k8s/monitoring/vmagent.yaml && kubectl rollout restart deploy/vmagent -n monitoring` | VM에서 `up{job="kodeploy-exec"}` |
-| 7 | 차트 값 채우기 (kodeploy-charts PR 브랜치) | `charts/app/platform/exec.yaml`의 `image`, `apiserver.ip`, `envoySelector` (아래) | `tests/exec_check.py` 통과 |
+| 7 | 차트 값 채우기 (kodeploy-charts PR 브랜치) | `charts/app/platform/exec.yaml`의 `image`, `apiserver.ip`, `envoySelector`, `nodeNets` 확인, **`rollout.namespaces: [$NS]`** (`all: false` 그대로) | `tests/exec_check.py` 통과, 마지막 줄 `repo values render exec in: ['tenant-…']` |
 | 8 | 테스트 앱 ns에 서버 측 dry-run | 아래 "머지 전 dry-run" | 오류 없음 |
-| 9 | 차트 PR 머지 | GitHub에서 머지 → Argo가 전 테넌트에 sync | 9절 1번 |
+| 9 | 차트 PR 머지 | GitHub에서 머지 → Argo가 sync. exec는 `$NS`에만 생긴다 | 9절 1번 (`$NS` 하나) |
+| 10 | 9절 2~4번 | `$NS`에서 | |
+| 11 | core에 카나리 ns | configMap에 `EXEC_AGENT_NAMESPACES: "$NS"` → 9절 5~7번(플래그 하나씩) | |
+| 12 | 전 테넌트로 넓히기 | 차트 `rollout.all: true` PR 머지 → 모든 exec Pod Ready 확인(9절 1번 전체) → configMap `EXEC_AGENT_NAMESPACES: "*"` | 9절 1번 RSS 합계 |
 
-1번에서 web은 바로 운영에 배포된다. 플래그가 꺼져 있으면(core가 `/exec/features`에 `terminal: false`, 또는 아직 옛 core라 404) 웹은 옛 터미널 경로를 쓰므로, core보다 먼저 나가도 화면은 그대로다.
+1번에서 web은 바로 운영에 배포된다. 웹은 앱마다 `/apps/{id}/exec-features`를 물어서 새 터미널 경로를 쓸지 정한다. 플래그가 꺼져 있거나 앱 ns가 `EXEC_AGENT_NAMESPACES`에 없으면 `terminal: false`이고, 아직 옛 core라 404여도 옛 경로를 쓴다. 그래서 core보다 먼저 나가도 화면은 그대로다.
 
 차트 값 확인 명령:
 
@@ -38,6 +47,8 @@ kubectl get endpointslice -n default -l kubernetes.io/service-name=kubernetes \
   -o jsonpath='{.items[0].endpoints[*].addresses[*]}{"\n"}{.items[0].ports[*].port}{"\n"}'
 # Envoy 프록시 Pod 라벨 (envoySelector가 맞는지)
 kubectl get pods -n envoy-gateway-system --show-labels
+# 노드 주소가 nodeNets(10.0.2.0/24) 안인지 — kubelet readiness probe가 여기서 온다
+kubectl get nodes -o wide
 ```
 
 머지 전 dry-run (VAP·PSS restricted·스키마를 실제 apiserver로 거친다. 저장하지 않는다):
@@ -52,6 +63,8 @@ helm template $NS charts/app -n $NS -f /tmp/values.yaml \
 ## 1~8. 9절 체크리스트
 
 ### [ ] 1. 차트 적용 후 테넌트마다 exec Pod Running → 유휴 메모리(RSS)
+
+카나리 단계(0절 9번)에서는 `$NS` 하나, 넓힌 뒤(12번)에는 전 테넌트다. Ready가 안 되면 readiness probe가 Calico 정책에 막힌 것이 아닌지 먼저 본다(`kubectl describe pod`의 `Readiness probe failed ... timeout`). 그렇다면 probe 출발지가 `nodeNets` 밖인 것이다. Calico IPIP 터널 주소일 수 있으니 `kubectl get nodes -o jsonpath='{.items[*].metadata.annotations.projectcalico\.org/IPv4IPIPTunnelAddr}'`로 보고 `/32`로 더한다.
 
 ```sh
 kubectl get pods -A -l kodeploy.com/component=exec -o wide
@@ -121,10 +134,10 @@ rm /tmp/exec-hmac.key; kill %1
 
 ### [ ] 5. 플래그를 하나씩 켜고 기존 경로와 비교
 
-플래그는 `deploy/k8s/configMap/kodeploy-core-env.yaml`에 넣고 core를 재시작한다. 하나 켜고 확인, 다음으로.
+플래그는 `deploy/k8s/configMap/kodeploy-core-env.yaml`에 넣고 core를 재시작한다. 하나 켜고 확인, 다음으로. `EXEC_AGENT_NAMESPACES: "<테스트 앱 ns>"`가 먼저 들어 있어야 한다. 없으면 플래그를 켜도 옛 경로로 간다.
 
 ```sh
-# 예: EXEC_AGENT_QUERY: "true" 를 configMap에 추가한 뒤
+# 예: EXEC_AGENT_NAMESPACES: "tenant-xxxxxxxx", EXEC_AGENT_QUERY: "true" 를 configMap에 추가한 뒤
 kubectl apply -f deploy/k8s/configMap/kodeploy-core-env.yaml
 kubectl rollout restart deploy/kodeploy-core -n default
 ```
@@ -261,7 +274,7 @@ kubectl exec -n $NS $POD -c mysql -- rm -f "$BK"
 
 | 상황 | 되돌리는 법 |
 |---|---|
-| 새 경로가 이상하다 | 해당 `EXEC_AGENT_*`를 configMap에서 지우고 core 재시작 → 즉시 옛 경로 |
-| exec Pod가 문제 | kodeploy-charts에서 `platform/exec.yaml`의 `image`를 비우는 PR 머지 → Argo가 exec 리소스를 지운다 (prune) |
+| 새 경로가 이상하다 | 해당 `EXEC_AGENT_*`를 configMap에서 지우고 core 재시작 → 즉시 옛 경로. 특정 ns만이면 `EXEC_AGENT_NAMESPACES`에서 그 ns만 뺀다 |
+| exec Pod가 문제 | core `EXEC_AGENT_NAMESPACES`에서 먼저 빼고(재시작), kodeploy-charts에서 `rollout`을 좁히거나(그 ns만) `image`를 비우는 PR 머지 → Argo가 exec 리소스를 지운다 (prune) |
 | VAP가 무언가를 막는다 | `kubectl delete -f deploy/k8s/core/exec-admission-policy.yaml` |
 | 사고 (키 유출 등) | 지시서 14절 사고 대응: Argo auto-sync 일시정지 → exec Deployment 0 → 테넌트별 HMAC 키 교체 → 재개 |
