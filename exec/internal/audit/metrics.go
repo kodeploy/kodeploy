@@ -15,18 +15,18 @@ import (
 //	kodeploy_exec_sessions_total{op,result}          작업별 세션 수 (result: ok | fail)
 //	kodeploy_exec_session_seconds_sum/_count{op}     작업별 실행 시간
 //	kodeploy_exec_tickets_total{event}               티켓 issued | consumed | expired
-//	kodeploy_exec_sessions_active                    지금 열린 세션 수
+//	kodeploy_exec_sessions_active{door}              지금 열린 세션 수 (door: public | internal, 상한도 문마다 따로다)
 type Metrics struct {
 	mu       sync.Mutex
 	sessions map[[2]string]int64
 	sum      map[string]float64
 	count    map[string]int64
-	active   func() int
+	active   func() (public, internal int)
 	tickets  func() (issued, consumed, expired int64)
 }
 
 // NewMetrics는 지표를 만든다. active·tickets는 내보낼 때 읽는다.
-func NewMetrics(active func() int, tickets func() (int64, int64, int64)) *Metrics {
+func NewMetrics(active func() (public, internal int), tickets func() (int64, int64, int64)) *Metrics {
 	return &Metrics{sessions: map[[2]string]int64{}, sum: map[string]float64{}, count: map[string]int64{}, active: active, tickets: tickets}
 }
 
@@ -76,8 +76,10 @@ func (m *Metrics) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 		fmt.Fprintf(&b, "kodeploy_exec_tickets_total{event=\"expired\"} %d\n", e)
 	}
 	if m.active != nil {
+		pub, in := m.active()
 		b.WriteString("# TYPE kodeploy_exec_sessions_active gauge\n")
-		fmt.Fprintf(&b, "kodeploy_exec_sessions_active %d\n", m.active())
+		fmt.Fprintf(&b, "kodeploy_exec_sessions_active{door=\"public\"} %d\n", pub)
+		fmt.Fprintf(&b, "kodeploy_exec_sessions_active{door=\"internal\"} %d\n", in)
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	_, _ = w.Write([]byte(b.String()))

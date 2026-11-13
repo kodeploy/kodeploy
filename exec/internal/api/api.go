@@ -117,8 +117,11 @@ func New(o Options) *Server {
 	return s
 }
 
-// Active는 지금 열린 세션 수다(동시 세션 제한에 들어간 것, 두 문 합계).
-func (s *Server) Active() int { return len(s.publicSem) + len(s.internalSem) }
+// ActiveByDoor는 문마다 지금 열린 세션 수다(동시 세션 제한에 들어간 것). 지표 sessions_active{door}가 읽는다.
+func (s *Server) ActiveByDoor() (public, internal int) { return len(s.publicSem), len(s.internalSem) }
+
+// Active는 두 문 합계다 (종료 로그용).
+func (s *Server) Active() int { p, i := s.ActiveByDoor(); return p + i }
 
 // enter는 요청 하나를 시작한다. 종료 중이면 false.
 func (s *Server) enter() bool {

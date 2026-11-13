@@ -417,6 +417,11 @@ func TestSessionLimitsPerDoor(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	// 지표 sessions_active{door}가 읽는 값: 문마다 1
+	if p, i := e.s.ActiveByDoor(); p != 1 || i != 1 || e.s.Active() != 2 {
+		t.Fatalf("active by door: public %d internal %d", p, i)
+	}
+
 	// 내부 문 두 번째는 4429, 공개 문 두 번째도 4429
 	qp := "/internal/v1/sessions/query"
 	q, _, err := dialInternal(t, e, qp, signed("GET", qp, nil))

@@ -69,7 +69,7 @@ func serve(log *slog.Logger) error {
 	go tickets.Run(sweepCtx, cfg.TicketTTL)
 
 	var srv *api.Server
-	metrics := audit.NewMetrics(func() int { return srv.Active() }, tickets.Stats)
+	metrics := audit.NewMetrics(func() (int, int) { return srv.ActiveByDoor() }, tickets.Stats)
 	srv = api.New(api.Options{
 		Namespace:           cfg.Namespace,
 		Key:                 cfg.HMACKey,

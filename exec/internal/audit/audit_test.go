@@ -41,7 +41,7 @@ func TestTime(t *testing.T) {
 }
 
 func TestMetrics(t *testing.T) {
-	m := NewMetrics(func() int { return 2 }, func() (int64, int64, int64) { return 5, 3, 1 })
+	m := NewMetrics(func() (int, int) { return 2, 1 }, func() (int64, int64, int64) { return 5, 3, 1 })
 	m.Session("query", true, 500*time.Millisecond)
 	m.Session("query", false, time.Second)
 	m.Session("shell", true, time.Minute)
@@ -55,10 +55,15 @@ func TestMetrics(t *testing.T) {
 		`kodeploy_exec_session_seconds_count{op="shell"} 1`,
 		`kodeploy_exec_tickets_total{event="issued"} 5`,
 		`kodeploy_exec_tickets_total{event="expired"} 1`,
-		`kodeploy_exec_sessions_active 2`,
+		`kodeploy_exec_sessions_active{door="public"} 2`,
+		`kodeploy_exec_sessions_active{door="internal"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("missing %q in\n%s", want, body)
 		}
+	}
+	// 라벨 없는 합계 줄은 없다 (sum by로 더한다)
+	if strings.Contains(body, "\nkodeploy_exec_sessions_active ") {
+		t.Errorf("unlabeled active line in\n%s", body)
 	}
 }
