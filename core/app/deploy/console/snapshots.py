@@ -1,33 +1,20 @@
 """DB 스냅샷 — 테넌트 DB(MySQL/PostgreSQL)를 빼고(export) 덤프를 적재(restore).
 
-R2/Job/PVC 없이 v1: 기존 터미널과 동일하게 **DB 파드에 직접 exec**한다.
-DB 타입은 ns 안의 파드를 보고 자동 감지(mysql 우선, 없으면 postgres).
-- export : `mysqldump|gzip` 또는 `pg_dump|gzip` stdout을 스트림으로 다운로드.
-- restore: 업로드 파일을 파드 /tmp에 stdin으로 쓴 뒤 `mysql`/`psql`로 적재 (파괴적).
-
-자격증명은 {db}-secret에서 읽는다 (mysql=root, postgres=DB_USER).
-exec WebSocket은 binary 프레임에 1바이트 채널 prefix(0=stdin,1=stdout,2=stderr)를 붙임.
-stdin EOF는 ws close로 신호(터미널/`kubectl cp`와 동일한 방식).
+실행은 그 테넌트의 kodeploy-exec 내부 문이 DB 파드에서 한다 (core에는 pods/exec 권한이 없다).
+DB 타입은 ns 안의 파드를 보고 자동 감지(mysql 우선, 없으면 postgres). 자격증명은 exec가 컨테이너 env에서 읽는다.
+- export : 내부 문 dump(`mysqldump|gzip` 또는 `pg_dump|gzip`, pipefail). 실패하면 다운로드 스트림을 끊는다.
+- restore: 업로드도 먼저 core 로컬에 stage(크기·sha256) → 내부 문 restore 단계식 (파괴적).
 """
 
 import asyncio
-import base64
 import hashlib
 import json
 import os
 import re
-import shlex
 import time
 import uuid
 
-import aiohttp
 from kubernetes_asyncio import client, config
-from kubernetes_asyncio.stream import WsApiClient
-
-from app import config as app_config
-
-_RESTORE_PATH = "/tmp/kd_restore.dump"
-_EXIT_MARK = "__KD_EXIT__"
 
 # 배포 직전 폼에서 받은 초기 덤프를 mysql Ready까지 잠깐 보관하는 core 로컬 디렉토리.
 # 복원 성공/실패 후 즉시 삭제 — 누적되지 않음.
@@ -47,7 +34,7 @@ class SnapshotError(Exception):
 
 
 # 청크 스트림을 감싸 누적 바이트가 MAX_DUMP_BYTES를 넘으면 즉시 중단(거부).
-# stage(로컬 저장)·복원(파드 stdin) 양쪽 입력 경로에 적용 — 디스크 폭주 1차 차단.
+# 업로드는 전부 stage(로컬 저장)를 거치므로 여기 한 곳에서 막는다 — 디스크 폭주 1차 차단.
 async def _limited(chunks):
     total = 0
     async for chunk in chunks:
@@ -70,186 +57,25 @@ async def _ensure_loaded() -> None:
     _loaded = True
 
 
-# 지원 DB별 메타. mysql 우선 감지 → 없으면 postgres.
-_DB_ORDER = ("mysql", "postgres")
-_DB_META = {
-    "mysql":    {"container": "mysql",    "secret": "mysql-secret"},
-    "postgres": {"container": "postgres", "secret": "postgres-secret"},
-}
-
-
-# 테넌트 ns에서 실행 중인 DB 파드를 자동 감지 + 자격증명/DB명 조회.
-# 반환: dict(db_type, pod, container, user, pw, db) — 없으면 None.
-async def _detect_target(core: client.CoreV1Api, ns: str):
-    for db_type in _DB_ORDER:
-        meta = _DB_META[db_type]
-        pods = await core.list_namespaced_pod(
-            namespace=ns, label_selector=f"app={db_type}",
-        )
-        running = [p for p in pods.items if p.status.phase == "Running"]
-        if not running:
-            continue
-        pod = running[0].metadata.name
-        secret = await core.read_namespaced_secret(name=meta["secret"], namespace=ns)
-
-        def dec(key: str, default: str = "") -> str:
-            v = secret.data.get(key) if secret.data else None
-            return base64.b64decode(v).decode("utf-8") if v else default
-
-        db = dec("DB_NAME", "app")
-        if db_type == "mysql":
-            user, pw = "root", dec("MYSQL_ROOT_PASSWORD")
-        else:
-            user, pw = dec("DB_USER", "app"), dec("DB_PASSWORD")
-        return {
-            "db_type": db_type, "pod": pod, "container": meta["container"],
-            "user": user, "pw": pw, "db": db,
-        }
-    return None
-
-
-# export용 dump 명령 (stdout = gzip 바이트). db_type별 분기.
-def _dump_cmd(t: dict) -> list[str]:
-    if t["db_type"] == "mysql":
-        inner = (
-            f"export MYSQL_PWD={shlex.quote(t['pw'])}; "
-            f"exec mysqldump -u root --single-transaction --routines --triggers "
-            f"--no-tablespaces {shlex.quote(t['db'])} | gzip -c"
-        )
-    else:  # postgres — --clean --if-exists로 복원 시 기존 객체 덮어쓰기 보장
-        inner = (
-            f"export PGPASSWORD={shlex.quote(t['pw'])}; "
-            f"exec pg_dump -U {shlex.quote(t['user'])} --clean --if-exists "
-            f"{shlex.quote(t['db'])} | gzip -c"
-        )
-    return ["/bin/bash", "-c", inner]
-
-
-# restore용 적재 명령 (/tmp 덤프 → DB). gzip이면 풀어서, 아니면 그대로.
-def _load_cmd(t: dict) -> list[str]:
-    if t["db_type"] == "mysql":
-        pre = f"export MYSQL_PWD={shlex.quote(t['pw'])}; "
-        load = f"mysql -u root {shlex.quote(t['db'])}"
-    else:
-        pre = f"export PGPASSWORD={shlex.quote(t['pw'])}; "
-        load = f"psql -v ON_ERROR_STOP=0 -U {shlex.quote(t['user'])} -d {shlex.quote(t['db'])}"
-    return [
-        "/bin/bash", "-c",
-        f"{pre}set -o pipefail; "
-        f"if gzip -t {_RESTORE_PATH} 2>/dev/null; then "
-        f"  gunzip -c {_RESTORE_PATH} | {load} 2>&1; "
-        f"else "
-        f"  {load} < {_RESTORE_PATH} 2>&1; "
-        f"fi; code=$?; rm -f {_RESTORE_PATH}; echo \"{_EXIT_MARK}:$code\"",
-    ]
-
-
 # export 전 사전 검증 — DB 파드 없으면 스트리밍 시작 전에 에러로 끊기 위함.
 async def ensure_db(ns: str) -> None:
-    if app_config.exec_agent_on(app_config.EXEC_AGENT_DUMP, ns):
-        from app.exec import client as exec_client
-        t = await exec_client.db_type(ns)
-    else:
-        await _ensure_loaded()
-        async with client.ApiClient() as api:
-            t = await _detect_target(client.CoreV1Api(api), ns)
-    if not t:
+    from app.exec import client as exec_client
+
+    if not await exec_client.db_type(ns):
         raise SnapshotError("DB가 활성화돼 있지 않습니다 — DB(MySQL/PostgreSQL)를 추가한 앱에서만 스냅샷이 가능합니다.")
 
 
-# dump | gzip stdout을 청크로 yield (FastAPI StreamingResponse용).
-# EXEC_AGENT_DUMP가 켜져 있고 ns가 EXEC_AGENT_NAMESPACES에 들면 kodeploy-exec 내부 문(dump)으로 받는다. 거기선 pipefail이 있고,
-# 채널 3 exit code가 0이 아니면 예외로 끊는다 — 응답이 정상 종료되지 않아 잘린 파일이 완료로 저장되지 않는다.
+# dump | gzip stdout을 청크로 yield (FastAPI StreamingResponse용). kodeploy-exec 내부 문(dump)으로 받는다.
+# 거기선 pipefail이 있고, 채널 3 exit code가 0이 아니면 예외로 끊는다 — 응답이 정상 종료되지 않아
+# 잘린 파일이 완료로 저장되지 않는다.
 async def export_stream(ns: str, *, user_id: str = "", app_id: str = ""):
-    if app_config.exec_agent_on(app_config.EXEC_AGENT_DUMP, ns):
-        from app.exec import client as exec_client
-        try:
-            async for chunk in exec_client.dump_stream(ns, user_id=user_id, app_id=app_id):
-                yield chunk
-        except exec_client.ExecError as e:
-            raise SnapshotError(e.message) from e
-        return
+    from app.exec import client as exec_client
 
-    await _ensure_loaded()
-    async with client.ApiClient() as api:
-        t = await _detect_target(client.CoreV1Api(api), ns)
-    if not t:
-        raise SnapshotError("DB 파드를 찾을 수 없습니다.")
-
-    cmd = _dump_cmd(t)
-    async with WsApiClient() as ws_api:
-        cm = await client.CoreV1Api(ws_api).connect_get_namespaced_pod_exec(
-            name=t["pod"], namespace=ns, container=t["container"], command=cmd,
-            stderr=True, stdin=False, stdout=True, tty=False, _preload_content=False,
-        )
-        async with cm as k8s_ws:
-            async for msg in k8s_ws:
-                if msg.type == aiohttp.WSMsgType.BINARY and len(msg.data) > 1:
-                    if msg.data[0] == 1:                  # stdout(=gzip 바이트)만 흘림
-                        yield msg.data[1:]
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING,
-                    aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR,
-                ):
-                    break
-
-
-# 업로드 청크를 파드 /tmp에 기록 (cat > file). 전송 후 ws close로 stdin EOF.
-async def _write_dump(ws_api, pod: str, ns: str, container: str, chunks) -> None:
-    cmd = ["/bin/bash", "-c", f"cat > {shlex.quote(_RESTORE_PATH)}"]
-    cm = await client.CoreV1Api(ws_api).connect_get_namespaced_pod_exec(
-        name=pod, namespace=ns, container=container, command=cmd,
-        stderr=True, stdin=True, stdout=True, tty=False, _preload_content=False,
-    )
-    async with cm as k8s_ws:
-        async for chunk in chunks:
-            await k8s_ws.send_bytes(b"\x00" + chunk)   # 채널0=stdin
-        await k8s_ws.close()                            # EOF 신호 → cat 종료
-
-
-# exec 후 stdout+stderr를 끝까지 모아 텍스트로 반환 (stdin 없음 → EOF 문제 없음).
-async def _exec_capture(ws_api, pod: str, ns: str, container: str, cmd: list[str]) -> str:
-    cm = await client.CoreV1Api(ws_api).connect_get_namespaced_pod_exec(
-        name=pod, namespace=ns, container=container, command=cmd,
-        stderr=True, stdin=False, stdout=True, tty=False, _preload_content=False,
-    )
-    out = bytearray()
-    async with cm as k8s_ws:
-        async for msg in k8s_ws:
-            if msg.type == aiohttp.WSMsgType.BINARY and len(msg.data) > 1:
-                # 채널 prefix: 1=stdout, 2=stderr, 3=error/status(JSON).
-                # 채널 3은 K8s가 보내는 종료 상태(예: {"status":"Success"})라 출력에서 제외 —
-                # 안 그러면 __KD_EXIT__ 마커 뒤에 붙어 exit code 파싱이 깨짐.
-                if msg.data[0] in (1, 2):
-                    out += msg.data[1:]
-            elif msg.type in (
-                aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING,
-                aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR,
-            ):
-                break
-    return out.decode("utf-8", errors="replace")
-
-
-# 업로드 덤프(.sql 또는 .sql.gz)를 테넌트 DB에 적재. 파괴적 — 호출 전 UI 확인 필수.
-async def restore(ns: str, chunks) -> dict:
-    await _ensure_loaded()
-    async with client.ApiClient() as api:
-        t = await _detect_target(client.CoreV1Api(api), ns)
-    if not t:
-        raise SnapshotError("DB가 활성화돼 있지 않습니다 — 복원할 DB가 없습니다.")
-
-    run = _load_cmd(t)
-    async with WsApiClient() as ws_api:
-        await _write_dump(ws_api, t["pod"], ns, t["container"], _limited(chunks))
-        output = await _exec_capture(ws_api, t["pod"], ns, t["container"], run)
-
-    body, _, tail = output.rpartition(_EXIT_MARK)
-    # tail은 ":<code>" 형태. 뒤에 잡다한 게 붙어도 첫 정수 토큰만 코드로 사용.
-    code = tail.lstrip(":").strip().split()[0] if tail.strip() else ""
-    body = body.strip()
-    if code != "0":
-        raise SnapshotError(body or f"복원 실패 (exit {code or '?'})")
-    return {"ok": True, "output": body}
+    try:
+        async for chunk in exec_client.dump_stream(ns, user_id=user_id, app_id=app_id):
+            yield chunk
+    except exec_client.ExecError as e:
+        raise SnapshotError(e.message) from e
 
 
 # --- 배포 시 자동 복원 (stage → 배포 완료 후 restore) -----------------------
@@ -262,7 +88,7 @@ def _staged_path(token: str) -> str:
 
 
 # 업로드 덤프를 core 로컬 임시 디스크에 저장하고 토큰 반환.
-# 배포 요청엔 이 토큰만 실어 보내고, mysql Ready 후 restore_staged로 소비.
+# 배포 요청엔 이 토큰만 실어 보내고 DB Ready 후 restore_staged로 소비한다. 업로드 복원(POST /deploy/db/restore)도 같은 길이다.
 # stage할 때 크기와 sha256을 같이 계산해 <token>.json에 둔다 — exec 복원의 기대값(경로의 size·sha256)이다.
 async def stage_dump(chunks) -> str:
     os.makedirs(_STAGE_DIR, exist_ok=True)
@@ -342,46 +168,26 @@ async def wait_db_ready(ns: str, db_type: str, timeout: int = 180) -> bool:
     return False
 
 
-# stage된 덤프를 복원하고 임시 파일을 제거 (성공/실패 무관).
-# restore_via_exec(ns)면 kodeploy-exec 내부 문(restore 단계식)으로 보낸다. 업로드 복원도 먼저 stage를 거친다.
-# wait_exec: 새 경로면 먼저 exec Pod가 Ready가 될 때까지 최대 이만큼(초) 기다린다 — 첫 배포의 초기 복원용.
+# stage된 덤프를 kodeploy-exec 내부 문(restore 단계식)으로 복원하고 임시 파일을 제거 (성공/실패 무관).
+# wait_exec: 먼저 exec Pod가 Ready가 될 때까지 최대 이만큼(초) 기다린다 — 첫 배포의 초기 복원용(exec와 DB가 같이 뜬다).
 # 시간이 지나도 Ready가 아니면 그래도 한 번 보내고, 실패하면 그 실패로 끝난다.
 async def restore_staged(ns: str, token: str, *, user_id: str = "", app_id: str = "", wait_exec: float = 0) -> dict:
     path = _staged_path(token)
     if not os.path.exists(path):
         raise SnapshotError("초기 데이터 파일을 찾을 수 없습니다 (만료 또는 중복 소비)")
 
-    if restore_via_exec(ns):
-        try:
-            if wait_exec:
-                from app.exec import client as exec_client
-
-                if not await exec_client.wait_ready(ns, wait_exec):
-                    exec_client.log_event(event="exec_not_ready", ns=ns, op="restore", waited_s=wait_exec)
-            return await _restore_via_exec(ns, path, user_id, app_id)
-        finally:
-            discard_staged(token)
-
-    async def _file_chunks():
-        with open(path, "rb") as f:
-            while True:
-                b = f.read(256 * 1024)
-                if not b:
-                    break
-                yield b
-
     try:
-        return await restore(ns, _file_chunks())
+        if wait_exec:
+            from app.exec import client as exec_client
+
+            if not await exec_client.wait_ready(ns, wait_exec):
+                exec_client.log_event(event="exec_not_ready", ns=ns, op="restore", waited_s=wait_exec)
+        return await _restore_via_exec(ns, path, user_id, app_id)
     finally:
         discard_staged(token)
 
 
-# --- kodeploy-exec 복원 (EXEC_AGENT_RESTORE) ---------------------------------
-
-def restore_via_exec(ns: str) -> bool:
-    """EXEC_AGENT_RESTORE가 켜져 있고 ns가 EXEC_AGENT_NAMESPACES에 드는가 (업로드 복원 라우트도 같은 판단을 쓴다)."""
-    return app_config.exec_agent_on(app_config.EXEC_AGENT_RESTORE, ns)
-
+# --- kodeploy-exec 복원 -------------------------------------------------------
 
 # db_changed=false인 실패(precheck·backup·upload·verify)면 다시 보낸다.
 # 이전 복원이 미해결 상태(unresolved_backups)면 다시 보내도 같은 거부라 보내지 않는다.

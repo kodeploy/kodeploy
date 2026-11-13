@@ -38,12 +38,11 @@ export default function DbTerminalPanel({ bare = false }) {
       if (!disposed) fitAddon.fit();
     });
 
-    // 옛 경로(core 중계)와 새 경로(kodeploy-exec, 플래그)를 같은 모양으로 연다 — lib/terminalSocket.js.
+    // core에서 티켓을 받아 kodeploy-exec 공개 문에 붙는다 — lib/terminalSocket.js.
     // 연결되면 현재 xterm 크기를 보내 파드 pty 크기를 맞춤 → mysql 등이 실제 폭으로 출력 정렬
     const sock = openTerminalSocket({
       term,
       target: "db",
-      legacyPath: "/deploy/app/db-terminal",
       onOpen: () => term.write("\x1b[1;34mDB 연결됨\x1b[0m\r\n"),
       onClose: (reason) => term.write(`\r\n\x1b[1;31m연결 종료${reason ? `: ${reason}` : ""}\x1b[0m\r\n`),
       onError: (message) => term.write(`\r\n\x1b[1;31m연결 실패${message ? `: ${message}` : ""}\x1b[0m\r\n`),

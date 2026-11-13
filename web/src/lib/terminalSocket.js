@@ -1,11 +1,10 @@
-// 터미널 WebSocket — 옛 경로(core가 중계, 텍스트)와 새 경로(kodeploy-exec, 채널 프레임)를 같은 모양으로 감싼다.
-// 이 앱에 새 경로가 켜져 있으면(/apps/{id}/exec-features — 플래그 EXEC_AGENT_TERMINAL + 카나리 ns 목록)
-// core에서 티켓을 받아 exec 공개 문에 바로 붙는다. 아니면 옛 경로.
+// 터미널 WebSocket — core에서 1회용 티켓을 받아 그 테넌트의 kodeploy-exec 공개 문에 바로 붙는다.
+// (core가 직접 중계하던 옛 경로는 없다. core에는 pods/exec 권한이 없다.)
 //
-// 새 경로 프레임: 바이너리, 첫 바이트가 채널 번호
+// 프레임: 바이너리, 첫 바이트가 채널 번호
 //   0 stdin, 1 stdout, 2 stderr, 3 종료 상태 JSON, 4 창 크기 {"Width","Height"}
 // 바이트는 디코딩하지 않고 Uint8Array 그대로 xterm에 쓴다 (xterm이 조각난 UTF-8도 이어 붙인다).
-import { createExecTicket, getExecFeatures, hasActiveApp, wsPath } from "../api/deploy.js";
+import { createExecTicket, hasActiveApp } from "../api/deploy.js";
 
 const CH_STDIN = 0;
 const CH_STDOUT = 1;
@@ -49,11 +48,10 @@ function exitCode(payload) {
   }
 }
 
-// term: xterm 인스턴스. target: app | db | redis. legacyPath: 옛 경로(/deploy/app/...-terminal).
-// onOpen() · onClose(reason) · onError(message) — 화면 문구는 호출하는 쪽이 지금처럼 쓴다.
-export function openTerminalSocket({ term, target, legacyPath, onOpen, onClose, onError }) {
+// term: xterm 인스턴스. target: app | db | redis.
+// onOpen() · onClose(reason) · onError(message) — 화면 문구는 호출하는 쪽이 쓴다.
+export function openTerminalSocket({ term, target, onOpen, onClose, onError }) {
   let ws = null;
-  let modern = false;
   let disposed = false;
   let lastExit = null;
 
@@ -61,33 +59,29 @@ export function openTerminalSocket({ term, target, legacyPath, onOpen, onClose, 
 
   const resize = () => {
     if (!ready()) return;
-    if (modern) ws.send(frame(CH_RESIZE, enc.encode(JSON.stringify({ Width: term.cols, Height: term.rows }))));
-    else ws.send(JSON.stringify({ __resize: { cols: term.cols, rows: term.rows } }));
+    ws.send(frame(CH_RESIZE, enc.encode(JSON.stringify({ Width: term.cols, Height: term.rows }))));
   };
 
   const input = (data) => {
     if (!ready()) return;
-    if (modern) ws.send(frame(CH_STDIN, enc.encode(data)));
-    else ws.send(data);
+    ws.send(frame(CH_STDIN, enc.encode(data)));
   };
 
   const attach = (socket) => {
     ws = socket;
+    ws.binaryType = "arraybuffer";
     ws.onopen = () => {
       onOpen?.();
       resize();
     };
-    ws.onmessage = modern
-      ? (e) => {
-          const b = new Uint8Array(e.data);
-          if (b.length === 0) return;
-          const payload = b.subarray(1);
-          if (b[0] === CH_STDOUT || b[0] === CH_STDERR) term.write(payload);
-          else if (b[0] === CH_STATUS) lastExit = exitCode(payload);
-        }
-      : (e) => term.write(e.data);
+    ws.onmessage = (e) => {
+      const b = new Uint8Array(e.data);
+      if (b.length === 0) return;
+      const payload = b.subarray(1);
+      if (b[0] === CH_STDOUT || b[0] === CH_STDERR) term.write(payload);
+      else if (b[0] === CH_STATUS) lastExit = exitCode(payload);
+    };
     ws.onclose = (e) => {
-      if (!modern) return onClose?.(e.reason);
       const parts = [];
       if (CLOSE_TEXT[e.code]) parts.push(CLOSE_TEXT[e.code]);
       if (lastExit) parts.push(`exit ${lastExit}`);
@@ -97,19 +91,15 @@ export function openTerminalSocket({ term, target, legacyPath, onOpen, onClose, 
   };
 
   (async () => {
-    const features = await getExecFeatures();
-    if (disposed) return;
-    if (!features.terminal || !hasActiveApp()) {
-      attach(new WebSocket(wsPath(legacyPath)));
+    // 티켓은 앱마다 받는다 — 앱 화면(/apps/:appId/...) 밖에서는 열 수 없다
+    if (!hasActiveApp()) {
+      onError?.("앱 화면에서 열어 주세요");
       return;
     }
     try {
       const t = await createExecTicket(target, term.cols, term.rows);
       if (disposed) return;
-      modern = true;
-      const socket = new WebSocket(t.url, [t.protocol, `ticket.${t.ticket}`]);
-      socket.binaryType = "arraybuffer";
-      attach(socket);
+      attach(new WebSocket(t.url, [t.protocol, `ticket.${t.ticket}`]));
     } catch (err) {
       if (!disposed) onError?.(err.message);
     }

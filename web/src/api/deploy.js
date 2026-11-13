@@ -14,26 +14,7 @@ export function scoped(path, appId = activeAppId) {
   return appId && path.startsWith("/deploy") ? `/apps/${appId}${path}` : path;
 }
 
-// WebSocket 경로 (터미널). 같은 규칙을 쓴다.
-export function wsPath(path) {
-  return `${API_BASE.replace(/^http/, "ws")}${scoped(path)}`;
-}
-
-// 지금 앱의 터미널이 새 경로(kodeploy-exec)를 쓸지 — 서버 플래그 EXEC_AGENT_TERMINAL과 카나리 ns 목록.
-// 앱마다 한 번만 묻고 기억한다. 앱 화면 밖이거나 못 물으면(옛 core라 404 포함) 옛 경로로 간다.
-const execFeatures = new Map();
-export function getExecFeatures() {
-  if (!activeAppId) return Promise.resolve({ terminal: false });
-  if (!execFeatures.has(activeAppId)) {
-    execFeatures.set(
-      activeAppId,
-      request(`/apps/${activeAppId}/exec-features`).catch(() => ({ terminal: false })),
-    );
-  }
-  return execFeatures.get(activeAppId);
-}
-
-// 지금 보고 있는 앱이 있어야 티켓을 받을 수 있다 (앱 화면 밖이면 옛 경로).
+// 지금 보고 있는 앱이 있어야 터미널 티켓을 받을 수 있다 (앱 화면 밖이면 열지 않는다).
 export function hasActiveApp() {
   return Boolean(activeAppId);
 }

@@ -12,9 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from starlette.websockets import WebSocketDisconnect
 
-from app import config
 from app.apps.model import App
 from app.auth.deps import get_current_user_optional
 from app.auth.model import User
@@ -148,30 +146,13 @@ def test_invalid_runtime_rejected_by_schema():
     assert res.status_code == 422              # Literal 스키마가 차단
 
 
-# --- WebSocket Origin 검증 (CSWSH 방어) ---
+# --- 터미널은 kodeploy-exec 공개 문으로만 (core의 옛 터미널 WebSocket은 지웠다) ---
+# Origin 검사(CSWSH 방어)는 티켓 발급(test_exec_client)과 exec 공개 문(exec/internal/api)에서 한다.
 
-@pytest.mark.parametrize("path", [
-    "/deploy/app/terminal",
-    "/deploy/app/db-terminal",
-    "/deploy/app/redis-terminal",
-])
-def test_ws_rejects_bad_origin(path):
-    client = make_client()
-    with pytest.raises(WebSocketDisconnect) as exc:
-        with client.websocket_connect(path, headers={"origin": "https://evil.example"}):
-            pass
-    assert exc.value.code == 4403
+def test_no_terminal_websockets_in_core():
+    from starlette.routing import WebSocketRoute
 
-
-def test_ws_rejects_missing_cookie_with_allowed_origin():
-    client = make_client()
-    with pytest.raises(WebSocketDisconnect) as exc:
-        with client.websocket_connect(
-            "/deploy/app/terminal",
-            headers={"origin": config.ALLOWED_ORIGINS[0]},
-        ):
-            pass
-    assert exc.value.code == 4001              # Origin 통과 후 인증에서 거절
+    assert [r.path for r in make_client().app.routes if isinstance(r, WebSocketRoute)] == []
 
 
 # --- 환경변수·도메인 변경은 빌더(config)로 반영한다 ---

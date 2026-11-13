@@ -46,13 +46,3 @@ data:
   #       200k/일 ≈ 하루 ~20건. 개인 운영 규모에서 하루 20건 넘게 실패하면 그 자체가 이상 신호다.
   # 0으로 두면 무제한 — 예전 동작. 크레딧 소진으로 전 진단이 조용히 api_error가 된 적이 있어 상한을 둔다.
   LLM_DAILY_TOKEN_BUDGET: "200000"
-  # Pod exec를 테넌트별 kodeploy-exec로 보낸다 (hack/exec-e2e.md). 2026-11-13 카나리(dailo)에서 체크리스트 1~7,
-  # 전 테넌트로 넓힌 뒤 터미널 3종(Redis·PostgreSQL 포함)과 새 앱 초기 복원을 확인하고 전부 켰다.
-  # 기능 하나를 끄면(키 삭제 후 core 재시작) 그 기능만 곧바로 옛 경로로 돌아간다.
-  # EXEC_AGENT_NAMESPACES는 kodeploy-charts platform/exec.yaml rollout과 맞춘다 — 넓힐 때 차트 먼저, 좁힐 때 core 먼저.
-  EXEC_AGENT_NAMESPACES: "*"
-  EXEC_AGENT_QUERY: "true"
-  EXEC_AGENT_BROWSE: "true"
-  EXEC_AGENT_DUMP: "true"
-  EXEC_AGENT_RESTORE: "true"
-  EXEC_AGENT_TERMINAL: "true"

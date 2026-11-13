@@ -1,33 +1,27 @@
 """DB 탐색 — SQL을 치지 않고 테이블을 골라 행을 보고, 컬럼·필터·정렬을 화면에서 고른다.
 
-dbquery와 같은 길을 쓴다(DB 파드 exec + CLI 기계가독 출력, 새 드라이버·core→DB 직결 없음).
+dbquery와 같은 길을 쓴다(kodeploy-exec 내부 문 browse → DB 파드의 CLI 기계가독 출력, 새 드라이버·core→DB 직결 없음).
 다른 점은 SQL을 서버가 구조화된 요청에서 만든다는 것뿐이다.
 
 - 식별자(스키마·테이블·컬럼)는 DB 규칙대로 인용한다 — pg "…"(" 두 번), mysql `…`(` 두 번).
   없는 이름이면 DB가 오류로 답하므로 카탈로그를 먼저 읽어 대조하는 왕복을 두지 않는다.
 - 값은 문자열 리터럴로 인용한다 — ' 는 두 번, mysql은 \\ 도 두 번. 인용 규칙이 접속 설정에 따라
   흔들리지 않게 pg는 standard_conforming_strings=on, mysql은 NO_BACKSLASH_ESCAPES를 뺀 세션으로 돈다.
-- 탐색은 읽기 전용 + 시간 제한 세션에서만 돈다. 인용이 뚫려도 쓰기는 나가지 않게 한 겹 더 둔다.
+- 탐색은 읽기 전용 + 시간 제한(15초) 세션에서만 돈다. 인용이 뚫려도 쓰기는 나가지 않게 한 겹 더 둔다.
+  세션 옵션은 exec `ops.Browse`가 건다(mysql --init-command, pg PGOPTIONS).
 
 화면의 "SQL로 보기"가 보여 주는 SQL은 실제로 돈 것과 같다(긴 값을 자르는 감싸기만 뺐다).
 """
 
-import shlex
 import time
 
-from kubernetes_asyncio import client
-
-from app import config
-from app.deploy.console.dbquery import QueryError, _exec, _parse_csv, _parse_mysql
-from app.deploy.console.snapshots import _detect_target, _ensure_loaded
+from app.deploy.console.dbquery import QueryError, _parse_csv, _parse_mysql
 from app.exec import client as exec_client
 
 # 탐색 한 페이지의 행 수 — 표를 훑는 화면이라 SQL 콘솔(500)보다 작게.
 PAGE_SIZE = 100
 # 셀 하나에 실어 보내는 최대 글자 수. 긴 본문·JSON·BLOB 열이 있는 표도 한 페이지가 가볍게.
 CELL_LIMIT = 2000
-# 탐색 쿼리 시간 제한 — 인덱스 없는 열로 큰 표를 걸러도 DB를 오래 붙잡지 않게.
-TIMEOUT_MS = 15000
 
 MAX_FILTERS = 10
 MAX_SORT = 4
@@ -68,70 +62,33 @@ def _contains_pattern(value: str) -> str:
 
 # ── 실행 ────────────────────────────────────────────────────────────────────
 
-# 읽기 전용·시간 제한 세션으로 SQL 한 문장을 돈다. NULL은 두 DB 모두 리터럴 "NULL"로 나온다.
-def _browse_cmd(t: dict, sql: str) -> list[str]:
-    if t["db_type"] == "mysql":
-        init = (
-            "SET SESSION transaction_read_only = ON, "
-            f"SESSION max_execution_time = {TIMEOUT_MS}, "
-            "SESSION sql_mode = REPLACE(@@SESSION.sql_mode, 'NO_BACKSLASH_ESCAPES', '')"
-        )
-        inner = (
-            f"export MYSQL_PWD={shlex.quote(t['pw'])}; "
-            f"exec mysql --batch --binary-as-hex --default-character-set=utf8mb4 "
-            f"--init-command={shlex.quote(init)} "
-            f"-u root {shlex.quote(t['db'])} -e {shlex.quote(sql)}"
-        )
-    else:  # postgres — 접속 옵션으로 세션 기본값을 고정(-X: psqlrc 무시)
-        options = (
-            "-c default_transaction_read_only=on "
-            f"-c statement_timeout={TIMEOUT_MS} "
-            "-c standard_conforming_strings=on"
-        )
-        inner = (
-            f"export PGPASSWORD={shlex.quote(t['pw'])} PGOPTIONS={shlex.quote(options)}; "
-            f"exec psql -X --csv -P null=NULL -U {shlex.quote(t['user'])} "
-            f"-d {shlex.quote(t['db'])} -c {shlex.quote(sql)}"
-        )
-    return ["/bin/bash", "-c", inner]
-
-
 # 탐색 SQL 바이트 상한 (exec ops.BrowseMaxBytes와 같은 고정값). SQL은 결국 -e/-c 인자 하나로 들어가는데,
 # 인자 하나의 한도(MAX_ARG_STRLEN = 32 × 페이지 크기)는 노드 커널 페이지 크기에 따라 128KiB~2MiB로 달라진다.
 # 가장 작은 경우(131072바이트)보다 아래로 고정해 노드와 상관없이 같게 한다. 원본은 넘으면 exec가 E2BIG로 실패했다.
 MAX_SQL_BYTES = exec_client.BROWSE_MAX_BYTES
 
 
-async def _target(ns: str) -> dict:
-    if config.exec_agent_on(config.EXEC_AGENT_BROWSE, ns):
-        # 새 경로는 DB 종류만 알면 된다 (비밀번호는 exec가 컨테이너 env에서 읽는다)
-        kind = await exec_client.db_type(ns)
-        t = {"db_type": kind} if kind else None
-    else:
-        await _ensure_loaded()
-        async with client.ApiClient() as api:
-            t = await _detect_target(client.CoreV1Api(api), ns)
-    if not t:
+async def _db_type(ns: str) -> str:
+    # DB 종류만 알면 된다 (비밀번호는 exec가 컨테이너 env에서 읽는다)
+    kind = await exec_client.db_type(ns)
+    if not kind:
         raise QueryError(
             "DB가 활성화돼 있지 않습니다 — DB(MySQL/PostgreSQL)를 추가한 앱에서만 쓸 수 있습니다."
         )
-    return t
+    return kind
 
 
-# EXEC_AGENT_BROWSE가 켜져 있고 ns가 EXEC_AGENT_NAMESPACES에 들면 kodeploy-exec 내부 문(browse)으로 돌린다. 옵션(읽기 전용·시간 제한)은 같다.
-async def _run(ns: str, t: dict, sql: str, user_id: str = "", app_id: str = "") -> tuple[list[str], list[list[str]], int]:
+# kodeploy-exec 내부 문(browse)으로 돌린다 — 읽기 전용·시간 제한 세션.
+async def _run(ns: str, kind: str, sql: str, user_id: str = "", app_id: str = "") -> tuple[list[str], list[list[str]], int]:
     started = time.perf_counter()
-    if config.exec_agent_on(config.EXEC_AGENT_BROWSE, ns):
-        try:
-            stdout, stderr, code = await exec_client.run_capture(ns, "browse", sql, user_id=user_id, app_id=app_id)
-        except exec_client.ExecError as e:
-            raise QueryError(e.message)
-    else:
-        stdout, stderr, code = await _exec(ns, t, _browse_cmd(t, sql))
+    try:
+        stdout, stderr, code = await exec_client.run_capture(ns, "browse", sql, user_id=user_id, app_id=app_id)
+    except exec_client.ExecError as e:
+        raise QueryError(e.message)
     duration_ms = int((time.perf_counter() - started) * 1000)
     if code != 0:
         raise QueryError(stderr.strip() or f"조회 실패 (exit {code})")
-    if t["db_type"] == "mysql":
+    if kind == "mysql":
         columns, rows = _parse_mysql(stdout)
     else:
         columns, rows = _parse_csv(stdout)
@@ -202,10 +159,10 @@ def _catalog_tables(db_type: str, rows: list[list[str]]) -> list[dict]:
 
 
 async def list_tables(ns: str, *, user_id: str = "", app_id: str = "") -> dict:
-    t = await _target(ns)
-    sql = _MYSQL_CATALOG if t["db_type"] == "mysql" else _PG_CATALOG
-    _, rows, _ = await _run(ns, t, sql.strip(), user_id, app_id)
-    return {"db_type": t["db_type"], "tables": _catalog_tables(t["db_type"], rows)}
+    kind = await _db_type(ns)
+    sql = _MYSQL_CATALOG if kind == "mysql" else _PG_CATALOG
+    _, rows, _ = await _run(ns, kind, sql.strip(), user_id, app_id)
+    return {"db_type": kind, "tables": _catalog_tables(kind, rows)}
 
 
 # ── 행 보기 ─────────────────────────────────────────────────────────────────
@@ -281,16 +238,15 @@ def build_select(db_type: str, spec: dict) -> tuple[str, str]:
 
 
 async def browse(ns: str, spec: dict, *, user_id: str = "", app_id: str = "") -> dict:
-    t = await _target(ns)
-    shown_sql, exec_sql = build_select(t["db_type"], spec)
-    # 플래그와 상관없이 검사한다 — 옛 경로에서도 E2BIG 실패 대신 이 오류가 나간다
+    kind = await _db_type(ns)
+    shown_sql, exec_sql = build_select(kind, spec)
     if len(exec_sql.encode("utf-8")) > MAX_SQL_BYTES:
         raise QueryError(f"조회 조건이 너무 깁니다 (SQL 최대 {MAX_SQL_BYTES}바이트) — 컬럼이나 조건을 줄여 주세요")
-    columns, rows, duration_ms = await _run(ns, t, exec_sql, user_id, app_id)
+    columns, rows, duration_ms = await _run(ns, kind, exec_sql, user_id, app_id)
     has_more = len(rows) > PAGE_SIZE
     rows = rows[:PAGE_SIZE]
     return {
-        "db_type": t["db_type"],
+        "db_type": kind,
         "columns": columns,
         "rows": rows,
         "row_count": len(rows),

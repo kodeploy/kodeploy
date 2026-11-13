@@ -1,31 +1,22 @@
 """DB 콘솔 — 단발성 SQL 실행 후 구조화된 결과(columns/rows)를 반환.
 
-raw 터미널(terminal.py)은 mysql/psql CLI에 직접 붙어 ASCII 표를 그리지만, 패널 폭에
+raw DB 터미널은 mysql/psql CLI에 직접 붙어 ASCII 표를 그리지만, 패널 폭에
 따라 깨진다. 여기서는 CLI를 **기계가독 포맷**으로 돌려 백엔드가 파싱한 뒤 JSON으로 주고,
-프론트가 HTML 표로 렌더한다. 격리/네트워크 모델은 그대로 — snapshots와 동일하게 DB 파드에
-exec하고, 새 드라이버나 core→DB 직결 경로를 만들지 않는다.
+프론트가 HTML 표로 렌더한다. 실행은 그 테넌트의 kodeploy-exec 내부 문(query)이 DB 파드에서 한다 —
+새 드라이버나 core→DB 직결 경로를 만들지 않는다. 명령은 exec `ops.Query`가 조립한다.
 
 - mysql : `mysql --batch`     → TAB 구분(테두리 없음), 첫 줄이 컬럼명.
 - pg    : `psql --csv`        → CSV(첫 줄이 컬럼명).
 
-SQL은 `bash -c` 안에서 `-e`/`-c` 인자로 넘기되 shlex.quote로 감싸 셸 이스케이프를
-회피한다(snapshots._dump_cmd와 동일 철학). 매 호출이 stateless exec이라 트랜잭션/USE
+SQL은 stdin으로 넘어가 셸 문자열에 들어가지 않는다. 매 호출이 stateless exec이라 트랜잭션/USE
 같은 세션 상태는 유지되지 않는다(그게 필요하면 raw 터미널 사용).
 """
 
 import csv
 import io
-import json
 import re
-import shlex
 import time
 
-import aiohttp
-from kubernetes_asyncio import client
-from kubernetes_asyncio.stream import WsApiClient
-
-from app import config
-from app.deploy.console.snapshots import _detect_target, _ensure_loaded
 from app.exec import client as exec_client
 
 # 한 페이지에 받아올 행 수. SELECT/WITH 쿼리는 OFFSET 페이지네이션으로 다음 페이지를 더
@@ -52,71 +43,6 @@ def _wrappable(sql: str) -> bool:
         return False
     head = body[_LEADING_NOISE.match(body).end():]
     return bool(re.match(r"(?is)(?:select|with)\b", head))
-
-
-# exec 명령 빌더. db_type별로 기계가독 출력 옵션을 건다.
-def _query_cmd(t: dict, sql: str) -> list[str]:
-    if t["db_type"] == "mysql":
-        inner = (
-            f"export MYSQL_PWD={shlex.quote(t['pw'])}; "
-            f"exec mysql --batch --default-character-set=utf8mb4 "
-            f"-u root {shlex.quote(t['db'])} -e {shlex.quote(sql)}"
-        )
-    else:  # postgres
-        inner = (
-            f"export PGPASSWORD={shlex.quote(t['pw'])}; "
-            f"exec psql --csv -U {shlex.quote(t['user'])} "
-            f"-d {shlex.quote(t['db'])} -c {shlex.quote(sql)}"
-        )
-    return ["/bin/bash", "-c", inner]
-
-
-# exec status 채널(3)의 JSON에서 exit code 추출. Success면 0, 아니면 ExitCode cause 파싱.
-def _parse_exit(payload: bytes) -> int:
-    try:
-        status = json.loads(payload.decode("utf-8", errors="replace"))
-    except ValueError:
-        return 0
-    if status.get("status") == "Success":
-        return 0
-    for cause in status.get("details", {}).get("causes", []):
-        if cause.get("reason") == "ExitCode":
-            try:
-                return int(cause.get("message", "1"))
-            except (ValueError, TypeError):
-                return 1
-    return 1
-
-
-# 단발 exec — stdout / stderr / exit_code를 분리해 수집(채널 1/2/3).
-async def _exec(ns: str, t: dict, cmd: list[str]) -> tuple[str, str, int]:
-    async with WsApiClient() as ws_api:
-        cm = await client.CoreV1Api(ws_api).connect_get_namespaced_pod_exec(
-            name=t["pod"], namespace=ns, container=t["container"], command=cmd,
-            stderr=True, stdin=False, stdout=True, tty=False, _preload_content=False,
-        )
-        out, err = bytearray(), bytearray()
-        exit_code = 0
-        async with cm as ws:
-            async for msg in ws:
-                if msg.type == aiohttp.WSMsgType.BINARY and len(msg.data) > 1:
-                    ch, data = msg.data[0], msg.data[1:]
-                    if ch == 1:
-                        out += data
-                    elif ch == 2:
-                        err += data
-                    elif ch == 3:                     # 종료 상태(JSON)
-                        exit_code = _parse_exit(data)
-                elif msg.type in (
-                    aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSING,
-                    aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.ERROR,
-                ):
-                    break
-    return (
-        out.decode("utf-8", errors="replace"),
-        err.decode("utf-8", errors="replace"),
-        exit_code,
-    )
 
 
 # mysql --batch 값 unescape (\t \n \\ \0). NULL은 리터럴 "NULL"로 와서 None과 구분 불가 —
@@ -149,7 +75,6 @@ def _parse_csv(stdout: str) -> tuple[list[str], list[list[str]]]:
 
 # 고수준 API — router가 호출. tenant ns의 DB 파드에 SQL을 돌려 구조화된 결과를 반환.
 # offset: SELECT/WITH 쿼리에서 다음 페이지를 보기 위한 시작 위치(페이지네이션). 그 외는 무시.
-# EXEC_AGENT_QUERY가 켜져 있고 ns가 EXEC_AGENT_NAMESPACES에 들면 kodeploy-exec 내부 문(query)으로 돌린다. 명령·옵션·파서는 같다.
 async def run_query(ns: str, sql: str, offset: int = 0, *, user_id: str = "", app_id: str = "") -> dict:
     sql = (sql or "").strip()
     if not sql:
@@ -158,16 +83,9 @@ async def run_query(ns: str, sql: str, offset: int = 0, *, user_id: str = "", ap
         raise QueryError(f"SQL이 너무 깁니다 (최대 {MAX_SQL_LENGTH}자)")
     offset = max(0, int(offset))
 
-    use_exec = config.exec_agent_on(config.EXEC_AGENT_QUERY, ns)
-    if use_exec:
-        # 새 경로는 DB 종류만 알면 된다 (비밀번호는 exec가 컨테이너 env에서 읽는다)
-        kind = await exec_client.db_type(ns)
-        t = {"db_type": kind} if kind else None
-    else:
-        await _ensure_loaded()
-        async with client.ApiClient() as api:
-            t = await _detect_target(client.CoreV1Api(api), ns)
-    if not t:
+    # DB 종류만 알면 된다 (비밀번호는 exec가 컨테이너 env에서 읽는다)
+    kind = await exec_client.db_type(ns)
+    if not kind:
         raise QueryError(
             "DB가 활성화돼 있지 않습니다 — DB(MySQL/PostgreSQL)를 추가한 앱에서만 콘솔을 쓸 수 있습니다."
         )
@@ -188,19 +106,16 @@ async def run_query(ns: str, sql: str, offset: int = 0, *, user_id: str = "", ap
         exec_sql = sql
 
     started = time.perf_counter()
-    if use_exec:
-        try:
-            stdout, stderr, code = await exec_client.run_capture(ns, "query", exec_sql, user_id=user_id, app_id=app_id)
-        except exec_client.ExecError as e:
-            raise QueryError(e.message)
-    else:
-        stdout, stderr, code = await _exec(ns, t, _query_cmd(t, exec_sql))
+    try:
+        stdout, stderr, code = await exec_client.run_capture(ns, "query", exec_sql, user_id=user_id, app_id=app_id)
+    except exec_client.ExecError as e:
+        raise QueryError(e.message)
     duration_ms = int((time.perf_counter() - started) * 1000)
 
     if code != 0:
         raise QueryError(stderr.strip() or f"쿼리 실패 (exit {code})")
 
-    if t["db_type"] == "mysql":
+    if kind == "mysql":
         columns, rows = _parse_mysql(stdout)
     else:
         columns, rows = _parse_csv(stdout)
@@ -216,7 +131,7 @@ async def run_query(ns: str, sql: str, offset: int = 0, *, user_id: str = "", ap
             rows = rows[:PAGE_SIZE]
 
     return {
-        "db_type": t["db_type"],
+        "db_type": kind,
         "columns": columns,
         "rows": rows,
         "row_count": len(rows),

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, WebSocket
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -14,12 +14,12 @@ from app.apps import sharing
 from app.apps.model import App
 from app.auth.deps import get_current_user
 from app.auth.model import User
-from app.auth import github_app, service as auth_service
+from app.auth import github_app
 from app.deploy import crud, status
 from app.builder import client as builder
 from app.deploy.build import github, pipeline, v2, validation
 from app.deploy.build.naming import repo_key
-from app.deploy.console import dbbrowse, dbquery, logs, metrics, snapshots, terminal
+from app.deploy.console import dbbrowse, dbquery, logs, metrics, snapshots
 from app.deploy.routing import hostnames
 from app.deploy.stack import env, resources
 from app.deploy.model import Build, SavedQuery
@@ -329,117 +329,8 @@ def app_metrics(
     return metrics.fetch_app_metrics(app.namespace, app.name, range)
 
 
-# WebSocket은 CORS·SameSite 보호 밖이라(브라우저가 자동 차단 안 함) Origin을 서버가
-# 직접 검증해야 한다. 허용 목록(CORS와 동일)에 없으면 핸드셰이크 거절 — CSWSH(교차사이트
-# WebSocket 하이재킹) 방지. 브라우저는 WS에 Origin을 항상 붙이고 JS가 위조 못 하므로
-# Origin 없음(비-브라우저)도 거절 — 이 WS는 web 프론트 전용.
-def _ws_origin_allowed(ws: WebSocket) -> bool:
-    return ws.headers.get("origin") in config.ALLOWED_ORIGINS
-
-
-# WebSocket이 가리키는 앱 — /apps/{app_id}/deploy/... 면 그 앱(주인 단계만 — 터미널은 주인 전용), 옛 경로면
-# 유저의 첫 앱. root는 남의 앱 터미널에도 들어오고, 그 접속을 기록한다.
-def _ws_app(db: Session, ws: WebSocket, user_id: uuid.UUID) -> App | None:
-    raw = ws.path_params.get("app_id")
-    if raw is None:
-        return apps_service.get_user_app(db, user_id)
-    user = db.get(User, user_id)
-    try:
-        found = sharing.access_for(db, user, uuid.UUID(raw)) if user is not None else None
-    except ValueError:
-        return None
-    if found is None or found[1] != "owner":
-        return None
-    app, _, by_admin = found
-    if by_admin:
-        audit.record(db, user, audit.action_of(ws), app=app)
-    return app
-
-
-# Pod exec WebSocket — xterm.js 프론트와 양방향. cookie로 인증.
-@router.websocket("/app/terminal")
-async def app_terminal(ws: WebSocket):
-    if not _ws_origin_allowed(ws):
-        await ws.close(code=4403, reason="origin not allowed")
-        return
-    sid = ws.cookies.get("kd_session")
-    if not sid:
-        await ws.close(code=4001, reason="인증 필요")
-        return
-    from app.shared.db import SessionLocal
-    db = SessionLocal()
-    try:
-        sess = auth_service.get_active_session(db, sid)
-        if not sess:
-            await ws.close(code=4001, reason="세션 만료")
-            return
-        app = _ws_app(db, ws, sess.user_id)
-        if not app:
-            await ws.close(code=4002, reason="앱 없음")
-            return
-        tenant_id = app.namespace
-        app_name = app.name
-    finally:
-        db.close()
-    await terminal.handle_terminal(ws, tenant_id, app_name)
-
-
-# DB Pod exec WebSocket — mysql/psql CLI. cookie 인증.
-@router.websocket("/app/db-terminal")
-async def app_db_terminal(ws: WebSocket):
-    if not _ws_origin_allowed(ws):
-        await ws.close(code=4403, reason="origin not allowed")
-        return
-    sid = ws.cookies.get("kd_session")
-    if not sid:
-        await ws.close(code=4001, reason="인증 필요")
-        return
-    from app.shared.db import SessionLocal
-    db = SessionLocal()
-    try:
-        sess = auth_service.get_active_session(db, sid)
-        if not sess:
-            await ws.close(code=4001, reason="세션 만료")
-            return
-        app = _ws_app(db, ws, sess.user_id)
-        if not app:
-            await ws.close(code=4002, reason="앱 없음")
-            return
-        tenant_id = app.namespace
-    finally:
-        db.close()
-    await terminal.handle_db_terminal(ws, tenant_id)
-
-
-# Redis Pod exec WebSocket — redis-cli. cookie 인증. db-terminal과 동일 격리/검증.
-@router.websocket("/app/redis-terminal")
-async def app_redis_terminal(ws: WebSocket):
-    if not _ws_origin_allowed(ws):
-        await ws.close(code=4403, reason="origin not allowed")
-        return
-    sid = ws.cookies.get("kd_session")
-    if not sid:
-        await ws.close(code=4001, reason="인증 필요")
-        return
-    from app.shared.db import SessionLocal
-    db = SessionLocal()
-    try:
-        sess = auth_service.get_active_session(db, sid)
-        if not sess:
-            await ws.close(code=4001, reason="세션 만료")
-            return
-        app = _ws_app(db, ws, sess.user_id)
-        if not app:
-            await ws.close(code=4002, reason="앱 없음")
-            return
-        tenant_id = app.namespace
-    finally:
-        db.close()
-    await terminal.handle_redis_terminal(ws, tenant_id)
-
-
 # DB 콘솔 — 단발 SQL 실행 후 구조화된 결과(columns/rows) 반환. 표 UI가 렌더.
-# raw 터미널(/app/db-terminal)과 같은 exec 인프라를 쓰되 결과를 JSON으로 파싱해 돌려줌.
+# 실행은 kodeploy-exec 내부 문(query)이 하고, 결과를 JSON으로 파싱해 돌려줌.
 # /{build_id} 핸들러보다 위에 등록해야 "app"이 build_id로 잡히지 않음.
 @router.post("/app/db/query")
 async def db_query(
@@ -846,11 +737,9 @@ async def db_restore(
             yield data
 
     try:
-        if snapshots.restore_via_exec(tenant_id):
-            # 새 경로: 업로드도 stage를 먼저 거친다 — 크기·sha256(exec의 기대값)을 알고, 재시도에 다시 보낼 수 있다
-            token = await snapshots.stage_dump(_chunks())
-            return await snapshots.restore_staged(tenant_id, token, user_id=str(user.id), app_id=str(app.id))
-        return await snapshots.restore(tenant_id, _chunks())
+        # 업로드도 stage를 먼저 거친다 — 크기·sha256(exec의 기대값)을 알고, 재시도에 다시 보낼 수 있다
+        token = await snapshots.stage_dump(_chunks())
+        return await snapshots.restore_staged(tenant_id, token, user_id=str(user.id), app_id=str(app.id))
     except snapshots.SnapshotError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
