@@ -63,10 +63,13 @@ func Shell(app string) Cmd {
 }
 
 // DBConsole은 mysql·psql 대화형 콘솔이다. 원본은 MySQL 비밀번호를 -p 인자로 넣었다.
+// mysql 이미지는 LANG이 비어 있다(C 로케일). 그러면 mysql의 줄 편집기가 한글 같은 멀티바이트 입력을 버린다
+// (--default-character-set은 서버와 주고받는 문자셋일 뿐이다). 이미지에 든 C.UTF-8 로케일을 쓴다.
+// postgres 이미지는 LANG=en_US.utf8이 이미 있어서 psql은 그대로 둔다.
 func DBConsole(kind target.Kind) (Cmd, error) {
 	switch kind {
 	case target.MySQL:
-		const script = `export MYSQL_PWD="$MYSQL_PASSWORD"; exec mysql --default-character-set=utf8mb4 -u "$MYSQL_USER" "$MYSQL_DATABASE"`
+		const script = `export LANG=C.UTF-8 MYSQL_PWD="$MYSQL_PASSWORD"; exec mysql --default-character-set=utf8mb4 -u "$MYSQL_USER" "$MYSQL_DATABASE"`
 		return Cmd{Name: "db-console", Argv: sh("/bin/sh", script), TTY: true, Stdin: true}, nil
 	case target.Postgres:
 		// 원본처럼 비밀번호 없이 로컬 소켓으로 붙는다

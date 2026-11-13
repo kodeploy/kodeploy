@@ -153,6 +153,8 @@ kubectl rollout restart deploy/kodeploy-core -n default
 | `EXEC_AGENT_TERMINAL` | 7번 | |
 | 초기 복원 (새 앱 첫 배포 + 덤프) | 0절 12번 뒤(`*`)에 새 테스트 앱을 DB·덤프와 함께 배포. 새 앱 ns는 배포 때 생겨 카나리 목록에 미리 넣을 수 없다 | 빌드 행에 오류 없음, core 로그에 `exec_not_ready`가 없거나 있어도 복원 성공, 표별 행 수가 덤프와 같음 |
 
+복원에 직접 쓴 SQL을 올릴 때는 첫 줄에 `SET NAMES utf8mb4;`를 둔다(mysqldump 파일에는 이미 있다). 없으면 mysql 클라이언트 기본 문자셋으로 적재돼 한글이 이중 인코딩된다. 옛 경로·새 경로 모두 같다.
+
 ```sh
 # 덤프 비교 (mysqldump 끝의 "-- Dump completed on ..." 줄, pg_dump는 그대로)
 diff <(zcat old.sql.gz | grep -v '^-- Dump completed') <(zcat new.sql.gz | grep -v '^-- Dump completed')
@@ -176,8 +178,8 @@ kubectl logs -n $NS deploy/kodeploy-exec | grep <request_id>
 | 업로드 중 연결 끊기 | `$TC restore -internal ... -key-file ... -file big.sql.gz -abort-after 100000` | 감사 기록 close 1006, DB 그대로(행 수), `/tmp/kodeploy-restore` 비어 있음 |
 | 기대 해시 틀리게 | `$TC restore ... -file d.sql -sha 0000…(64자)` | `failed_step: upload`, `db_changed: false` |
 | 동시 세션 초과 (공개 문 3) | `$TC hold ... -url wss://api.kodeploy.com/exec/$NS/v1/sessions -app $APP -n 4` | 4번째가 `closed 4429` |
-| 문마다 따로 센다 | 위 `hold -n 3`을 붙잡아 둔 채 웹 DB 콘솔에서 `SELECT 1` (내부 문, 상한 4) | 콘솔이 정상 응답 (터미널이 내부 문 자리를 쓰지 않는다) |
-| 지표가 문마다 나뉜다 | `hold -n 3`을 붙잡아 둔 채 `kubectl port-forward -n $NS deploy/kodeploy-exec 9090` → `curl -s localhost:9090/metrics \| grep sessions_active` | `{door="public"} 3`, `{door="internal"} 0` |
+| 문마다 따로 센다 | `$TC hold ... -n 3 -for 60s &`로 세 개를 붙잡아 둔 채 웹 DB 콘솔에서 `SELECT 1` (내부 문, 상한 4). `-for`가 없으면 hold는 연 뒤 바로 닫는다 | 콘솔이 정상 응답 (터미널이 내부 문 자리를 쓰지 않는다) |
+| 지표가 문마다 나뉜다 | `hold -n 3 -for 60s`를 붙잡아 둔 채 `kubectl port-forward -n $NS deploy/kodeploy-exec 9090` → `curl -s localhost:9090/metrics \| grep sessions_active` | `{door="public"} 3`, `{door="internal"} 0` |
 | 미해결 백업이 남은 채 복원 | `kubectl exec -n $NS sts/mysql -- sh -c 'mkdir -p /tmp/kodeploy-restore && : > /tmp/kodeploy-restore/backup-e2e.sql.gz'` 뒤 `$TC restore ... -file d.sql` | `failed_step: precheck`, `db_changed: false`, `unresolved_backups[0].path`가 그 파일, DB 그대로. 파일을 지운 뒤 같은 복원이 성공 |
 | 작업 디렉토리 채우기 | 하지 않는 것을 권한다 (아래) | |
 

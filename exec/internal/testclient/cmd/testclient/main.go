@@ -22,8 +22,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/kodeploy/kodeploy/exec/internal/testclient"
@@ -251,6 +253,7 @@ func cmdHold(args []string) error {
 	url := fs.String("url", "", "공개 문 주소")
 	app := fs.String("app", "", "앱 이름")
 	n := fs.Int("n", 4, "열 세션 수 (공개 문 MAX_SESSIONS_PUBLIC+1이면 마지막이 4429)")
+	hold := fs.Duration("for", 0, "연 세션을 이만큼 붙잡아 둔다 (그동안 다른 문·지표를 본다). 0이면 바로 닫는다")
 	fs.Parse(args)
 	in, err := inf.client()
 	if err != nil {
@@ -281,6 +284,15 @@ func cmdHold(args []string) error {
 		}
 		fmt.Printf("session %d: open\n", i)
 		open = append(open, c)
+	}
+	if *hold > 0 && len(open) > 0 {
+		fmt.Printf("holding %d sessions for %s (Ctrl-C로 먼저 닫는다)\n", len(open), *hold)
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		select {
+		case <-time.After(*hold):
+		case <-sig:
+		}
 	}
 	return nil
 }
