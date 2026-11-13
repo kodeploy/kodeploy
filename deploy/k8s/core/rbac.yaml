@@ -12,7 +12,7 @@ metadata:
 # 워크로드(Deployment·DB·Service·HTTPRoute·NetworkPolicy)는 차트가 그리고 Argo가 apply한다 — core는 쓰지 않는다.
 # 권한은 세 덩어리다:
 #   1. 여기(전역): ns 만들기, 테넌트 ns에 자기 RoleBinding 걸기, 노드 조회
-#   2. kodeploy-core-tenant: 테넌트 ns 안의 Secret·PVC·Pod 로그/exec와 그 ns 자신의 삭제 — 그 ns의 RoleBinding으로만 받는다
+#   2. kodeploy-core-tenant: 테넌트 ns 안의 Secret·PVC·Pod 로그와 그 ns 자신의 삭제 — 그 ns의 RoleBinding으로만 받는다
 #      (core가 ns를 만들 때 같이 건다 — manifests/templates/tenant.yaml.j2). argocd·kube-system엔 닿지 않는다.
 #   3. kodeploy-build의 Role: 빌드 Secret(ghcr-auth 읽기, git-auth)·Job/Pod 조회(진단)
 # 전역의 ns 생성과 RoleBinding 생성은 이름·모양을 admission 정책이 묶는다 (admission-policy.yaml) —
@@ -72,16 +72,13 @@ rules:
     verbs: ["create"]                                    # 로컬 볼륨. 삭제는 ns delete가 대신함
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["list"]                                      # 라벨 셀렉터로 대상 Pod 찾기 (상태·로그·터미널·DB 콘솔·배포 뒤 감시)
+    verbs: ["list"]                                      # 라벨 셀렉터로 Pod 찾기 (상태·로그·DB 종류·exec Pod Ready·배포 뒤 감시)
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
-  - apiGroups: [""]
-    resources: ["pods/exec"]
-    # get만 남겨봤다가 되돌림 — 실측 결과 GET 업그레이드만으로는 apiserver가 403을 준다
-    # (빈 reason 403. can-i는 get을 yes로 답하는데 실제 요청은 거부 — connecter 서브리소스는
-    #  인가 경로가 다르다). 구 role의 get+create 조합은 터미널 동작이 검증된 상태라 그대로 유지.
-    verbs: ["get", "create"]
+  # pods/exec는 없다 — 터미널·DB 콘솔·덤프·복원은 테넌트별 kodeploy-exec가 한다(2026-11, kodeploy-charts templates/exec.yaml).
+  # 비상으로 되살릴 땐 get·create 둘 다 준다: connecter 서브리소스는 can-i가 get을 yes라 해도 실제 업그레이드는
+  # get만으로 403이었다(실측). 되돌리는 절차는 hack/exec-e2e.md "되돌리기".
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role                                               # 빌드 ns (빌드 Job은 빌더가 만든다)
