@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Secret                                             # kodeploy-exec 내부 문 HMAC 키 — core가 이 키로 서명하고, exec Pod가 파일로 읽는다
+metadata:
+  name: {{ secret_name }}
+  namespace: {{ tenant_id }}
+  labels:
+    tenant: {{ tenant_id }}
+    managed-by: kodeploy
+type: Opaque
+data:
+  {{ key_name }}: {{ key_b64 }}                          # secrets.token_bytes(32). 이미 있으면 그대로 둔다 (409 skip — 바꾸면 떠 있는 exec Pod와 어긋난다)

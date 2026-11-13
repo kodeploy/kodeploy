@@ -1,5 +1,5 @@
 // Package argo는 Argo CD Application에 refresh를 요청하고, 우리 커밋이 Synced + Healthy가 될 때까지 기다린다
-// (지시서 4-4). 앱 삭제 때는 ApplicationSet을 refresh하고 Application이 사라질 때까지 기다린다. Argo 모듈은 쓰지 않고 dynamic client로 Application을 unstructured로 읽는다.
+// (설계 문서 4-4). 앱 삭제 때는 ApplicationSet을 refresh하고 Application이 사라질 때까지 기다린다. Argo 모듈은 쓰지 않고 dynamic client로 Application을 unstructured로 읽는다.
 package argo
 
 import (

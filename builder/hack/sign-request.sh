@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 서명한 요청을 빌더에 보낸다 (지시서 3-3 규칙).
+# 서명한 요청을 빌더에 보낸다 (설계 문서 3-3 규칙).
 #
 #   HMAC_SECRET=... hack/sign-request.sh POST   /internal/deploys hack/examples/build.json
 #   HMAC_SECRET=... hack/sign-request.sh DELETE /internal/deploys/e2e00001

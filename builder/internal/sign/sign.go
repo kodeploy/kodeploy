@@ -1,4 +1,4 @@
-// Package sign은 core ↔ 빌더 요청의 HMAC 서명 규칙이다 (지시서 3-3). 양방향 같은 규칙.
+// Package sign은 core ↔ 빌더 요청의 HMAC 서명 규칙이다 (설계 문서 3-3). 양방향 같은 규칙.
 //
 //	signature = hex(HMAC-SHA256(secret, timestamp + "\n" + METHOD + "\n" + path + "\n" + body))
 package sign

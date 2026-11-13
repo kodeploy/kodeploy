@@ -49,6 +49,9 @@ _NAME_MAX_LENGTH = 40
 def _validate_name_format(name: str) -> None:
     if name.startswith("app-"):
         raise ValueError("'app-' prefix는 자동 생성용으로 예약돼 있음")
+    if name.startswith("kodeploy-"):
+        # 테넌트 ns 안의 플랫폼 리소스 이름(kodeploy-exec 등)과 앱 Deployment·Service 이름이 겹치지 않게
+        raise ValueError("'kodeploy-' prefix는 플랫폼 리소스용으로 예약돼 있음")
     if name.endswith("-api"):
         # {app}-api.kodeploy.com이 서버 슬롯 파생 호스트라 — 남의 "foo" 앱의 서버 주소와
         # "foo-api"라는 새 앱 이름이 충돌하지 않게 suffix 자체를 금지.

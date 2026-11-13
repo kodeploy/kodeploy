@@ -73,7 +73,6 @@ import {
   readStorageObject,
   runDbQuery,
   updateSavedQuery,
-  wsPath as scopedWs,
 } from "../../api/deploy.js";
 import { parseDate } from "../../lib/format.js";
 import {
@@ -89,6 +88,7 @@ import { useAuth } from "../../contexts/AuthContext.jsx";
 import { useTheme } from "../../contexts/ThemeContext.jsx";
 import StatusBadge from "../StatusBadge.jsx";
 import DbTerminalPanel from "../panels/DbTerminalPanel.jsx";
+import { openTerminalSocket } from "../../lib/terminalSocket.js";
 import MetricsView from "./MetricsView.jsx";
 import { useCurrentApp } from "./AppScope.jsx";
 import { can } from "../../lib/roles.js";
@@ -535,7 +535,7 @@ function ConsoleView({ build, dbType, redisEnabled, logsOnly }) {
 // xterm 구성·리사이즈 프로토콜·테마 라이브 갱신은 panels/TerminalPanel.jsx와 같은 코드다.
 // 따로 두는 이유는 둘: (1) 시안의 패널 헤더가 하나뿐이라 패널이 자체 헤더를 또 그리면 안 되고,
 // (2) 헤더의 "연결됨" 표시에 소켓 상태가 필요한데 기존 패널은 그걸 터미널 버퍼에만 쓴다.
-function WorkspaceTerminal({ wsPath, onStatus }) {
+function WorkspaceTerminal({ wsPath, target, onStatus }) {
   const { theme } = useTheme();
   const containerRef = useRef(null);
   const termRef = useRef(null);
@@ -566,32 +566,24 @@ function WorkspaceTerminal({ wsPath, onStatus }) {
       if (!disposed) fitAddon.fit();
     });
 
-    const ws = new WebSocket(scopedWs(wsPath));
-
-    // 현재 xterm 크기를 백엔드로 보내 파드 pty 크기를 맞춤 → 쉘 출력이 실제 폭으로 정렬
-    const sendResize = () => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ __resize: { cols: term.cols, rows: term.rows } }));
-      }
-    };
-
-    ws.onopen = () => {
-      statusRef.current?.("open");
-      sendResize();
-    };
-    ws.onmessage = (e) => term.write(e.data);
-    ws.onclose = (e) => {
-      statusRef.current?.("closed");
-      term.write(`\r\n\x1b[1;31m연결 종료${e.reason ? `: ${e.reason}` : ""}\x1b[0m\r\n`);
-    };
-    ws.onerror = () => {
-      statusRef.current?.("error");
-      term.write("\r\n\x1b[1;31m연결 실패\x1b[0m\r\n");
-    };
-    term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(data);
+    // 옛 경로(core 중계)와 새 경로(kodeploy-exec, 플래그)를 같은 모양으로 연다 — lib/terminalSocket.js.
+    // 연결되면 현재 xterm 크기를 보내 파드 pty 크기를 맞춤 → 쉘 출력이 실제 폭으로 정렬
+    const sock = openTerminalSocket({
+      term,
+      target,
+      legacyPath: wsPath,
+      onOpen: () => statusRef.current?.("open"),
+      onClose: (reason) => {
+        statusRef.current?.("closed");
+        term.write(`\r\n\x1b[1;31m연결 종료${reason ? `: ${reason}` : ""}\x1b[0m\r\n`);
+      },
+      onError: (message) => {
+        statusRef.current?.("error");
+        term.write(`\r\n\x1b[1;31m연결 실패${message ? `: ${message}` : ""}\x1b[0m\r\n`);
+      },
     });
-    term.onResize(() => sendResize());
+    term.onData((data) => sock.input(data));
+    term.onResize(() => sock.resize());
 
     // 숨겨진(display:none) 동안은 0x0이라 fit하면 cols/rows가 최소값으로 눌린다.
     // 다시 보일 때 ResizeObserver가 한 번 더 불리므로 그때 맞추면 된다.
@@ -605,10 +597,10 @@ function WorkspaceTerminal({ wsPath, onStatus }) {
     return () => {
       disposed = true;
       ro.disconnect();
-      ws.close();
+      sock.close();
       term.dispose();
     };
-  }, [wsPath]);
+  }, [wsPath, target]);
 
   // 테마 토글 시 색만 라이브 갱신 (재생성/재접속 없이)
   useEffect(() => {
@@ -684,6 +676,7 @@ function TerminalSide({ dbType, redisEnabled, zoomed, onZoom }) {
           >
             <WorkspaceTerminal
               wsPath={t.path}
+              target={t.id}
               onStatus={(s) => setConn((prev) => ({ ...prev, [t.id]: s }))}
             />
           </div>

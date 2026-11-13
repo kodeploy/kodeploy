@@ -129,7 +129,7 @@ func (r *run) execute() {
 // ---- build --------------------------------------------------------------------------------------
 
 // build는 kind=build 흐름이다. Job을 만들고, 로그·마커와 Job 대기를 동시에 돌려
-// push 마커와 Job 종료 중 먼저 오는 쪽을 따른다 (지시서 4-2).
+// push 마커와 Job 종료 중 먼저 오는 쪽을 따른다 (설계 문서 4-2).
 func (r *run) build() {
 	if r.st.commitSHA != "" || r.st.digest != "" {
 		r.buildResumeAfterPush()
@@ -245,7 +245,7 @@ func (r *run) afterJob(out jobOutcome, pipe *logPipe) {
 		r.waitLogs(pipe) // 마커가 마지막 줄까지 보게 한다
 		digest, _ := r.pushed()
 		if digest == "" {
-			// 폴백: 마커 없이 성공 → 태그로 digest 조회 (지시서 4-2 8)
+			// 폴백: 마커 없이 성공 → 태그로 digest 조회 (설계 문서 4-2 8)
 			d, err := r.m.d.Registry.Resolve(r.ctx, r.req.Build.ImageRepo, r.req.Build.ImageTag)
 			if err != nil {
 				if !r.stopped() {
@@ -459,7 +459,7 @@ func (r *run) commit(tag, image string) (gitops.Result, bool) {
 	return res, true
 }
 
-// 지시서 4-7: deploy(<namespace>): <kind> <image_tag> [<build_id>] by <actor>
+// 설계 문서 4-7: deploy(<namespace>): <kind> <image_tag> [<build_id>] by <actor>
 func (r *run) commitMessage(tag string) string {
 	actor := r.req.Actor
 	if actor == "" {

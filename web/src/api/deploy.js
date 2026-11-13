@@ -19,6 +19,33 @@ export function wsPath(path) {
   return `${API_BASE.replace(/^http/, "ws")}${scoped(path)}`;
 }
 
+// 지금 앱의 터미널이 새 경로(kodeploy-exec)를 쓸지 — 서버 플래그 EXEC_AGENT_TERMINAL과 카나리 ns 목록.
+// 앱마다 한 번만 묻고 기억한다. 앱 화면 밖이거나 못 물으면(옛 core라 404 포함) 옛 경로로 간다.
+const execFeatures = new Map();
+export function getExecFeatures() {
+  if (!activeAppId) return Promise.resolve({ terminal: false });
+  if (!execFeatures.has(activeAppId)) {
+    execFeatures.set(
+      activeAppId,
+      request(`/apps/${activeAppId}/exec-features`).catch(() => ({ terminal: false })),
+    );
+  }
+  return execFeatures.get(activeAppId);
+}
+
+// 지금 보고 있는 앱이 있어야 티켓을 받을 수 있다 (앱 화면 밖이면 옛 경로).
+export function hasActiveApp() {
+  return Boolean(activeAppId);
+}
+
+// 터미널 1회용 티켓 → { ticket, url, protocol, expires_in }. target: app | db | redis
+export function createExecTicket(target, cols, rows) {
+  return request(`/apps/${activeAppId}/exec-tickets`, {
+    method: "POST",
+    body: JSON.stringify({ target, cols, rows }),
+  });
+}
+
 async function request(path, { appId, ...options } = {}) {
   const res = await fetch(`${API_BASE}${scoped(path, appId)}`, {
     credentials: "include",                       // cookie session 첨부

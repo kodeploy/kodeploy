@@ -79,6 +79,24 @@ data:
           - source_labels: [__meta_kubernetes_pod_container_port_name]
             regex: metrics
             action: keep
+
+      # kodeploy-exec (테넌트 ns마다 하나): 세션 수·실행 시간·실패·티켓 발급/소비/만료.
+      # 테넌트 ns의 Calico 정책(kodeploy-exec, order 50)이 9090을 monitoring ns의 app=vmagent에만 연다.
+      - job_name: kodeploy-exec
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace]
+            regex: (tenant|app)-[0-9a-f]{8}
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_label_kodeploy_com_component]
+            regex: exec
+            action: keep
+          - source_labels: [__meta_kubernetes_pod_container_port_name]
+            regex: metrics
+            action: keep
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-// 409 재시도 상한 (지시서 4-7)
+// 409 재시도 상한 (설계 문서 4-7)
 const maxAttempts = 5
 
 // Contents는 Writer가 쓰는 GitHub 기능이다 (테스트에서 httptest로 GitHub를 흉내 낸다).

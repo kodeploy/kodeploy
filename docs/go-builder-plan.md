@@ -1,12 +1,12 @@
-# KoDeploy Go 빌더 작업 지시서 (3부-2)
+# KoDeploy Go 빌더 설계 문서 (3부-2)
 
-Claude Code 작업 지시서다. Argo CD 경로는 완성됐다(데모 앱 `tenant-d6d8b759` Synced/Healthy, envRevision 시험 통과). 이번 작업은 core 안의 빌드 파이프라인(파이썬)을 **별도 Go 서비스 `builder`** 로 옮기는 것이다. core와 연결하는 작업은 다음(4부)이고, 이번에는 빌더가 단독으로 동작하고 테스트되는 것까지 한다.
+Go 빌더의 설계와 작업 순서다. Argo CD 경로는 완성됐다(데모 앱 `tenant-d6d8b759` Synced/Healthy, envRevision 시험 통과). 이번 작업은 core 안의 빌드 파이프라인(파이썬)을 **별도 Go 서비스 `builder`** 로 옮기는 것이다. core와 연결하는 작업은 다음(4부)이고, 이번에는 빌더가 단독으로 동작하고 테스트되는 것까지 한다.
 
 원칙:
 - 원본에서 찾을 수 있는 값은 추측하지 말고 원본에서 가져온다. 원본: `core/app/deploy/build/pipeline.py`, `core/app/deploy/stack/manifests/build.py`, `templates/buildkit_job.yaml.j2`, `core/app/config.py`.
 - `kodeploy/` 모노레포 안에 `builder/`를 새로 만든다. core 코드는 수정하지 않는다. `deploy/k8s/builder/`, `.github/workflows/build-builder.yml`은 새로 추가한다.
 - 이번 범위 밖: nixpacks·static 빌드 모드, private repo(git-auth Secret), AI 진단, DB 접근, CRD, controller-runtime.
-- 각 단계 끝에 바꾼 파일과 테스트 결과를 보고한다. 원본과 다르게 처리한 부분은 이유와 함께.
+- 각 단계 끝에 바꾼 파일과 테스트 결과를 정리한다. 원본과 다르게 처리한 부분은 이유와 함께 `docs/builder-e2e.md`에 남긴다.
 
 ---
 
@@ -244,7 +244,7 @@ Job 없음. `set-image`는 4-1의 이미지 검증 + 레지스트리 HEAD → �
 - [ ] 7의 테스트 전부 통과
 - [ ] Dockerfile, CI 워크플로, `deploy/k8s/builder/` 작성
 - [ ] `cmd/mockcore`로 E2E 절차와 서명 예시 스크립트 제공 (`hack/sign-request.sh` 같은 것)
-- [ ] 보고: 원본과 다르게 처리한 부분, 사람이 만들어야 하는 Secret과 값, 실행·확인 명령
+- [ ] 정리: 원본과 다르게 처리한 부분, 사람이 만들어야 하는 Secret과 값, 실행·확인 명령
 
 ---
 

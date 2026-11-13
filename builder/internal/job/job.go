@@ -38,7 +38,7 @@ const (
 	appLabelValue  = "kodeploy-build"
 )
 
-// 진행 상태 어노테이션 (지시서 4-2, 4-5, 3-2)
+// 진행 상태 어노테이션 (설계 문서 4-2, 4-5, 3-2)
 const (
 	AnnRequest   = "kodeploy.io/request"
 	AnnDigest    = "kodeploy.io/digest"
@@ -46,7 +46,7 @@ const (
 	AnnSynced    = "kodeploy.io/synced"
 	AnnFinished  = "kodeploy.io/finished"
 	AnnAckedSeq  = "kodeploy.io/acked-seq"
-	// 재개할 때 이미 core에 보낸 로그 줄을 다시 보내지 않으려고 적는다 (지시서에 없는 추가분)
+	// 재개할 때 이미 core에 보낸 로그 줄을 다시 보내지 않으려고 적는다 (설계 문서에 없는 추가분)
 	AnnAckedLogLines = "kodeploy.io/acked-log-lines"
 )
 

@@ -27,7 +27,7 @@ import (
 	"github.com/kodeploy/kodeploy/builder/internal/run"
 )
 
-// SIGTERM 후 종료까지 쓰는 시간 (지시서 4-6)
+// SIGTERM 후 종료까지 쓰는 시간 (설계 문서 4-6)
 const shutdownGrace = 20 * time.Second
 
 // main은 serve를 돌리고, 오류로 끝나면 로그를 남기고 종료 코드 1로 나간다.
@@ -88,7 +88,7 @@ func serve(log *slog.Logger) error {
 		Events:   callback.NewSender(cfg.CoreURL, cfg.HMACSecret, log),
 		Log:      log,
 	})
-	// 요청을 받기 전에 지난 실행에서 끊긴 빌드부터 이어간다 (지시서 4-5)
+	// 요청을 받기 전에 지난 실행에서 끊긴 빌드부터 이어간다 (설계 문서 4-5)
 	if n, err := mgr.Resume(ctx); err != nil {
 		log.Error("resume failed; unfinished builds stay as they are", "err", err)
 	} else if n > 0 {

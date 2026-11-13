@@ -1,0 +1,51 @@
+# kodeploy-exec Pod 모양을 묶는다 (admission-policy.yaml의 짝).
+# kodeploy-exec SA는 테넌트 ns의 pods/exec를 가진다. 그 SA로 다른 이미지·사이드카·디버그 컨테이너를 띄우면
+# 그 권한을 그대로 쓸 수 있으므로, 테넌트 ns에서 이 SA를 쓰는 Pod는 차트가 그리는 모양 하나만 허용한다.
+#   - 라벨 kodeploy.com/component=exec
+#   - 컨테이너 정확히 1개, initContainer·ephemeral container 없음 (pods/ephemeralcontainers도 검사)
+#   - 이미지가 ghcr.io/kodeploy/kodeploy-exec@sha256: 로 시작 (태그 없이 digest만)
+# 반대로 kodeploy.com/component=exec 라벨인데 다른 SA를 쓰는 Pod도 거부한다 (Service·NetworkPolicy가 이 라벨로 고른다).
+# 적용은 사람이: kubectl apply --dry-run=server -f 로 먼저 확인한 뒤 kubectl apply -f
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: kodeploy-exec-pod-shape
+spec:
+  failurePolicy: Fail                                    # 정책 평가가 실패하면 거절 (열리는 쪽으로 실패하지 않게)
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods", "pods/ephemeralcontainers"]
+  matchConditions:
+    - name: tenant-namespace                             # apps/service.py new_namespace — tenant-<유저 hex8> | app-<앱 hex8>
+      expression: "request.namespace.matches('^(tenant|app)-[0-9a-f]{8}$')"
+    - name: exec-sa-or-label
+      expression: >-
+        (has(object.spec.serviceAccountName) && object.spec.serviceAccountName == 'kodeploy-exec') ||
+        (has(object.metadata.labels) && 'kodeploy.com/component' in object.metadata.labels &&
+         object.metadata.labels['kodeploy.com/component'] == 'exec')
+  validations:
+    - expression: "has(object.spec.serviceAccountName) && object.spec.serviceAccountName == 'kodeploy-exec'"
+      message: "kodeploy.com/component=exec 라벨은 kodeploy-exec SA로만 쓸 수 있습니다"
+    - expression: >-
+        has(object.metadata.labels) && 'kodeploy.com/component' in object.metadata.labels &&
+        object.metadata.labels['kodeploy.com/component'] == 'exec'
+      message: "kodeploy-exec SA는 kodeploy.com/component=exec 라벨이 있는 Pod만 쓸 수 있습니다"
+    - expression: "size(object.spec.containers) == 1"
+      message: "kodeploy-exec Pod는 컨테이너가 정확히 1개여야 합니다"
+    - expression: "!has(object.spec.initContainers) || size(object.spec.initContainers) == 0"
+      message: "kodeploy-exec Pod에는 initContainer를 둘 수 없습니다"
+    - expression: "!has(object.spec.ephemeralContainers) || size(object.spec.ephemeralContainers) == 0"
+      message: "kodeploy-exec Pod에는 ephemeral container를 붙일 수 없습니다"
+    - expression: "object.spec.containers.all(c, c.image.startsWith('ghcr.io/kodeploy/kodeploy-exec@sha256:'))"
+      message: "kodeploy-exec Pod 이미지는 ghcr.io/kodeploy/kodeploy-exec@sha256:<digest> 여야 합니다"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: kodeploy-exec-pod-shape
+spec:
+  policyName: kodeploy-exec-pod-shape
+  validationActions: ["Deny"]

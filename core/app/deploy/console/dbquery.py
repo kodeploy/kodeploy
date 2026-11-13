@@ -24,7 +24,9 @@ import aiohttp
 from kubernetes_asyncio import client
 from kubernetes_asyncio.stream import WsApiClient
 
+from app import config
 from app.deploy.console.snapshots import _detect_target, _ensure_loaded
+from app.exec import client as exec_client
 
 # 한 페이지에 받아올 행 수. SELECT/WITH 쿼리는 OFFSET 페이지네이션으로 다음 페이지를 더
 # 받을 수 있고, 그 외(SHOW/INSERT 등)는 감쌀 수 없어 이 수에서 잘리고 truncated로 알린다.
@@ -147,7 +149,8 @@ def _parse_csv(stdout: str) -> tuple[list[str], list[list[str]]]:
 
 # 고수준 API — router가 호출. tenant ns의 DB 파드에 SQL을 돌려 구조화된 결과를 반환.
 # offset: SELECT/WITH 쿼리에서 다음 페이지를 보기 위한 시작 위치(페이지네이션). 그 외는 무시.
-async def run_query(ns: str, sql: str, offset: int = 0) -> dict:
+# EXEC_AGENT_QUERY가 켜져 있고 ns가 EXEC_AGENT_NAMESPACES에 들면 kodeploy-exec 내부 문(query)으로 돌린다. 명령·옵션·파서는 같다.
+async def run_query(ns: str, sql: str, offset: int = 0, *, user_id: str = "", app_id: str = "") -> dict:
     sql = (sql or "").strip()
     if not sql:
         raise QueryError("SQL을 입력해주세요")
@@ -155,9 +158,15 @@ async def run_query(ns: str, sql: str, offset: int = 0) -> dict:
         raise QueryError(f"SQL이 너무 깁니다 (최대 {MAX_SQL_LENGTH}자)")
     offset = max(0, int(offset))
 
-    await _ensure_loaded()
-    async with client.ApiClient() as api:
-        t = await _detect_target(client.CoreV1Api(api), ns)
+    use_exec = config.exec_agent_on(config.EXEC_AGENT_QUERY, ns)
+    if use_exec:
+        # 새 경로는 DB 종류만 알면 된다 (비밀번호는 exec가 컨테이너 env에서 읽는다)
+        kind = await exec_client.db_type(ns)
+        t = {"db_type": kind} if kind else None
+    else:
+        await _ensure_loaded()
+        async with client.ApiClient() as api:
+            t = await _detect_target(client.CoreV1Api(api), ns)
     if not t:
         raise QueryError(
             "DB가 활성화돼 있지 않습니다 — DB(MySQL/PostgreSQL)를 추가한 앱에서만 콘솔을 쓸 수 있습니다."
@@ -179,7 +188,13 @@ async def run_query(ns: str, sql: str, offset: int = 0) -> dict:
         exec_sql = sql
 
     started = time.perf_counter()
-    stdout, stderr, code = await _exec(ns, t, _query_cmd(t, exec_sql))
+    if use_exec:
+        try:
+            stdout, stderr, code = await exec_client.run_capture(ns, "query", exec_sql, user_id=user_id, app_id=app_id)
+        except exec_client.ExecError as e:
+            raise QueryError(e.message)
+    else:
+        stdout, stderr, code = await _exec(ns, t, _query_cmd(t, exec_sql))
     duration_ms = int((time.perf_counter() - started) * 1000)
 
     if code != 0:

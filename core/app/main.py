@@ -14,6 +14,7 @@ from app.auth.router import router as auth_router
 from app.community.router import router as community_router
 from app.config import ALLOWED_ORIGINS
 from app.deploy.router import router as deploy_router
+from app.exec.router import router as exec_router
 from app.internal.router import router as internal_router
 
 
@@ -43,6 +44,7 @@ app.include_router(invites_router)
 app.include_router(community_router)
 app.include_router(admin_router)
 app.include_router(internal_router)
+app.include_router(exec_router)
 
 
 # K8s liveness/readiness probe 엔드포인트

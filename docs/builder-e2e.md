@@ -1,6 +1,6 @@
 # Go 빌더 E2E 절차와 운영 메모
 
-지시서: [go-builder-plan.md](go-builder-plan.md) (3부-2). 이 문서는 사람이 클러스터에서 할 일(Secret, 적용, E2E)과, 원본·지시서와 다르게 만든 부분, 4부 할 일을 모은다.
+설계 문서: [go-builder-plan.md](go-builder-plan.md) (3부-2). 이 문서는 사람이 클러스터에서 할 일(Secret, 적용, E2E)과, 원본·설계 문서와 다르게 만든 부분, 4부 할 일을 모은다.
 
 로컬(클러스터 접속 없음)에서 확인한 것: `go vet`, `go test -race ./...` 전부 통과, arm64 정적 바이너리 빌드, 매니페스트 strict 디코드, `hack/sign-request.sh` ↔ `cmd/mockcore` 서명 왕복. **이미지 빌드(Docker)와 클러스터 동작은 확인하지 못했다.**
 
@@ -131,24 +131,24 @@ kubectl -n default set env deployment/kodeploy-builder CORE_URL=http://kodeploy-
 # mockcore 종료 (Ctrl-C), 포트포워드 종료
 ```
 
-## 4. 원본·지시서와 다르게 처리한 부분
+## 4. 원본·설계 문서와 다르게 처리한 부분
 
 원본(core 파이썬)을 따른 것:
 
-1. **Go 1.25** (지시서 1.23). client-go v0.35·go-containerregistry v0.22가 `go 1.25.0`을 요구한다. Dockerfile도 `golang:1.25`.
-2. **Job 이름 `build-<userId 앞 8자>-<build_id>`** (지시서 `build-<build_id>`). 원본 `_build_job_name`. 그래서 `kind=build`에는 `values.userId`가 필수다.
-3. **`build_id`는 hex 8자리** (원본 `uuid4().hex[:8]`). 지시서 예시 `b-3f9a2c1d`는 받지 않는다.
+1. **Go 1.25** (설계 문서 1.23). client-go v0.35·go-containerregistry v0.22가 `go 1.25.0`을 요구한다. Dockerfile도 `golang:1.25`.
+2. **Job 이름 `build-<userId 앞 8자>-<build_id>`** (설계 문서 `build-<build_id>`). 원본 `_build_job_name`. 그래서 `kind=build`에는 `values.userId`가 필수다.
+3. **`build_id`는 hex 8자리** (원본 `uuid4().hex[:8]`). 설계 문서 예시 `b-3f9a2c1d`는 받지 않는다.
 4. **`EARLY_TRIGGER` 플래그 유지**, 기본 `true`(라이브와 같게). 끄면 마커를 봐도 Job 종료 후 배포한다.
 5. **로그 머리줄** `=== clone (init) ===`, `=== buildkit (main) ===`와 사이 빈 줄 (원본 `_combined_job_logs`).
 6. **Job 대기 상한** activeDeadlineSeconds + 30초, deadline 기본값 `BUILD_TIMEOUT_SECONDS(600) + 300` (원본 규칙, 두 env 모두 읽는다).
 7. **`cache_ref`는 `<image_repo>:buildcache`만** 받는다 (원본 `_cache_ref`).
 
-지시서에 없던 것을 더한 것:
+설계 문서에 없던 것을 더한 것:
 
 8. **입력 검증**: repo는 `https://github.com/<owner>/<repo>(.git)`만, ref는 허용 문자 `[A-Za-z0-9._/-]` + `-`·`/`로 시작·`..`·`//`·`.lock` 거부, dockerfile_dir/name은 `..`·절대경로 거부. values 내용은 차트 `values.schema.json` 규칙으로 먼저 400. 모르는 키는 요청·values 모두 거부.
 9. **계약 타입 패키지 `internal/contract`** (api ↔ run import 순환 방지).
 10. **마커를 BuildKit 진행 줄(`^#<n> `)로 고정**. 유저 RUN 출력(`#<n> <경과초> …`)이 걸러진다. bench 실제 로그 11개에서 원본과 같은 줄에서 잡힌다.
-11. **로그 읽기는 `bufio.Reader` + 줄당 64KiB 상한** (지시서 `bufio.Scanner`). Scanner는 긴 줄에서 멈추고, 재연결하면 같은 줄에서 다시 멈춘다. 재연결은 마지막 타임스탬프부터, 겹치는 줄은 버린다.
+11. **로그 읽기는 `bufio.Reader` + 줄당 64KiB 상한** (설계 문서 `bufio.Scanner`). Scanner는 긴 줄에서 멈추고, 재연결하면 같은 줄에서 다시 멈춘다. 재연결은 마지막 타임스탬프부터, 겹치는 줄은 버린다.
 12. **Argo 대기의 revision 판정**: 값 source revision이 우리 커밋이거나 **우리 커밋을 포함하면**(GitHub compare API) 통과. 다른 앱 커밋이 뒤따르면 Argo는 더 새 커밋을 보고하기 때문이다. 바뀐 게 없어 커밋을 건너뛰면 브랜치 끝 sha로 기다린다. 이번 대기 전에 시작된 옛 operation 실패는 무시, `Degraded`면 `failed(stage=health)`.
 13. **새 앱은 Application이 생길 때까지 refresh를 다시 시도**한다 (ApplicationSet git 제너레이터 주기, 최대 3분 정도). 전체는 `ARGO_WAIT_TIMEOUT` 안.
 14. **`config`인데 values 파일이 없으면 `failed(commit)`** (설정만으로 앱을 만들지 않는다).
@@ -158,7 +158,7 @@ kubectl -n default set env deployment/kodeploy-builder CORE_URL=http://kodeploy-
 18. **Deployment `strategy: Recreate`**, `terminationGracePeriodSeconds: 30`. 두 빌더가 겹치면 같은 Job을 둘 다 재개한다.
 19. **CI**: 이미지 전에 `go vet`, `go test -race`. 고정 커밋·`latest` 태그는 main에서만 (다른 브랜치에서 돌면 `HEAD:main` push가 그 브랜치를 main에 올린다. core 워크플로에도 같은 위험이 있다).
 20. **HTTP**: 본문 1MiB 초과는 413, 디스패처 내부 오류(종료 중 포함)는 500 `internal error` (내부 메시지는 밖으로 내지 않는다).
-21. **직접 의존성**: 지시서 목록 외에 `go.yaml.in/yaml/v3`(values 키 순서 유지, 기존 파일과 글자 단위로 같게), `k8s.io/utils`(포인터 헬퍼), `go.uber.org/goleak`(테스트). 앞의 둘은 client-go가 이미 끌어오는 모듈이다.
+21. **직접 의존성**: 설계 문서 목록 외에 `go.yaml.in/yaml/v3`(values 키 순서 유지, 기존 파일과 글자 단위로 같게), `k8s.io/utils`(포인터 헬퍼), `go.uber.org/goleak`(테스트). 앞의 둘은 client-go가 이미 끌어오는 모듈이다.
 22. **앱 크래시 조기 감지** (원본 `_crash_reason`·`_app_log_tail`을 옮김): Argo는 롤아웃이 끝난 뒤 죽는 앱을 Degraded가 아니라 Progressing으로 보고, 롤아웃 중이라도 `progressDeadlineSeconds`(기본 600초)가 지나야 Degraded라서 대기가 늘 timeout으로 끝났다. Argo 대기 중 `APP_CHECK_INTERVAL`(5초)마다 앱 Pod을 읽어, 이미지 받기 실패류는 즉시, 의존성 Ready 뒤 재시작 2회면 `failed(stage=health)`. health·timeout 실패에는 앱 로그 끝 80줄을 `last_lines`로 붙인다. 이번 배포 Pod = 앱 컨테이너 이미지가 같고 대기 시작 뒤 생긴 Pod (config로 크래시를 고치는 배포에서 옛 Pod을 세지 않게). 재개로 들어온 대기는 재시작 전 Pod을 보지 않는다. 권한은 ClusterRole `kodeploy-builder-app-reader`(pods get/list, pods/log get)를 kodeploy-charts가 앱 네임스페이스마다 RoleBinding으로 묶는다. 읽기가 막혀도(RoleBinding 전) 경고 한 번 남기고 Argo 판정대로 간다.
 
 ## 5. 4부 할 일 (빌더 계약에서 core가 지켜야 할 것)
