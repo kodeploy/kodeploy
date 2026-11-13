@@ -388,6 +388,9 @@ async def restore_file(ns: str, path: str, size: int, sha256: str, *, user_id: s
                 parsed = None
         backup = (parsed or {}).get("backup") or {}
         extra = {"backup_pod": backup.get("pod"), "backup_path": backup.get("path")} if backup.get("path") else {}
+        pending = [b.get("path") for b in (parsed or {}).get("unresolved_backups") or [] if b.get("path")]
+        if pending:
+            extra["unresolved_backups"] = pending
         s.log(code, 0 if parsed and parsed.get("status") == "Success" else 1, **extra)
     if parsed is None:
         raise _close_error(code)

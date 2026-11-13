@@ -360,6 +360,26 @@ def test_restore_kept_backup_is_reported(wired, monkeypatch, tmp_path):
     assert ev["backup_pod"] == "mysql-0" and ev["backup_path"].endswith("abcdef.sql.gz")
 
 
+# 이전 복원이 미해결(남은 백업)이면 exec가 precheck에서 거부한다: 다시 보내지 않고, 남은 백업 위치를 알린다
+def test_restore_refused_while_previous_unresolved(wired, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "EXEC_AGENT_RESTORE", True)
+    monkeypatch.setattr(snapshots, "_RETRY_DELAY", 0)
+    res = json.loads(_result("Failure", "precheck", db_changed=False))
+    old = "/tmp/kodeploy-restore/backup-20261112T000000Z-123456.sql.gz"
+    res["unresolved_backups"] = [{"pod": "mysql-0", "container": "mysql", "path": old}]
+    fake = FakeExec()
+    fake.reply["restore"] = ([(3, json.dumps(res).encode())], 1000)
+    token = _stage(monkeypatch, tmp_path, b"x")
+    with pytest.raises(snapshots.SnapshotError) as e:
+        run(fake, lambda: snapshots.restore_staged(NS, token), monkeypatch)
+    msg = str(e.value)
+    assert msg.startswith("이전 복원이 미해결 상태") and "DB는 바뀌지 않았습니다" in msg
+    assert f"mysql-0:{old}" in msg
+    assert len(fake.calls) == 1                                  # db_changed=false여도 재시도하지 않는다
+    assert wired.events[-1]["unresolved_backups"] == [old]
+    assert not list(tmp_path.iterdir())                          # stage 파일은 지웠다
+
+
 # 초기 복원: 고정 재시도 대신 exec Pod Ready를 기다린 뒤 한 번 보낸다. 연결 실패는 다시 보내지 않는다
 def test_initial_restore_waits_for_exec_then_sends_once(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "EXEC_AGENT_RESTORE", True)

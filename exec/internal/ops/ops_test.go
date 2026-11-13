@@ -293,3 +293,31 @@ func TestRestoreCleanupKeepsBackup(t *testing.T) {
 		}
 	}
 }
+
+// 남은 백업 검사는 실제 셸로 본다: 백업만 한 줄씩, 없거나 디렉토리가 없으면 출력 없이 exit 0
+func TestRestorePending(t *testing.T) {
+	list := func(dir string) string {
+		t.Helper()
+		c := RestorePending(dir)
+		out, err := exec.Command(c.Argv[0], c.Argv[1:]...).Output()
+		if err != nil {
+			t.Fatalf("%s: %v", c.Name, err)
+		}
+		return string(out)
+	}
+	dir := t.TempDir()
+	if got := list(filepath.Join(dir, "missing")); got != "" {
+		t.Fatalf("missing dir: %q", got)
+	}
+	os.WriteFile(filepath.Join(dir, "restore.dump"), []byte("x"), 0o600)
+	if got := list(dir); got != "" {
+		t.Fatalf("no backup: %q", got)
+	}
+	for _, f := range []string{"backup-b.sql.gz", "backup-a.sql.gz", "backup-a.sql.gz.tmp"} {
+		os.WriteFile(filepath.Join(dir, f), []byte("x"), 0o600)
+	}
+	want := filepath.Join(dir, "backup-a.sql.gz") + "\n" + filepath.Join(dir, "backup-b.sql.gz") + "\n"
+	if got := list(dir); got != want {
+		t.Fatalf("got %q want %q", got, want)
+	}
+}

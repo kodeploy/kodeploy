@@ -15,6 +15,10 @@
 //
 // 백업 파일(MySQL)은 복원마다 다른 이름이다. 결과를 모르는 경우(load 중 연결 끊김, rollback 실패)에는
 // cleanup이 백업을 지우지 않고 남기고, 결과 JSON의 backup에 위치를 싣는다. 수동 복구는 kodeploy hack/exec-e2e.md.
+//
+// precheck는 먼저 작업 디렉토리에 남은 백업이 있는지 본다. 있으면 이전 복원이 미해결 상태다: 새 복원은 DB를
+// 건드리지 않고 거부한다(db_changed=false, unresolved_backups에 위치). 새 복원이 DB를 또 바꾸면 남은 백업과
+// 지금 DB를 비교해 판단할 근거가 사라진다. 운영자가 확인하고 백업을 지우면 다시 받는다.
 package restore
 
 import (
@@ -76,6 +80,8 @@ type Result struct {
 	DBChanged  bool    `json:"db_changed"`
 	// Backup은 결과를 모르는 MySQL 복원에서 지우지 않고 남긴 백업이다. 그 밖에는 없다.
 	Backup *Backup `json:"backup,omitempty"`
+	// Unresolved는 precheck가 찾은, 이전 복원이 남긴 백업이다. 있으면 이 복원은 precheck에서 거부됐다.
+	Unresolved []Backup `json:"unresolved_backups,omitempty"`
 }
 
 // Backup은 남긴 백업의 위치다. Pod·Container는 api가 채운다 (restore는 대상 Pod를 모른다).
@@ -123,6 +129,10 @@ func Run(ctx context.Context, exec ExecFunc, upload io.Reader, p Params) Result 
 
 func (r *run) steps(upload io.Reader) {
 	p := r.p
+	if d, ok := r.pending(); !ok {
+		r.step("precheck", false, d)
+		return
+	}
 	if d, ok := r.space(); !ok {
 		r.step("precheck", false, d)
 		return
@@ -210,6 +220,26 @@ func describe(code int, err error, out string) string {
 		return "exec: " + err.Error()
 	}
 	return fmt.Sprintf("exit=%d %s", code, lastLines(out, 5))
+}
+
+// pending은 이전 복원이 남긴 백업이 있는지 본다. 있으면 그 위치를 결과에 싣고 거부한다.
+func (r *run) pending() (string, bool) {
+	var out, errb capBuf
+	code, err := r.exec(r.ctx, ops.RestorePending(r.p.Workdir), nil, &out, &errb)
+	if err != nil || code != 0 {
+		return "backup check failed: " + describe(code, err, errb.String()), false
+	}
+	var paths []string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			paths = append(paths, l)
+			r.res.Unresolved = append(r.res.Unresolved, Backup{Path: l})
+		}
+	}
+	if len(paths) == 0 {
+		return "", true
+	}
+	return "previous restore unresolved; backup remains: " + strings.Join(paths, ", "), false
 }
 
 // space는 작업 디렉토리의 남은 공간이 size × 2 이상인지 본다(지시서 4-6, df /tmp).

@@ -135,6 +135,17 @@ func RestorePrecheck(workdir string) Cmd {
 	return Cmd{Name: "restore.precheck", Argv: sh("/bin/sh", script, workdir)}
 }
 
+// RestorePending은 작업 디렉토리에 남은 백업 파일(backup-*.sql.gz)을 한 줄에 하나씩 출력한다.
+// 이전 복원이 결과를 몰라 남긴 백업이다. 하나라도 있으면 restore가 새 복원을 받지 않는다.
+// 복원이 끝나면 cleanup이 백업을 지우므로, 결과를 아는 복원은 여기 남지 않는다.
+func RestorePending(workdir string) Cmd {
+	const script = `for f in "$1"/` + BackupGlob + `; do if [ -e "$f" ]; then echo "$f"; fi; done`
+	return Cmd{Name: "restore.pending", Argv: sh("/bin/sh", script, workdir)}
+}
+
+// BackupGlob은 복원 백업 파일 이름 모양이다 (restore.BackupName이 만든다).
+const BackupGlob = "backup-*.sql.gz"
+
 // RestoreBackup은 MySQL 현재 DB를 작업 디렉토리의 $2(복원마다 다른 이름)로 덤프한다 (rollback용).
 // 이름이 복원마다 달라서, 남겨 둔 백업(결과를 모르는 복원)을 다음 복원이 덮어쓰지 않는다.
 func RestoreBackup(workdir, name string) Cmd {

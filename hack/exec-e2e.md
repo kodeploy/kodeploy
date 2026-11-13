@@ -177,6 +177,7 @@ kubectl logs -n $NS deploy/kodeploy-exec | grep <request_id>
 | 기대 해시 틀리게 | `$TC restore ... -file d.sql -sha 0000…(64자)` | `failed_step: upload`, `db_changed: false` |
 | 동시 세션 초과 (공개 문 3) | `$TC hold ... -url wss://api.kodeploy.com/exec/$NS/v1/sessions -app $APP -n 4` | 4번째가 `closed 4429` |
 | 문마다 따로 센다 | 위 `hold -n 3`을 붙잡아 둔 채 웹 DB 콘솔에서 `SELECT 1` (내부 문, 상한 4) | 콘솔이 정상 응답 (터미널이 내부 문 자리를 쓰지 않는다) |
+| 미해결 백업이 남은 채 복원 | `kubectl exec -n $NS sts/mysql -- sh -c 'mkdir -p /tmp/kodeploy-restore && : > /tmp/kodeploy-restore/backup-e2e.sql.gz'` 뒤 `$TC restore ... -file d.sql` | `failed_step: precheck`, `db_changed: false`, `unresolved_backups[0].path`가 그 파일, DB 그대로. 파일을 지운 뒤 같은 복원이 성공 |
 | 작업 디렉토리 채우기 | 하지 않는 것을 권한다 (아래) | |
 
 작업 디렉토리는 DB 컨테이너의 `/tmp`, 곧 노드 루트 디스크다. 업로드 상한이 200 MiB라서 precheck(크기 × 2)를 실패시키려면 노드 디스크를 400 MiB 아래로 채워야 하고, 그러면 같은 노드의 모든 Pod가 위험하다. 이 경로는 단위 테스트(`exec/internal/restore` `TestPrecheckFailures`)로 갈음하거나, 로컬 k3s 실험 클러스터에서만 재현한다.
@@ -237,6 +238,7 @@ MySQL 복원이 load 도중 끊기거나(연결 끊김·시간 초과) rollback�
 - 위치는 복원 결과 JSON의 `backup`(`pod`, `container`, `path`)에 있다.
 - core 로그에는 `exec_session` 줄의 `backup_pod`·`backup_path`로, exec 로그(stderr)에는 `restore outcome unknown; backup kept`로 남는다.
 - 사용자에게는 복원 실패 메시지에 같은 경로가 나간다.
+- **백업이 남아 있는 동안 그 ns의 새 복원은 precheck에서 거부된다.** DB는 건드리지 않고(`db_changed=false`), 결과의 `unresolved_backups`에 남은 백업 위치가 실린다. 사용자에게는 "이전 복원이 미해결 상태라 새 복원을 하지 않았습니다"와 경로가 나가고, core는 다시 보내지 않는다. exec 로그에는 `restore refused; previous restore unresolved`가 남는다. 아래 5번에서 백업을 지워야 다시 복원할 수 있다.
 - PostgreSQL은 백업 단계가 없다. 연결이 끊겨도 적재는 한 트랜잭션이라 끝까지 가면 커밋되고, 아니면 롤백된다. 3번 확인만 하면 된다.
 
 **백업은 DB 컨테이너의 `/tmp`(컨테이너 쓰기 레이어)에 있다. 컨테이너가 재시작되면 사라지므로 1번부터 한다.**
@@ -269,11 +271,13 @@ kubectl exec -n $NS $POD -c mysql -- bash -c 'set -o pipefail; export MYSQL_PWD=
 #   (이 경우 DROP/CREATE DATABASE를 먼저 따로 돌린다)
 ```
 
-5. 앱을 다시 띄워 새 데이터로 연결하게 한다. 백업 파일은 확인이 끝나면 지운다. 꺼낸 사본(`./restore-backup.sql.gz`)도 개인 데이터가 든 파일이니 지운다.
+5. 앱을 다시 띄워 새 데이터로 연결하게 한다. 백업 파일은 확인이 끝나면 지운다 — 지워야 이 ns의 복원이 다시 열린다. 꺼낸 사본(`./restore-backup.sql.gz`)도 개인 데이터가 든 파일이니 지운다.
 
 ```sh
 kubectl rollout restart deploy/$APP -n $NS
 kubectl exec -n $NS $POD -c mysql -- rm -f "$BK"
+# 남은 백업이 없어야 한다 (출력 없음)
+kubectl exec -n $NS $POD -c mysql -- sh -c 'ls /tmp/kodeploy-restore/backup-*.sql.gz 2>/dev/null'
 ```
 
 ## 되돌리기

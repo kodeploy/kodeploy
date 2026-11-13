@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -24,7 +25,9 @@ import (
 type fakeDB struct {
 	mu         sync.Mutex
 	availKB    int64
-	missing    string // precheck에서 없는 도구
+	missing    string   // precheck에서 없는 도구
+	pending    []string // 작업 디렉토리에 남은 백업
+	pendingErr error
 	backupExit int
 	loadExit   int
 	loadErr    error
@@ -49,6 +52,11 @@ func (f *fakeDB) exec(ctx context.Context, cmd ops.Cmd, stdin io.Reader, stdout,
 	f.argv[cmd.Name] = cmd.Argv
 	f.mu.Unlock()
 	switch cmd.Name {
+	case "restore.pending":
+		for _, p := range f.pending {
+			fmt.Fprintln(stdout, p)
+		}
+		return 0, f.pendingErr
 	case "restore.precheck":
 		if f.missing != "" {
 			fmt.Fprintf(stderr, "missing:%s\n", f.missing)
@@ -194,6 +202,48 @@ func TestPrecheckFailures(t *testing.T) {
 	res = Run(context.Background(), f.exec, bytes.NewReader(dump), params(target.Postgres, dump))
 	if res.FailedStep != "precheck" || !strings.Contains(res.Steps[0].Detail, "missing:sha256sum") {
 		t.Fatalf("missing tool: %+v", res)
+	}
+}
+
+// 이전 복원이 남긴 백업이 있으면 DB를 건드리지 않고 거부한다
+func TestPrecheckRefusesUnresolvedBackup(t *testing.T) {
+	old := "/w/backup-20261112T000000Z-123456.sql.gz"
+	for _, kind := range []target.Kind{target.MySQL, target.Postgres} {
+		f := &fakeDB{availKB: 1 << 20, pending: []string{old}}
+		res := Run(context.Background(), f.exec, bytes.NewReader(dump), params(kind, dump))
+		if res.FailedStep != "precheck" || res.DBChanged || names(res.Steps) != "precheck:fail cleanup:ok" {
+			t.Fatalf("%s: %+v", kind, res)
+		}
+		if d := res.Steps[0].Detail; !strings.Contains(d, "previous restore unresolved") || !strings.Contains(d, old) {
+			t.Fatalf("%s detail %q", kind, d)
+		}
+		if len(res.Unresolved) != 1 || res.Unresolved[0].Path != old || res.Backup != nil {
+			t.Fatalf("%s unresolved %+v backup %+v", kind, res.Unresolved, res.Backup)
+		}
+		if got := strings.Join(f.calls, " "); got != "restore.pending restore.cleanup" {
+			t.Fatalf("%s calls %s", kind, got)
+		}
+		// cleanup은 이번 복원 몫만 지운다 — 남은 백업은 그대로
+		if kind == target.MySQL && f.removedBackup(t) != backupName {
+			t.Fatalf("cleanup removed %q", f.removedBackup(t))
+		}
+		b, _ := json.Marshal(res)
+		if !strings.Contains(string(b), `"unresolved_backups":[{"path":"`+old+`"}]`) || !strings.Contains(string(b), `"db_changed":false`) {
+			t.Fatalf("json %s", b)
+		}
+	}
+
+	f := &fakeDB{availKB: 1 << 20, pendingErr: errors.New("stream closed")}
+	res := Run(context.Background(), f.exec, bytes.NewReader(dump), params(target.MySQL, dump))
+	if res.FailedStep != "precheck" || res.DBChanged || !strings.Contains(res.Steps[0].Detail, "backup check failed") {
+		t.Fatalf("check failed: %+v", res)
+	}
+
+	// 남은 백업이 없으면 결과에 싣지 않는다
+	f = &fakeDB{availKB: 1 << 20, tables: "users\n"}
+	b, _ := json.Marshal(Run(context.Background(), f.exec, bytes.NewReader(dump), params(target.MySQL, dump)))
+	if strings.Contains(string(b), "unresolved") {
+		t.Fatalf("json %s", b)
 	}
 }
 
@@ -359,6 +409,10 @@ func TestBackupName(t *testing.T) {
 	a, b := BackupName(now), BackupName(now)
 	if !regexp.MustCompile(`^backup-20261112T160203Z-[0-9a-f]{6}\.sql\.gz$`).MatchString(a) || a == b {
 		t.Fatalf("%q %q", a, b)
+	}
+	// precheck가 찾는 모양과 같아야 남긴 백업을 다음 복원이 알아본다
+	if ok, _ := path.Match(ops.BackupGlob, a); !ok {
+		t.Fatalf("%q does not match %q", a, ops.BackupGlob)
 	}
 	// Run은 이름이 없으면 만든다
 	f := &fakeDB{availKB: 1 << 20, tables: "users\n"}

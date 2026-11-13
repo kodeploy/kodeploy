@@ -384,6 +384,7 @@ def restore_via_exec(ns: str) -> bool:
 
 
 # db_changed=false인 실패(precheck·backup·upload·verify)면 다시 보낸다 (지시서 4-6).
+# 이전 복원이 미해결 상태(unresolved_backups)면 다시 보내도 같은 거부라 보내지 않는다.
 # exec에 연결하지 못한 실패는 다시 보내지 않는다 — 첫 배포처럼 exec가 막 뜨는 경우는 restore_staged(wait_exec)가 먼저 기다린다.
 RESTORE_RETRIES = 2
 _RETRY_DELAY = 5
@@ -404,7 +405,7 @@ async def _restore_via_exec(ns: str, path: str, user_id: str, app_id: str) -> di
         if res.get("status") == "Success":
             return {"ok": True, "output": _restore_summary(res), "result": res}
         last = res
-        if res.get("db_changed"):
+        if res.get("db_changed") or res.get("unresolved_backups"):
             break
     raise SnapshotError(_restore_failure(last or {}))
 
@@ -419,6 +420,14 @@ def _restore_summary(res: dict) -> str:
 
 
 def _restore_failure(res: dict) -> str:
+    # 이전 복원이 결과를 몰라 남긴 백업이 있다: exec가 DB를 건드리지 않고 거부했다 (precheck).
+    # 운영자가 hack/exec-e2e.md "복원 백업이 남았을 때"대로 정리하고 백업을 지우면 다시 복원할 수 있다.
+    pending = [b for b in res.get("unresolved_backups") or [] if b.get("path")]
+    if pending:
+        where = ", ".join(f"{b.get('pod', '?')}:{b['path']}" for b in pending)
+        return ("이전 복원이 미해결 상태라 새 복원을 하지 않았습니다 (DB는 바뀌지 않았습니다)"
+                f"\n남은 백업: {where}"
+                "\n운영자가 확인하고 백업을 정리해야 다시 복원할 수 있습니다")
     step = res.get("failed_step") or "?"
     detail = next((s.get("detail") for s in res.get("steps") or [] if s.get("name") == step), "")
     msg = f"복원 실패 ({step})" + (f": {detail}" if detail else "")

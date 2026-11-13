@@ -24,6 +24,7 @@ import (
 	utilexec "k8s.io/client-go/util/exec"
 
 	"github.com/kodeploy/kodeploy/exec/internal/audit"
+	"github.com/kodeploy/kodeploy/exec/internal/ops"
 	"github.com/kodeploy/kodeploy/exec/internal/proto"
 	"github.com/kodeploy/kodeploy/exec/internal/session"
 	"github.com/kodeploy/kodeploy/exec/internal/sign"
@@ -60,6 +61,7 @@ type fakeRunner struct {
 	block   chan struct{} // shell 세션을 붙잡아 둘 때
 	file    []byte        // 복원 작업 파일
 	loadErr error         // 복원 load가 끝나지 못한 것처럼 (연결 끊김)
+	pending []string      // 작업 디렉토리에 남은 백업 (이전 복원이 미해결)
 }
 
 func (f *fakeRunner) Run(ctx context.Context, e session.Exec) error {
@@ -90,6 +92,10 @@ func (f *fakeRunner) Run(ctx context.Context, e session.Exec) error {
 		return utilexec.CodeExitError{Err: errors.New("exit"), Code: 2}
 	case strings.Contains(script, `gunzip -c "$f"`): // restore.load
 		return f.loadErr
+	case strings.Contains(script, ops.BackupGlob): // restore.pending
+		for _, p := range f.pending {
+			fmt.Fprintln(e.Stdout, p)
+		}
 	case strings.Contains(script, "df -Pk"):
 		fmt.Fprint(e.Stdout, "Filesystem 1024-blocks Used Available Capacity Mounted on\noverlay 1 1 1048576 1% /\n")
 	case strings.Contains(script, `cat > "$1/restore.dump"`):
@@ -628,6 +634,41 @@ func TestInternalRestoreKeepsBackup(t *testing.T) {
 	last := execs[len(execs)-1].Command
 	if !strings.Contains(last[2], `rm -f "$1/restore.dump"`) || last[5] != "" {
 		t.Fatalf("cleanup must keep the backup: %q", last)
+	}
+}
+
+// 이전 복원이 남긴 백업이 있으면 precheck에서 거부한다. 남은 백업의 Pod·컨테이너·경로가 결과에 실린다
+func TestInternalRestoreRefusesUnresolved(t *testing.T) {
+	e := newEnv(t, 3, 4, nil)
+	old := "/tmp/kodeploy-restore/backup-20261112T000000Z-123456.sql.gz"
+	e.runner.pending = []string{old}
+	data := []byte("CREATE TABLE users (id int);\n")
+	p := restorePath(data)
+	c, _, err := dialInternal(t, e, p, signed("GET", p, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.WriteMessage(websocket.BinaryMessage, proto.Frame(proto.ChStdin, data))
+	c.WriteMessage(websocket.BinaryMessage, proto.CloseFrame(proto.ChStdin))
+	out, _ := readAll(t, c)
+	var res struct {
+		FailedStep string `json:"failed_step"`
+		DBChanged  bool   `json:"db_changed"`
+		Unresolved []struct {
+			Pod, Container, Path string
+		} `json:"unresolved_backups"`
+	}
+	if err := json.Unmarshal(out[proto.ChStatus], &res); err != nil {
+		t.Fatalf("status: %s", out[proto.ChStatus])
+	}
+	if res.FailedStep != "precheck" || res.DBChanged || len(res.Unresolved) != 1 ||
+		res.Unresolved[0].Pod != "mysql-0" || res.Unresolved[0].Container != "mysql" || res.Unresolved[0].Path != old {
+		t.Fatalf("result %s", out[proto.ChStatus])
+	}
+	for _, x := range e.runner.execs() {
+		if strings.Contains(x.Command[2], "mysqldump") || strings.Contains(x.Command[2], "cat >") {
+			t.Fatalf("must not touch the db or upload: %q", x.Command)
+		}
 	}
 }
 

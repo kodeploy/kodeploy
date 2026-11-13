@@ -292,6 +292,12 @@ func (s *Server) restoreJob(t target.Target, p restore.Params) session.Job {
 			s.o.Log.Warn("restore outcome unknown; backup kept",
 				"pod", t.Pod, "container", t.Container, "path", res.Backup.Path, "failed_step", res.FailedStep)
 		}
+		for i := range res.Unresolved {
+			b := &res.Unresolved[i]
+			b.Pod, b.Container = t.Pod, t.Container
+			s.o.Log.Warn("restore refused; previous restore unresolved",
+				"pod", t.Pod, "container", t.Container, "path", b.Path)
+		}
 		b, _ := json.Marshal(res)
 		code := 0
 		if res.Status != "Success" {
