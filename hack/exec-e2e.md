@@ -30,7 +30,7 @@ exec는 카나리로 넓힌다. 두 목록을 같이 맞춘다.
 | 4 | 기존 테넌트 HMAC 키 | `core/.venv/bin/python hack/backfill-exec-hmac.py` (dry-run) → `--apply` | 마지막 줄 `missing=0` |
 | 5 | AppProject (kodeploy-charts 브랜치) | `kubectl apply -f argocd/appproject.yaml` | `kubectl get appproject kodeploy-apps -n argocd -o yaml`에 Role·ServiceAccount |
 | 6 | vmagent | `kubectl apply -f deploy/k8s/monitoring/vmagent.yaml && kubectl rollout restart deploy/vmagent -n monitoring` | VM에서 `up{job="kodeploy-exec"}` |
-| 7 | 차트 값 채우기 (kodeploy-charts PR 브랜치) | `charts/app/platform/exec.yaml`의 `image`, `apiserver.ip`, `envoySelector`, `nodeNets`·`allowedOrigins`(core `ALLOWED_ORIGINS`와 같은지) 확인, **`rollout.namespaces: [$NS]`** (`all: false` 그대로) | `tests/exec_check.py` 통과, 마지막 줄 `repo values render exec in: ['tenant-…']` |
+| 7 | 차트 값 채우기 (kodeploy-charts PR 브랜치) | `charts/app/platform/exec.yaml`의 `image`, `apiserver.ip`, `envoySelector`, `nodeNets`·`allowedOrigins`(운영 웹 https만 — core `ALLOWED_ORIGINS`에서 로컬 dev 서버를 뺀 목록)·`devOrigins.enabled: false` 확인, **`rollout.namespaces: [$NS]`** (`all: false` 그대로) | `tests/exec_check.py` 통과, 마지막 줄 `repo values render exec in: ['tenant-…']` |
 | 8 | 테스트 앱 ns에 서버 측 dry-run | 아래 "머지 전 dry-run" | 오류 없음 |
 | 9 | 차트 PR 머지 | GitHub에서 머지 → Argo가 sync. exec는 `$NS`에만 생긴다 | 9절 1번 (`$NS` 하나) |
 | 10 | 9절 2~4번 | `$NS`에서 | |
@@ -196,7 +196,8 @@ kubectl exec -n $NS sts/mysql -- ls -la /tmp/kodeploy-restore             # clea
 
 ### [ ] 7. 웹 터미널 3종
 
-`EXEC_AGENT_TERMINAL: "true"`로 core를 재시작한 뒤, 테스트 앱 워크스페이스의 터미널에서:
+`EXEC_AGENT_TERMINAL: "true"`로 core를 재시작한 뒤, 운영 웹(`https://app.kodeploy.com`)의 테스트 앱 워크스페이스 터미널에서 본다. 로컬 web dev 서버(5173)에서는 열리지 않는다(403): exec 허용 목록에서 dev 서버 주소는 차트 `devOrigins`에 꺼 둔 채로 있다. core `ALLOWED_ORIGINS`는 5173을 받으므로 티켓 발급까지는 되고 업그레이드에서 막힌다. 로컬에서 확인해야 하면 `devOrigins.enabled: true`로 잠깐 켜고 끝나면 끈다(전 테넌트에 적용된다).
+
 
 | 대상 | 입력 | 통과 |
 |---|---|---|
