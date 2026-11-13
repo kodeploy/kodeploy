@@ -1,10 +1,10 @@
-// Package audit은 세션마다 JSON 한 줄 감사 기록과 지표(9090)를 남긴다 (지시서 4-5).
+// Package audit은 세션마다 JSON 한 줄 감사 기록과 지표(9090)를 남긴다.
 //
 // 남기지 않는 것: SQL 본문, 터미널 입출력, 티켓 원문, HMAC 키. SQL은 길이와 sha256만 남긴다.
-// ticket_sha256·user_id·app_id·target·op·issued_at은 core 발급 기록(3-6)과 같은 이름이다.
+// ticket_sha256·user_id·app_id·target·op·issued_at은 core 발급 기록(core app/exec/router.py)과 같은 이름이다.
 // 내부 세션은 티켓이 없어 그 넷이 비어 있고, 앱은 ns로(ns 하나 = 앱 하나), core 로그와는 request_id로 잇는다.
 //
-// TODO(지시서 4-5): 영구 보관은 이번 범위 밖이다. 지금은 컨테이너 stdout(로그 보존 기간)까지만 남는다.
+// TODO: 영구 보관은 아직 없다. 지금은 컨테이너 stdout(로그 보존 기간)까지만 남는다.
 package audit
 
 import (

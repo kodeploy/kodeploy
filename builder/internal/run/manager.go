@@ -1,5 +1,5 @@
 // Package run은 요청 하나를 끝까지 돌리는 상태기계와, 진행 중인 요청을 관리하는 Manager다.
-// build는 Job → 로그·마커 → (먼저 온 쪽) → registry 확인 → gitops 커밋 → Argo 대기 → reap 순서다 (지시서 4-2).
+// build는 Job → 로그·마커 → (먼저 온 쪽) → registry 확인 → gitops 커밋 → Argo 대기 → reap 순서다 (설계 문서 4-2).
 package run
 
 import (
@@ -214,7 +214,7 @@ func waitGroup(ctx context.Context, wg *sync.WaitGroup) bool {
 	}
 }
 
-// Resume은 시작할 때 부른다. 빌더가 만든 Job 중 finished 표시가 없는 것을 이어간다 (지시서 4-5).
+// Resume은 시작할 때 부른다. 빌더가 만든 Job 중 finished 표시가 없는 것을 이어간다 (설계 문서 4-5).
 func (m *Manager) Resume(ctx context.Context) (int, error) {
 	jobs, err := m.d.Jobs.ListManaged(ctx)
 	if err != nil {

@@ -17,7 +17,7 @@ import (
 // 대상 Pod 조회 시한
 const findTimeout = 10 * time.Second
 
-// Public은 8080 핸들러다 (지시서 3-2). 티켓으로 shell·console만 연다.
+// Public은 8080 핸들러다. 티켓으로 shell·console만 연다.
 func (s *Server) Public() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /exec/{ns}/v1/sessions", s.publicSession)

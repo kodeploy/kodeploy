@@ -1,4 +1,4 @@
-// Package config는 kodeploy-exec 설정을 환경변수에서 읽는다 (지시서 5절).
+// Package config는 kodeploy-exec 설정을 환경변수에서 읽는다.
 // 값은 차트가 고정하고, 앱 values에서는 아무것도 받지 않는다.
 package config
 

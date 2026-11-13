@@ -1,4 +1,4 @@
-// Package registry는 GHCR에 이미지가 실제로 있는지 확인하고, 태그로 digest를 찾는다 (지시서 4-2 6·8).
+// Package registry는 GHCR에 이미지가 실제로 있는지 확인하고, 태그로 digest를 찾는다 (설계 문서 4-2 6·8).
 package registry
 
 import (

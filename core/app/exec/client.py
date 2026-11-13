@@ -1,4 +1,4 @@
-"""kodeploy-exec 내부 문 클라이언트 (exec 게이트웨이 지시서 6-3).
+"""kodeploy-exec 내부 문 클라이언트.
 
 core는 이 클라이언트로 테넌트 ns의 exec Pod(kodeploy-exec.<ns>.svc:8081)에 서명한 요청을 보낸다.
 - 서명: app/builder/sign.py 그대로 (path는 쿼리를 뺀 원문). 그래서 작업 이름과 restore 기대값은 경로에 싣는다.
@@ -363,7 +363,7 @@ async def dump_stream(ns: str, *, user_id: str = "", app_id: str = ""):
 
 
 async def restore_file(ns: str, path: str, size: int, sha256: str, *, user_id: str = "", app_id: str = "") -> dict:
-    """restore: 파일을 보내고 단계식 결과(지시서 3-5)를 돌려준다. 실패도 결과로 온다."""
+    """restore: 파일을 보내고 단계식 결과(exec restore.Result)를 돌려준다. 실패도 결과로 온다."""
     result: list[bytes] = []
 
     async def chunks():

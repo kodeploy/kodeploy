@@ -1,4 +1,4 @@
-// Package session은 클라이언트 프레임과 원격 exec 스트림을 잇는다 (지시서 4-4).
+// Package session은 클라이언트 프레임과 원격 exec 스트림을 잇는다.
 //
 //   - 채널 0 → stdin. CLOSE(255, 0)를 받으면 stdin을 닫는다.
 //   - stdout·stderr → 채널 1·2 (tty면 K8s가 stdout으로 합친다).

@@ -1,4 +1,4 @@
-# kodeploy-exec Pod 모양을 묶는다 (admission-policy.yaml의 짝, exec 게이트웨이 지시서 6-1).
+# kodeploy-exec Pod 모양을 묶는다 (admission-policy.yaml의 짝).
 # kodeploy-exec SA는 테넌트 ns의 pods/exec를 가진다. 그 SA로 다른 이미지·사이드카·디버그 컨테이너를 띄우면
 # 그 권한을 그대로 쓸 수 있으므로, 테넌트 ns에서 이 SA를 쓰는 Pod는 차트가 그리는 모양 하나만 허용한다.
 #   - 라벨 kodeploy.com/component=exec

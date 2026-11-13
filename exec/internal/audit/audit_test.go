@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// core 발급 기록(3-6)과 같은 이름이어야 두 기록을 이을 수 있다. 내부 세션처럼 비어 있어도 키는 남는다.
+// core 발급 기록과 같은 이름이어야 두 기록을 이을 수 있다. 내부 세션처럼 비어 있어도 키는 남는다.
 func TestFieldNames(t *testing.T) {
 	var buf bytes.Buffer
 	l := New(&buf)

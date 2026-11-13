@@ -1,4 +1,4 @@
-// testclient는 kodeploy-exec E2E 확인 도구다 (hack/exec-e2e.md 9절 체크리스트에서 쓴다).
+// testclient는 kodeploy-exec E2E 확인 도구다 (hack/exec-e2e.md 체크리스트에서 쓴다).
 //
 //	go run ./internal/testclient/cmd/testclient <명령> [옵션]
 //
@@ -7,7 +7,7 @@
 //	run           내부 세션 query·browse·dump              -internal -key-file -op [-sql | -in] [-out]
 //	restore       내부 세션 restore (크기·sha256은 계산)    -internal -key-file -file [-sha] [-abort-after N]
 //	hold          공개 문 세션 n개 동시에 열기 (4429 확인)   -internal -key-file -url -app -n
-//	check-public  9절 4번 자동 확인 (PASS/FAIL)             -internal -key-file -url -app [-origin] [-other-ns-url] [-expiry]
+//	check-public  체크리스트 4번 자동 확인 (PASS/FAIL)             -internal -key-file -url -app [-origin] [-other-ns-url] [-expiry]
 //
 // 판정은 상태 코드가 아니라 출력 본문의 sentinel로 한다. sentinel은 입력 echo에 나오지 않는 값이다
 // (예: 입력 "echo kd-$((6*7))" → 출력에만 "kd-42").

@@ -1,4 +1,4 @@
-// Package gitops는 kodeploy-apps의 apps/<namespace>/values.yaml을 읽고, 칸 주인 규칙(지시서 3-4)으로
+// Package gitops는 kodeploy-apps의 apps/<namespace>/values.yaml을 읽고, 칸 주인 규칙(설계 문서 3-4)으로
 // 병합해 GitHub Contents API로 커밋한다. 쓰기는 고루틴 하나가 순서대로 처리한다.
 package gitops
 
@@ -44,7 +44,7 @@ type Static struct {
 }
 
 // Empty는 파일이 없을 때의 시작값이다. kodeploy-charts/charts/app/values.yaml의 기본값과 같다
-// (지시서의 image: "", runtime: none, port: null 포함).
+// (설계 문서의 image: "", runtime: none, port: null 포함).
 func Empty() *Values {
 	return &Values{Runtime: "none", Replicas: 1, DB: "none", Hostnames: []string{}, Static: Static{Hostnames: []string{}}}
 }
@@ -119,7 +119,7 @@ func (v *Values) clone() *Values {
 
 var ErrNoValuesFile = errors.New("values file does not exist")
 
-// Merge는 지시서 3-4 규칙으로 커밋할 값을 만든다. cur는 git의 현재 값(없으면 nil),
+// Merge는 설계 문서 3-4 규칙으로 커밋할 값을 만든다. cur는 git의 현재 값(없으면 nil),
 // image는 build·set-image에서 요청 slot 칸에 넣을 <repo>:<tag>@sha256:<hex>.
 //   - core 소유 칸: req.Values에 온 것만 덮는다.
 //   - 요청 slot의 묶인 칸: build·set-image면 image(+서버는 unit의 runtime·port). config면 그대로.

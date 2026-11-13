@@ -214,7 +214,7 @@ func TestDelete(t *testing.T) {
 	if _, ok := fg.files[testPath]; ok {
 		t.Fatal("file not deleted")
 	}
-	// 이미 없으면 성공 (지시서 4-1)
+	// 이미 없으면 성공 (설계 문서 4-1)
 	res, err = w.Commit(context.Background(), Change{Namespace: "tenant-d6d8b759", Message: "delete", Delete: true})
 	if err != nil || !res.Skipped || res.CommitSHA != "" {
 		t.Fatalf("second delete: %+v %v", res, err)

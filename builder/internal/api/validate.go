@@ -10,7 +10,7 @@ import (
 	"github.com/kodeploy/kodeploy/builder/internal/contract"
 )
 
-// Validator는 서명 검증을 통과한 요청의 내용을 검사한다 (지시서 4-1 + 입력 검증 추가분).
+// Validator는 서명 검증을 통과한 요청의 내용을 검사한다 (설계 문서 4-1 + 입력 검증 추가분).
 type Validator struct {
 	GHCRUser string // 소문자
 }

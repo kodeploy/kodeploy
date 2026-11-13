@@ -1,4 +1,4 @@
-// Package restore는 덤프 복원의 단계 상태기계다 (지시서 4-6).
+// Package restore는 덤프 복원의 단계 상태기계다.
 //
 //	precheck → backup(MySQL만) → upload → verify → load → check → (rollback, MySQL) → cleanup(항상)
 //
@@ -59,7 +59,7 @@ func BackupName(now time.Time) string {
 	return "backup-" + now.UTC().Format("20060102T150405Z") + "-" + hex.EncodeToString(b) + ".sql.gz"
 }
 
-// 채널 3 결과 (지시서 3-5)
+// 채널 3 결과
 type Step struct {
 	Name   string `json:"name"`
 	OK     bool   `json:"ok"`
@@ -181,7 +181,7 @@ func (r *run) steps(upload io.Reader) {
 		return
 	}
 	r.step("load", code == 0, "exit="+strconv.Itoa(code))
-	r.res.FailedStep = "" // load의 exit code 판단은 check가 한다 (지시서 4-6: 실패하면 check로)
+	r.res.FailedStep = "" // load의 exit code 판단은 check가 한다 (실패해도 check로 넘어간다)
 	r.res.DBChanged = p.Kind == target.MySQL || code == 0
 
 	if code != 0 {
@@ -242,7 +242,7 @@ func (r *run) pending() (string, bool) {
 	return "previous restore unresolved; backup remains: " + strings.Join(paths, ", "), false
 }
 
-// space는 작업 디렉토리의 남은 공간이 size × 2 이상인지 본다(지시서 4-6, df /tmp).
+// space는 작업 디렉토리의 남은 공간이 size × 2 이상인지 본다(df /tmp).
 func (r *run) space() (string, bool) {
 	var out, errb capBuf
 	code, err := r.exec(r.ctx, ops.RestorePrecheck(r.p.Workdir), nil, &out, &errb)

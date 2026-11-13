@@ -383,7 +383,7 @@ def restore_via_exec(ns: str) -> bool:
     return app_config.exec_agent_on(app_config.EXEC_AGENT_RESTORE, ns)
 
 
-# db_changed=false인 실패(precheck·backup·upload·verify)면 다시 보낸다 (지시서 4-6).
+# db_changed=false인 실패(precheck·backup·upload·verify)면 다시 보낸다.
 # 이전 복원이 미해결 상태(unresolved_backups)면 다시 보내도 같은 거부라 보내지 않는다.
 # exec에 연결하지 못한 실패는 다시 보내지 않는다 — 첫 배포처럼 exec가 막 뜨는 경우는 restore_staged(wait_exec)가 먼저 기다린다.
 RESTORE_RETRIES = 2

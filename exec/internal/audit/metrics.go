@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// Metrics는 Prometheus 텍스트 형식으로 내보내는 지표다 (지시서 4-5).
+// Metrics는 Prometheus 텍스트 형식으로 내보내는 지표다.
 // 의존성을 client-go·gorilla로 묶어 두려고 클라이언트 라이브러리 없이 직접 쓴다.
 //
 //	kodeploy_exec_sessions_total{op,result}          작업별 세션 수 (result: ok | fail)

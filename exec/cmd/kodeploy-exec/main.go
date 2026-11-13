@@ -110,7 +110,7 @@ func serve(log *slog.Logger) error {
 	case <-ctx.Done():
 	}
 
-	// 종료 (지시서 4-7): 새 연결을 받지 않고(/healthz 503 → Ready에서 빠진다), tty 세션은 4503으로 닫는다.
+	// 종료: 새 연결을 받지 않고(/healthz 503 → Ready에서 빠진다), tty 세션은 4503으로 닫는다.
 	// 진행 중인 비대화형 세션(특히 restore)은 끝까지 마친다. 차트의 terminationGracePeriodSeconds를
 	// 비대화형 최대 실행 시간에 맞춰 두었고, 그 안에 못 끝나면 kubelet이 SIGKILL한다.
 	log.Info("shutting down", "active_sessions", srv.Active())

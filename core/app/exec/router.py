@@ -1,4 +1,4 @@
-"""웹용 exec 엔드포인트 (exec 게이트웨이 지시서 3-6).
+"""웹용 exec 엔드포인트.
 
 POST /apps/{app_id}/exec-tickets {"target": "app|db|redis"} → {"ticket", "url", "protocol", "expires_in"}
 - 쿠키 인증 + 기존 터미널 WebSocket과 같은 Origin 검사, 같은 권한 규칙("터미널은 앱 주인만", root는 남의 앱도).

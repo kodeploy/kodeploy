@@ -1,4 +1,4 @@
-// Package api는 core가 부르는 빌더 HTTP 서버다 (지시서 3-1).
+// Package api는 core가 부르는 빌더 HTTP 서버다 (설계 문서 3-1).
 // 서명 검증 → 본문 파싱 → 내용 검증 → 디스패처 순서. 본문은 서명이 맞을 때만 파싱한다.
 package api
 

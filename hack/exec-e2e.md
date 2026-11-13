@@ -1,10 +1,10 @@
 # kodeploy-exec E2E 절차
 
-exec 게이트웨이 지시서 9절을 체크리스트로 옮긴 것이다. 클러스터에서 사람이 진행하고, 결과는 블로그·포트폴리오 재료라 수치를 남긴다.
+kodeploy-exec를 클러스터에 적용하고 확인하는 체크리스트다. 클러스터에서 사람이 진행하고, 결과는 블로그·포트폴리오 재료라 수치를 남긴다.
 
 - **운영 앱 DB로 복원·장애 재현을 하지 않는다.** 테스트 앱 하나를 따로 만들어 쓴다 (MySQL 하나, PostgreSQL 하나면 둘 다 확인된다).
 - 판정은 상태 코드가 아니라 출력 본문의 sentinel로 한다. testclient의 점검은 입력 echo에 나오지 않는 값(`echo kd-$((6*7))` → `kd-42`)을 기다린다.
-- 9절 8번(core-tenant `pods/exec` 제거)은 1~7번을 확인한 뒤 5단계에서 한다. 이 문서에는 확인 방법만 적는다.
+- 8번(core-tenant `pods/exec` 제거)은 1~7번을 확인한 뒤 권한 회수 단계(`pods/exec` 제거·옛 코드 삭제)에서 한다. 이 문서에는 확인 방법만 적는다.
 
 ```sh
 NS=tenant-xxxxxxxx          # 테스트 앱 ns
@@ -32,10 +32,10 @@ exec는 카나리로 넓힌다. 두 목록을 같이 맞춘다.
 | 6 | vmagent | `kubectl apply -f deploy/k8s/monitoring/vmagent.yaml && kubectl rollout restart deploy/vmagent -n monitoring` | VM에서 `up{job="kodeploy-exec"}` |
 | 7 | 차트 값 채우기 (kodeploy-charts PR 브랜치) | `charts/app/platform/exec.yaml`의 `image`, `apiserver.ip`, `envoySelector`, `nodeNets`·`allowedOrigins`(운영 웹 https만 — core `ALLOWED_ORIGINS`에서 로컬 dev 서버를 뺀 목록)·`devOrigins.enabled: false` 확인, **`rollout.namespaces: [$NS]`** (`all: false` 그대로) | `tests/exec_check.py` 통과, 마지막 줄 `repo values render exec in: ['tenant-…']` |
 | 8 | 테스트 앱 ns에 서버 측 dry-run | 아래 "머지 전 dry-run" | 오류 없음 |
-| 9 | 차트 PR 머지 | GitHub에서 머지 → Argo가 sync. exec는 `$NS`에만 생긴다 | 9절 1번 (`$NS` 하나) |
-| 10 | 9절 2~4번 | `$NS`에서 | |
-| 11 | core에 카나리 ns | configMap에 `EXEC_AGENT_NAMESPACES: "$NS"` → 9절 5~7번(플래그 하나씩) | |
-| 12 | 전 테넌트로 넓히기 | 차트 `rollout.all: true` PR 머지 → 모든 exec Pod Ready 확인(9절 1번 전체) → configMap `EXEC_AGENT_NAMESPACES: "*"` | 9절 1번 RSS 합계 |
+| 9 | 차트 PR 머지 | GitHub에서 머지 → Argo가 sync. exec는 `$NS`에만 생긴다 | 체크리스트 1번 (`$NS` 하나) |
+| 10 | 체크리스트 2~4번 | `$NS`에서 | |
+| 11 | core에 카나리 ns | configMap에 `EXEC_AGENT_NAMESPACES: "$NS"` → 체크리스트 5~7번(플래그 하나씩) | |
+| 12 | 전 테넌트로 넓히기 | 차트 `rollout.all: true` PR 머지 → 모든 exec Pod Ready 확인(체크리스트 1번 전체) → configMap `EXEC_AGENT_NAMESPACES: "*"` | 체크리스트 1번 RSS 합계 |
 
 1번에서 web은 바로 운영에 배포된다. 웹은 앱마다 `/apps/{id}/exec-features`를 물어서 새 터미널 경로를 쓸지 정한다. 플래그가 꺼져 있거나 앱 ns가 `EXEC_AGENT_NAMESPACES`에 없으면 `terminal: false`이고, 아직 옛 core라 404여도 옛 경로를 쓴다. 그래서 core보다 먼저 나가도 화면은 그대로다.
 
@@ -60,7 +60,7 @@ helm template $NS charts/app -n $NS -f /tmp/values.yaml \
   | kubectl apply --dry-run=server -n $NS -f -
 ```
 
-## 1~8. 9절 체크리스트
+## 1~8. 체크리스트
 
 ### [ ] 1. 차트 적용 후 테넌트마다 exec Pod Running → 유휴 메모리(RSS)
 
@@ -78,7 +78,7 @@ container_memory_rss{namespace=~"(tenant|app)-.*", container="exec"}
 container_memory_working_set_bytes{namespace=~"(tenant|app)-.*", container="exec"}
 ```
 
-남길 것: ns별 RSS, 합계, 워커 할당 가능 메모리 대비 % (11절 scale-to-zero 판단 재료).
+남길 것: ns별 RSS, 합계, 워커 할당 가능 메모리 대비 % (scale-to-zero 판단 재료).
 
 ### [ ] 2. VAP: kodeploy-exec SA를 쓴 다른 Pod가 거부되는지
 
@@ -209,7 +209,7 @@ kubectl exec -n $NS sts/mysql -- ls -la /tmp/kodeploy-restore             # clea
 
 남길 것: 화면 캡처 3장.
 
-### [ ] 8. (5단계 뒤) core-tenant에서 pods/exec 제거 후 실제 exec 요청이 403인지
+### [ ] 8. (권한 회수 단계 뒤) core-tenant에서 pods/exec 제거 후 실제 exec 요청이 403인지
 
 `can-i`가 아니라 실제 요청으로 본다 (connecter 서브리소스는 `can-i` 답과 실제 인가가 다를 수 있다 — rbac.yaml 주석).
 
@@ -289,4 +289,4 @@ kubectl exec -n $NS $POD -c mysql -- sh -c 'ls /tmp/kodeploy-restore/backup-*.sq
 | 새 경로가 이상하다 | 해당 `EXEC_AGENT_*`를 configMap에서 지우고 core 재시작 → 즉시 옛 경로. 특정 ns만이면 `EXEC_AGENT_NAMESPACES`에서 그 ns만 뺀다 |
 | exec Pod가 문제 | core `EXEC_AGENT_NAMESPACES`에서 먼저 빼고(재시작), kodeploy-charts에서 `rollout`을 좁히거나(그 ns만) `image`를 비우는 PR 머지 → Argo가 exec 리소스를 지운다 (prune) |
 | VAP가 무언가를 막는다 | `kubectl delete -f deploy/k8s/core/exec-admission-policy.yaml` |
-| 사고 (키 유출 등) | 지시서 14절 사고 대응: Argo auto-sync 일시정지 → exec Deployment 0 → 테넌트별 HMAC 키 교체 → 재개 |
+| 사고 (키 유출 등) | Argo auto-sync 일시정지 → exec Deployment 0 → 테넌트별 HMAC 키 교체 → 재개 |

@@ -1,4 +1,4 @@
-// Package proto는 kodeploy-exec WebSocket 프레임 규칙이다 (지시서 3-3, 3-4).
+// Package proto는 kodeploy-exec WebSocket 프레임 규칙이다.
 // 바이너리 프레임의 첫 바이트가 채널 번호다. 텍스트 프레임은 받지 않는다.
 // 채널 번호는 K8s exec(v5.channel.k8s.io)와 같아서 바이트를 디코딩하지 않고 그대로 넘긴다.
 package proto
@@ -28,7 +28,7 @@ const (
 	ChClose  byte = 255 // 두 번째 바이트의 채널을 닫는다 (보통 0 = stdin)
 )
 
-// WebSocket close 코드 (지시서 3-4). 1003·1011·4400은 지시서 표에 없어서 1단계에서 더했다.
+// WebSocket close 코드. 1000·1003·1011은 RFC 6455 표준 코드, 4xxx는 이 서비스가 정한 코드다.
 const (
 	CloseNormal          = 1000
 	CloseUnsupportedData = 1003 // 텍스트 프레임 (RFC 6455 표준 코드)

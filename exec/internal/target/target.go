@@ -1,4 +1,4 @@
-// Package target은 exec할 Pod·컨테이너를 고른다 (지시서 4-2). 자기 ns 밖은 조회하지 않는다.
+// Package target은 exec할 Pod·컨테이너를 고른다. 자기 ns 밖은 조회하지 않는다.
 //
 // 라벨·컨테이너 규칙은 원본 terminal.py(_find_app_pod)·snapshots.py(_detect_target)를 그대로 옮겼다.
 //   - app:   app=<앱 이름>, 컨테이너 app

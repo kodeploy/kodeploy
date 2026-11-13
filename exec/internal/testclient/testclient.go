@@ -1,4 +1,4 @@
-// Package testclient는 kodeploy-exec E2E용 Go 클라이언트다 (지시서 2절, 9절). 나중에 CLI의 바탕이 된다.
+// Package testclient는 kodeploy-exec E2E용 Go 클라이언트다(hack/exec-e2e.md). 나중에 CLI의 바탕이 된다.
 //
 //   - Internal: 내부 문(8081) — HMAC 서명(builder 규칙), 티켓 발급, query·browse·dump·restore 세션
 //   - DialPublic: 공개 문(8080) — 티켓을 서브프로토콜(브라우저와 같음) 또는 Authorization 헤더로

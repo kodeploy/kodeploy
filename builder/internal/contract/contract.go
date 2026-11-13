@@ -1,4 +1,4 @@
-// Package contract는 core ↔ 빌더 사이의 요청·이벤트 형식이다 (지시서 3절).
+// Package contract는 core ↔ 빌더 사이의 요청·이벤트 형식이다 (설계 문서 3절).
 // api·run·gitops·callback이 함께 쓰므로 어느 한쪽에 두면 import 순환이 생겨 따로 뺐다.
 package contract
 
@@ -63,7 +63,7 @@ type BuildSpec struct {
 	DockerfileB64  string `json:"dockerfile_b64,omitempty"`  // static 전용: core가 만든 Dockerfile 본문 (base64) — repo엔 Dockerfile이 없다
 }
 
-// CoreValues는 values.yaml에서 core가 주인인 칸이다 (지시서 3-4).
+// CoreValues는 values.yaml에서 core가 주인인 칸이다 (설계 문서 3-4).
 // 포인터 = 보냈는지 구분용. nil이면 git의 현재 값을 유지한다.
 type CoreValues struct {
 	Name        *string     `json:"name,omitempty"`
@@ -128,7 +128,7 @@ func (v *CoreValues) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// 이벤트 종류 (지시서 3-2)
+// 이벤트 종류 (설계 문서 3-2)
 const (
 	EventLog       = "log"
 	EventCommitted = "committed"

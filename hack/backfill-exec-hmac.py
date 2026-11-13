@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""기존 테넌트 ns에 kodeploy-exec HMAC Secret(kodeploy-exec-hmac)을 만든다 (exec 게이트웨이 지시서 6-3).
+"""기존 테넌트 ns에 kodeploy-exec HMAC Secret(kodeploy-exec-hmac)을 만든다.
 
 새 ns는 core가 _ensure_tenant_ns에서 같이 만든다. 이 스크립트는 그 코드가 들어가기 전에 생긴 ns용이고,
 차트에 exec 리소스를 올리기 전에 한 번 돌리면 된다 (Secret이 없으면 exec Pod가 ContainerCreating에 머문다).

@@ -1,4 +1,4 @@
-// Package api는 kodeploy-exec의 세 리스너다 (지시서 2, 3절).
+// Package api는 kodeploy-exec의 세 리스너다.
 //
 //	공개 문 8080  GET  /exec/{ns}/v1/sessions                       웹·CLI. 티켓으로 shell·console만
 //	내부 문 8081  POST /internal/v1/tickets                         core. HMAC 서명
@@ -144,7 +144,7 @@ func (s *Server) leave() {
 }
 
 // BeginShutdown은 SIGTERM 처리다: 새 연결을 받지 않고(503, /healthz도 503), tty 세션은 4503으로 닫는다.
-// 진행 중인 비대화형 세션(특히 restore)은 끝까지 간다 (지시서 4-7).
+// 진행 중인 비대화형 세션(특히 restore)은 끝까지 간다.
 func (s *Server) BeginShutdown() {
 	s.mu.Lock()
 	s.draining = true

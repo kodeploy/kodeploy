@@ -1,4 +1,4 @@
-# 빌드 스테이지 - client-go v0.35가 Go 1.25를 요구한다 (지시서의 1.23에서 올림)
+# 빌드 스테이지 - client-go v0.35가 Go 1.25를 요구한다 (설계 문서의 1.23에서 올림)
 FROM --platform=$BUILDPLATFORM golang:1.25 AS build
 WORKDIR /src
 COPY go.mod go.sum ./

@@ -29,11 +29,11 @@ const maxTicketBody = 8 << 10
 var (
 	sizePattern   = regexp.MustCompile(`^[1-9][0-9]{0,15}$`)
 	sha256Pattern = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
-	// 공개 문 허용 조합 (지시서 3-1)
+	// 공개 문 허용 조합
 	allowed = map[string]string{"app": "shell", "db": "console", "redis": "console"}
 )
 
-// Internal은 8081 핸들러다 (지시서 3-1). 전부 HMAC 서명이 필요하다.
+// Internal은 8081 핸들러다. 전부 HMAC 서명이 필요하다.
 func (s *Server) Internal() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /internal/v1/tickets", s.issueTicket)
@@ -268,7 +268,7 @@ type countWriter int64
 
 func (c *countWriter) Write(p []byte) (int, error) { *c += countWriter(len(p)); return len(p), nil }
 
-// restoreJob은 복원 상태기계를 세션 작업으로 감싼다. 결과(실패 포함)는 채널 3 JSON이다 (지시서 3-5).
+// restoreJob은 복원 상태기계를 세션 작업으로 감싼다. 결과(실패 포함)는 채널 3 JSON이다(restore.Result).
 func (s *Server) restoreJob(t target.Target, p restore.Params) session.Job {
 	r := s.o.Runner
 	return func(ctx context.Context, jio session.JobIO) (session.Outcome, error) {

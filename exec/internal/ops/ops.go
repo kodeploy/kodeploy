@@ -1,4 +1,4 @@
-// Package ops는 작업별 exec 명령을 조립한다 (지시서 4-3).
+// Package ops는 작업별 exec 명령을 조립한다.
 //
 // 규칙
 //   - 셸 문자열은 이 파일의 상수뿐이다. 사용자 입력(SQL, 앱 이름)은 셸 문자열에 섞지 않는다.
@@ -22,7 +22,7 @@ type Cmd struct {
 	Stdin bool
 }
 
-// SQL 바이트 상한 (지시서 4-3). 고정값이다.
+// SQL 바이트 상한. 고정값이다.
 //
 // query: 사용자 상한은 core가 원본대로 20000자로 검사한다. 여기서는 방어용으로 20000자 × UTF-8 최대 4바이트.
 // browse: SQL은 core가 만들고, core도 생성 직후 같은 값으로 검사한다.
@@ -124,7 +124,7 @@ func Dump(kind target.Kind) (Cmd, error) {
 	return Cmd{}, fmt.Errorf("dump: unsupported kind %q", kind)
 }
 
-// --- 복원 단계 (지시서 4-6). $1은 작업 디렉토리다. ---
+// --- 복원 단계. $1은 작업 디렉토리다. ---
 
 // RestorePrecheck는 작업 디렉토리를 만들고 도구를 확인한 뒤 남은 공간(df -Pk)을 출력한다.
 // 도구가 없으면 "missing:<이름>"을 stderr에 쓰고 exit 3.
