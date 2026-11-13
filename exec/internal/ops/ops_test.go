@@ -127,7 +127,7 @@ func TestUnsupportedKind(t *testing.T) {
 
 const fakeClient = `#!/bin/sh
 for a in "$@"; do printf '%s\0' "$a"; done
-printf 'MYSQL_PWD=%s\0PGPASSWORD=%s\0PGOPTIONS=%s\0REDISCLI_AUTH=%s\0' "$MYSQL_PWD" "$PGPASSWORD" "$PGOPTIONS" "$REDISCLI_AUTH"
+printf 'MYSQL_PWD=%s\0PGPASSWORD=%s\0PGOPTIONS=%s\0REDISCLI_AUTH=%s\0LANG=%s\0' "$MYSQL_PWD" "$PGPASSWORD" "$PGOPTIONS" "$REDISCLI_AUTH" "$LANG"
 `
 
 func fakeBin(t *testing.T, names ...string) string {
@@ -202,6 +202,10 @@ func TestConsolesRun(t *testing.T) {
 	got := runCmd(t, c, bin, "")
 	if !slices.Equal(got[:4], []string{"--default-character-set=utf8mb4", "-u", "app", "app"}) || !slices.Contains(got, "MYSQL_PWD=apppw") {
 		t.Fatalf("mysql console: %q", got)
+	}
+	// mysql 이미지는 LANG이 비어 있어서, 로케일을 주지 않으면 줄 편집기가 한글 입력을 버린다
+	if !slices.Contains(got, "LANG=C.UTF-8") {
+		t.Fatalf("mysql console needs a UTF-8 locale: %q", got)
 	}
 	c, _ = DBConsole(target.Postgres)
 	got = runCmd(t, c, bin, "")
