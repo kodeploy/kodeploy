@@ -2,6 +2,11 @@
 
 kodeploy-exec를 클러스터에 적용하고 확인하는 체크리스트다. 클러스터에서 사람이 진행하고, 결과는 블로그·포트폴리오 재료라 수치를 남긴다.
 
+> **2026-11-13 적용 끝.** 카나리(dailo) → 전 테넌트(`rollout.all: true`) → 권한 회수(core-tenant `pods/exec` 제거)까지 마쳤다.
+> core의 기능 플래그(`EXEC_AGENT_*`)·카나리 목록(`EXEC_AGENT_NAMESPACES`)·옛 경로(core가 직접 exec)는 지웠다.
+> 0절 적용 순서와 5번 "플래그를 하나씩 켜고 비교"는 그때 쓴 절차 기록이다. 지금 되돌리는 법은 맨 아래 "되돌리기".
+> 새 테넌트 ns는 차트가 첫 배포 때 exec를 같이 그린다(`all: true`). 체크리스트 2~4·6·7·8은 지금도 그대로 다시 돌릴 수 있다.
+
 - **운영 앱 DB로 복원·장애 재현을 하지 않는다.** 테스트 앱 하나를 따로 만들어 쓴다 (MySQL 하나, PostgreSQL 하나면 둘 다 확인된다).
 - 판정은 상태 코드가 아니라 출력 본문의 sentinel로 한다. testclient의 점검은 입력 echo에 나오지 않는 값(`echo kd-$((6*7))` → `kd-42`)을 기다린다.
 - 8번(core-tenant `pods/exec` 제거)은 1~7번을 확인한 뒤 권한 회수 단계(`pods/exec` 제거·옛 코드 삭제)에서 한다. 이 문서에는 확인 방법만 적는다.
@@ -286,9 +291,12 @@ kubectl exec -n $NS $POD -c mysql -- sh -c 'ls /tmp/kodeploy-restore/backup-*.sq
 
 ## 되돌리기
 
+권한 회수 뒤에는 옛 경로가 없다. 플래그로 즉시 되돌리는 길은 없고, exec 이미지·차트를 고치거나 아래 비상 절차를 쓴다.
+
 | 상황 | 되돌리는 법 |
 |---|---|
-| 새 경로가 이상하다 | 해당 `EXEC_AGENT_*`를 configMap에서 지우고 core 재시작 → 즉시 옛 경로. 특정 ns만이면 `EXEC_AGENT_NAMESPACES`에서 그 ns만 뺀다 |
-| exec Pod가 문제 | core `EXEC_AGENT_NAMESPACES`에서 먼저 빼고(재시작), kodeploy-charts에서 `rollout`을 좁히거나(그 ns만) `image`를 비우는 PR 머지 → Argo가 exec 리소스를 지운다 (prune) |
+| exec 이미지가 문제 | kodeploy-charts `platform/exec.yaml`의 `image`를 이전 digest로 되돌리는 PR 머지 → Argo가 전 테넌트 exec Pod를 바꾼다 |
+| 특정 ns의 exec Pod가 문제 | 그 앱의 터미널·DB 콘솔·덤프·복원만 안 된다(앱 자체는 그대로). `kubectl rollout restart deploy/kodeploy-exec -n $NS`, 안 되면 `kubectl describe`·로그. 차트에서 그 ns를 빼면(`all: false` + 목록) 그 ns의 exec 기능이 아예 없어진다 |
+| 옛 경로로 돌아가야 한다 (비상) | ① `deploy/k8s/core/rbac.yaml`의 kodeploy-core-tenant에 `pods/exec` `get, create`를 되살려 적용 ② core를 정리 전 이미지(`sha-3ad8939@sha256:5eae3c56…`, 플래그·옛 경로가 있는 마지막 이미지)로 되돌림 ③ configMap에 플래그를 켜지 않으면 전부 옛 경로다 |
 | VAP가 무언가를 막는다 | `kubectl delete -f deploy/k8s/core/exec-admission-policy.yaml` |
 | 사고 (키 유출 등) | Argo auto-sync 일시정지 → exec Deployment 0 → 테넌트별 HMAC 키 교체 → 재개 |

@@ -1,7 +1,7 @@
-"""kodeploy-exec 연결 고정 — 내부 문 클라이언트와 플래그 경로.
+"""kodeploy-exec 연결 고정 — 내부 문 클라이언트.
 
 가짜 exec 내부 문(aiohttp 서버)을 띄워 서명·경로·서브프로토콜·프레임·close 코드를 실제 연결로 확인한다.
-query·browse는 같은 출력이 오면 옛 경로와 결과가 같아야 한다(같은 SQL, 같은 파서).
+query·browse는 CLI 기계가독 출력을 옛 경로 때와 같은 파서로 읽는다(결과 모양 고정).
 """
 
 import asyncio
@@ -19,12 +19,6 @@ from app.exec import client as exec_client
 
 KEY = b"k" * 32
 NS = "tenant-0a1b2c3d"
-
-
-@pytest.fixture(autouse=True)
-def canary(monkeypatch):
-    """테스트 ns를 카나리 목록에 넣는다 (플래그를 켠 테스트가 새 경로로 가게)."""
-    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({NS}))
 
 
 class FakeExec:
@@ -145,51 +139,30 @@ def test_issue_ticket_errors(wired, monkeypatch, status_code, http_status):
     assert e.value.http_status == http_status
 
 
-# --- query: 옛 경로와 같은 결과 ------------------------------------------------
+# --- query ----------------------------------------------------------------------
 
 MYSQL_OUT = b"id\tname\n1\t\xed\x95\x9c\xea\xb8\x80\n2\ta\\tb\n"
 PG_OUT = 'id,name\n1,한글\n2,"a,b"\n'.encode()
+ROWS = {"mysql": [["1", "한글"], ["2", "a\tb"]], "postgres": [["1", "한글"], ["2", "a,b"]]}
 
 
 @pytest.mark.parametrize("kind, out", [("mysql", MYSQL_OUT), ("postgres", PG_OUT)])
-def test_query_matches_old_path(wired, monkeypatch, kind, out):
+def test_query_via_exec(wired, monkeypatch, kind, out):
     sql = "SELECT * FROM t WHERE a = '한글'"
-
-    # 옛 경로: core가 직접 exec (가짜 _exec가 같은 출력을 낸다)
-    async def detect(core, ns):
-        return {"db_type": kind, "pod": "p", "container": kind, "user": "app", "pw": "x", "db": "app"}
-
-    sent_old = []
-
-    async def old_exec(ns, t, cmd):
-        sent_old.append(cmd[-1])
-        return out.decode(), "", 0
-
-    async def noop():
-        return None
-
-    monkeypatch.setattr(dbquery, "_detect_target", detect)
-    monkeypatch.setattr(dbquery, "_ensure_loaded", noop)
-    monkeypatch.setattr(dbquery, "_exec", old_exec)
-    monkeypatch.setattr(dbquery.client, "ApiClient", lambda: _NullCtx())
-    monkeypatch.setattr(config, "EXEC_AGENT_QUERY", False)
-    old = asyncio.run(dbquery.run_query(NS, sql))
-
-    # 새 경로: exec 내부 문
     wired.kind = kind
-    monkeypatch.setattr(config, "EXEC_AGENT_QUERY", True)
     fake = FakeExec()
     fake.reply["query"] = ([(1, out), (3, status(0))], 1000)
-    new = run(fake, lambda: dbquery.run_query(NS, sql, user_id="u1", app_id="a1"), monkeypatch)
+    res = run(fake, lambda: dbquery.run_query(NS, sql, user_id="u1", app_id="a1"), monkeypatch)
 
-    old.pop("duration_ms"), new.pop("duration_ms")
-    assert new == old
+    res.pop("duration_ms")
+    assert res == {"db_type": kind, "columns": ["id", "name"], "rows": ROWS[kind], "row_count": 2,
+                   "paginated": True, "offset": 0, "page_size": dbquery.PAGE_SIZE, "has_more": False,
+                   "truncated": False, "message": None}
     _, path, headers, stdin = fake.calls[0]
     assert path == "/internal/v1/sessions/query"
     assert headers["Sec-WebSocket-Protocol"] == exec_client.PROTOCOL
-    # 같은 SQL(페이징 감싸기까지)이 옛 경로에선 인자로, 새 경로에선 stdin으로 갔다
+    # SQL은 페이징 감싸기까지 stdin으로 간다
     assert stdin.decode().startswith("SELECT * FROM (\n" + sql + "\n) AS _kd_page")
-    assert sent_old and "_kd_page" in sent_old[0]
     ev = wired.events[-1]
     assert ev["event"] == "exec_session" and ev["op"] == "query" and ev["request_id"] == headers[exec_client.HEADER_REQUEST_ID]
     assert ev["user_id"] == "u1" and ev["app_id"] == "a1" and sql not in json.dumps(ev)
@@ -204,7 +177,6 @@ class _NullCtx:
 
 
 def test_query_error_and_close_codes(wired, monkeypatch):
-    monkeypatch.setattr(config, "EXEC_AGENT_QUERY", True)
     fake = FakeExec()
     fake.reply["query"] = ([(2, b"ERROR 1064 (42000): syntax"), (3, status(1))], 1000)
     with pytest.raises(dbquery.QueryError, match="ERROR 1064"):
@@ -217,48 +189,31 @@ def test_query_error_and_close_codes(wired, monkeypatch):
 
 # --- browse ---------------------------------------------------------------------
 
-def test_browse_matches_old_path(wired, monkeypatch):
+def test_browse_via_exec(wired, monkeypatch):
     spec = {"table": "items", "schema": None, "columns": ["a"], "filters": [], "sort": [], "offset": 0}
-    out = b"a\nx\ny\n"
-
-    async def target(ns):
-        return {"db_type": "mysql", "pw": "x", "db": "app", "user": "app"}
-
-    async def old_exec(ns, t, cmd):
-        return out.decode(), "", 0
-
-    monkeypatch.setattr(config, "EXEC_AGENT_BROWSE", False)
-    monkeypatch.setattr(dbbrowse, "_exec", old_exec)
-    real_target = dbbrowse._target
-    monkeypatch.setattr(dbbrowse, "_target", target)
-    old = asyncio.run(dbbrowse.browse(NS, spec))
-    monkeypatch.setattr(dbbrowse, "_target", real_target)
-
-    monkeypatch.setattr(config, "EXEC_AGENT_BROWSE", True)
     fake = FakeExec()
-    fake.reply["browse"] = ([(1, out), (3, status(0))], 1000)
-    new = run(fake, lambda: dbbrowse.browse(NS, spec), monkeypatch)
-    old.pop("duration_ms"), new.pop("duration_ms")
-    assert new == old
+    fake.reply["browse"] = ([(1, b"a\nx\ny\n"), (3, status(0))], 1000)
+    res = run(fake, lambda: dbbrowse.browse(NS, spec), monkeypatch)
+    res.pop("duration_ms")
+    assert res == {"db_type": "mysql", "columns": ["a"], "rows": [["x"], ["y"]], "row_count": 2, "offset": 0,
+                   "page_size": dbbrowse.PAGE_SIZE, "has_more": False, "cell_limit": dbbrowse.CELL_LIMIT,
+                   "sql": dbbrowse.build_select("mysql", spec)[0]}
     assert fake.calls[0][1] == "/internal/v1/sessions/browse"
     assert fake.calls[0][3].decode() == dbbrowse.build_select("mysql", spec)[1]
 
 
-@pytest.mark.parametrize("flag", [False, True])
-def test_browse_sql_limit_is_a_user_error(monkeypatch, flag):
+def test_browse_sql_limit_is_a_user_error(monkeypatch):
     # 컬럼 300개 × 긴 이름이면 SQL이 128000바이트를 넘는다 — exec 전에 400(QueryError)
     called = []
 
-    async def target(ns):
-        return {"db_type": "postgres"}
+    async def db_type(ns):
+        return "postgres"
 
     async def never(*a, **k):
         called.append(a)
         raise AssertionError("must not reach exec")
 
-    monkeypatch.setattr(config, "EXEC_AGENT_BROWSE", flag)
-    monkeypatch.setattr(dbbrowse, "_target", target)
-    monkeypatch.setattr(dbbrowse, "_exec", never)
+    monkeypatch.setattr(exec_client, "db_type", db_type)
     monkeypatch.setattr(exec_client, "run_capture", never)
     # core 한도(컬럼 300개, 이름 128자, 조건 10개 × 값 1000자) 안의 최악: 인용 때 두 배가 되는 따옴표 이름
     spec = {"table": "t", "schema": None, "columns": [('"' * 120) + str(i) for i in range(300)],
@@ -278,7 +233,6 @@ async def _collect(gen):
 
 
 def test_dump_streams_and_fails_on_exit_code(wired, monkeypatch):
-    monkeypatch.setattr(config, "EXEC_AGENT_DUMP", True)
     fake = FakeExec()
     fake.reply["dump"] = ([(1, b"\x1f\x8bpart1"), (1, b"part2"), (3, status(0))], 1000)
     got = run(fake, lambda: _collect(snapshots.export_stream(NS, user_id="u", app_id="a")), monkeypatch)
@@ -313,7 +267,6 @@ def test_restore_staged_sends_expected_size_and_sha(wired, monkeypatch, tmp_path
     meta = json.loads((tmp_path / f"{token}.json").read_text())
     assert meta == {"size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
 
-    monkeypatch.setattr(config, "EXEC_AGENT_RESTORE", True)
     fake = FakeExec()
     fake.reply["restore"] = ([(3, _result("Success"))], 1000)
     res = run(fake, lambda: snapshots.restore_staged(NS, token, user_id="u", app_id="a"), monkeypatch)
@@ -325,7 +278,6 @@ def test_restore_staged_sends_expected_size_and_sha(wired, monkeypatch, tmp_path
 
 
 def test_restore_retries_only_while_db_unchanged(wired, monkeypatch, tmp_path):
-    monkeypatch.setattr(config, "EXEC_AGENT_RESTORE", True)
     monkeypatch.setattr(snapshots, "_RETRY_DELAY", 0)
     fake = FakeExec()
 
@@ -344,7 +296,6 @@ def test_restore_retries_only_while_db_unchanged(wired, monkeypatch, tmp_path):
 
 
 def test_restore_kept_backup_is_reported(wired, monkeypatch, tmp_path):
-    monkeypatch.setattr(config, "EXEC_AGENT_RESTORE", True)
     res = json.loads(_result("Failure", "load", db_changed=True))
     res["backup"] = {"pod": "mysql-0", "container": "mysql",
                      "path": "/tmp/kodeploy-restore/backup-20261113T000000Z-abcdef.sql.gz"}
@@ -362,7 +313,6 @@ def test_restore_kept_backup_is_reported(wired, monkeypatch, tmp_path):
 
 # 이전 복원이 미해결(남은 백업)이면 exec가 precheck에서 거부한다: 다시 보내지 않고, 남은 백업 위치를 알린다
 def test_restore_refused_while_previous_unresolved(wired, monkeypatch, tmp_path):
-    monkeypatch.setattr(config, "EXEC_AGENT_RESTORE", True)
     monkeypatch.setattr(snapshots, "_RETRY_DELAY", 0)
     res = json.loads(_result("Failure", "precheck", db_changed=False))
     old = "/tmp/kodeploy-restore/backup-20261112T000000Z-123456.sql.gz"
@@ -382,7 +332,6 @@ def test_restore_refused_while_previous_unresolved(wired, monkeypatch, tmp_path)
 
 # 초기 복원: 고정 재시도 대신 exec Pod Ready를 기다린 뒤 한 번 보낸다. 연결 실패는 다시 보내지 않는다
 def test_initial_restore_waits_for_exec_then_sends_once(monkeypatch, tmp_path):
-    monkeypatch.setattr(config, "EXEC_AGENT_RESTORE", True)
     monkeypatch.setattr(snapshots, "_RETRY_DELAY", 0)
     order, events = [], []
 
@@ -454,53 +403,33 @@ def test_wait_ready_reads_pod_conditions(monkeypatch):
     assert not asyncio.run(exec_client.wait_ready(NS, 0.05))
 
 
-def test_flags_off_by_default(monkeypatch):
-    monkeypatch.undo()                                           # canary fixture 전 값
-    for name in ("EXEC_AGENT_TERMINAL", "EXEC_AGENT_QUERY", "EXEC_AGENT_BROWSE", "EXEC_AGENT_DUMP", "EXEC_AGENT_RESTORE"):
-        assert getattr(config, name) is False, name
-    assert config.EXEC_AGENT_NAMESPACES == frozenset()          # 기본은 어느 ns도 새 경로로 가지 않는다
-
-
-# 카나리: 플래그가 켜져 있어도 EXEC_AGENT_NAMESPACES에 든 ns만 새 경로
-def test_exec_agent_on_namespaces(monkeypatch):
-    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({NS}))
-    assert config.exec_agent_on(True, NS) and not config.exec_agent_on(True, "tenant-ffffffff")
-    assert not config.exec_agent_on(False, NS)
-    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({"*"}))
-    assert config.exec_agent_on(True, "tenant-ffffffff") and not config.exec_agent_on(False, NS)
-    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset())
-    assert not config.exec_agent_on(True, NS)
-
-
-def test_flag_on_outside_canary_uses_old_path(wired, monkeypatch):
-    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({"tenant-ffffffff"}))
-    for name in ("EXEC_AGENT_QUERY", "EXEC_AGENT_BROWSE", "EXEC_AGENT_DUMP", "EXEC_AGENT_RESTORE"):
-        monkeypatch.setattr(config, name, True)
+# DB가 없는 앱: exec에 보내기 전에 사용자 오류로 끝낸다
+def test_no_db_is_a_user_error(wired, monkeypatch):
+    wired.kind = None
     called = []
 
-    async def db_type(ns):
-        called.append(ns)
-        return "mysql"
+    async def never(*a, **k):
+        called.append(a)
+        raise AssertionError("must not reach exec")
 
-    async def detect(core, ns):
-        return None                                              # 옛 경로: DB 없음으로 끝낸다
-
-    async def noop():
-        return None
-
-    monkeypatch.setattr(exec_client, "db_type", db_type)
-    for mod in (dbquery, dbbrowse, snapshots):
-        monkeypatch.setattr(mod, "_detect_target", detect)
-        monkeypatch.setattr(mod, "_ensure_loaded", noop)
-        monkeypatch.setattr(mod.client, "ApiClient", lambda: _NullCtx())
+    monkeypatch.setattr(exec_client, "run_capture", never)
     with pytest.raises(dbquery.QueryError, match="DB가 활성화돼 있지 않습니다"):
         asyncio.run(dbquery.run_query(NS, "SELECT 1"))
     with pytest.raises(dbquery.QueryError, match="DB가 활성화돼 있지 않습니다"):
-        asyncio.run(dbbrowse._target(NS))
+        asyncio.run(dbbrowse.list_tables(NS))
     with pytest.raises(snapshots.SnapshotError, match="DB가 활성화돼 있지 않습니다"):
         asyncio.run(snapshots.ensure_db(NS))
-    assert not snapshots.restore_via_exec(NS) and snapshots.restore_via_exec("tenant-ffffffff")
-    assert called == []                                          # exec 쪽은 부르지 않았다
+    assert called == []
+
+
+# 옛 경로와 플래그는 지웠다 (core에는 pods/exec가 없다)
+def test_no_legacy_exec_left():
+    for name in ("EXEC_AGENT_TERMINAL", "EXEC_AGENT_QUERY", "EXEC_AGENT_BROWSE", "EXEC_AGENT_DUMP",
+                 "EXEC_AGENT_RESTORE", "EXEC_AGENT_NAMESPACES", "exec_agent_on"):
+        assert not hasattr(config, name), name
+    for mod, name in ((dbquery, "_exec"), (snapshots, "_detect_target"), (snapshots, "restore"),
+                      (snapshots, "restore_via_exec")):
+        assert not hasattr(mod, name), name
 
 
 # --- POST /apps/{id}/exec-tickets ------------------------------------------------
@@ -522,7 +451,6 @@ def ticket_api(monkeypatch):
     monkeypatch.setattr(exec_router.sharing, "access_for", lambda db, user, app_id: state.access)
     monkeypatch.setattr(exec_router.exec_client, "issue_ticket", issue)
     monkeypatch.setattr(exec_router.audit, "record", lambda db, user, action, app=None: state.audited.append(action))
-    monkeypatch.setattr(config, "EXEC_AGENT_TERMINAL", True)
     monkeypatch.setattr(config, "ALLOWED_ORIGINS", ["https://kodeploy.com"])
     api = FastAPI()
     api.include_router(exec_router.router)
@@ -548,7 +476,7 @@ def test_exec_ticket_owner(ticket_api):
     assert ticket_api.audited == []                              # 일반 발급은 admin_actions에 남기지 않는다
 
 
-def test_exec_ticket_rules(ticket_api, monkeypatch):
+def test_exec_ticket_rules(ticket_api):
     c = ticket_api.client
     ticket_api.access = (ticket_api.app, "owner", False)
     assert c.post(URL, json={"target": "app"}, headers={"Origin": "https://evil.example"}).status_code == 403
@@ -556,30 +484,12 @@ def test_exec_ticket_rules(ticket_api, monkeypatch):
     assert c.post(URL, json={"target": "shell"}, headers=ORIGIN).status_code == 422
     ticket_api.access = (ticket_api.app, "editor", False)
     assert c.post(URL, json={"target": "app"}, headers=ORIGIN).status_code == 403   # 터미널은 주인만
+    ticket_api.access = (ticket_api.app, "viewer", True)
+    assert c.post(URL, json={"target": "app"}, headers=ORIGIN).status_code == 403   # admin(보기 권한)도 X
+    assert ticket_api.audited == []
     ticket_api.access = None
     assert c.post(URL, json={"target": "app"}, headers=ORIGIN).status_code == 404
     # root가 남의 앱에 열면 admin_actions에도 남는다
     ticket_api.access = (ticket_api.app, "owner", True)
     assert c.post(URL, json={"target": "app"}, headers=ORIGIN).status_code == 200
     assert ticket_api.audited == ["POST /apps/{app_id}/exec-tickets"]
-    # 카나리 밖 ns(exec Pod가 없다)는 404
-    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({"tenant-ffffffff"}))
-    assert c.post(URL, json={"target": "app"}, headers=ORIGIN).status_code == 404
-    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({NS}))
-    # 플래그 off면 엔드포인트가 없는 것과 같다
-    monkeypatch.setattr(config, "EXEC_AGENT_TERMINAL", False)
-    assert c.post(URL, json={"target": "app"}, headers=ORIGIN).status_code == 404
-
-
-def test_exec_features_per_app(ticket_api, monkeypatch):
-    c = ticket_api.client
-    path = "/apps/11111111-1111-1111-1111-111111111111/exec-features"
-    ticket_api.access = (ticket_api.app, "editor", False)
-    assert c.get(path).json() == {"terminal": True}
-    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({"tenant-ffffffff"}))
-    assert c.get(path).json() == {"terminal": False}             # 카나리 밖 → 웹은 옛 경로
-    monkeypatch.setattr(config, "EXEC_AGENT_NAMESPACES", frozenset({"*"}))
-    monkeypatch.setattr(config, "EXEC_AGENT_TERMINAL", False)
-    assert c.get(path).json() == {"terminal": False}
-    ticket_api.access = None
-    assert c.get(path).status_code == 404

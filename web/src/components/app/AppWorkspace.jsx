@@ -535,7 +535,7 @@ function ConsoleView({ build, dbType, redisEnabled, logsOnly }) {
 // xterm 구성·리사이즈 프로토콜·테마 라이브 갱신은 panels/TerminalPanel.jsx와 같은 코드다.
 // 따로 두는 이유는 둘: (1) 시안의 패널 헤더가 하나뿐이라 패널이 자체 헤더를 또 그리면 안 되고,
 // (2) 헤더의 "연결됨" 표시에 소켓 상태가 필요한데 기존 패널은 그걸 터미널 버퍼에만 쓴다.
-function WorkspaceTerminal({ wsPath, target, onStatus }) {
+function WorkspaceTerminal({ target, onStatus }) {
   const { theme } = useTheme();
   const containerRef = useRef(null);
   const termRef = useRef(null);
@@ -566,12 +566,11 @@ function WorkspaceTerminal({ wsPath, target, onStatus }) {
       if (!disposed) fitAddon.fit();
     });
 
-    // 옛 경로(core 중계)와 새 경로(kodeploy-exec, 플래그)를 같은 모양으로 연다 — lib/terminalSocket.js.
+    // core에서 티켓을 받아 kodeploy-exec 공개 문에 붙는다 — lib/terminalSocket.js.
     // 연결되면 현재 xterm 크기를 보내 파드 pty 크기를 맞춤 → 쉘 출력이 실제 폭으로 정렬
     const sock = openTerminalSocket({
       term,
       target,
-      legacyPath: wsPath,
       onOpen: () => statusRef.current?.("open"),
       onClose: (reason) => {
         statusRef.current?.("closed");
@@ -600,7 +599,7 @@ function WorkspaceTerminal({ wsPath, target, onStatus }) {
       sock.close();
       term.dispose();
     };
-  }, [wsPath, target]);
+  }, [target]);
 
   // 테마 토글 시 색만 라이브 갱신 (재생성/재접속 없이)
   useEffect(() => {
@@ -628,9 +627,9 @@ function TerminalSide({ dbType, redisEnabled, zoomed, onZoom }) {
   // Redis 대상은 use_redis일 때만 (Pane.TerminalSelector와 같은 방침).
   const targets = useMemo(
     () => [
-      { id: "app", label: "앱 서버", path: "/deploy/app/terminal" },
-      { id: "db", label: DB_LABEL[dbType] || "데이터베이스", path: "/deploy/app/db-terminal" },
-      ...(redisEnabled ? [{ id: "redis", label: "Redis", path: "/deploy/app/redis-terminal" }] : []),
+      { id: "app", label: "앱 서버" },
+      { id: "db", label: DB_LABEL[dbType] || "데이터베이스" },
+      ...(redisEnabled ? [{ id: "redis", label: "Redis" }] : []),
     ],
     [dbType, redisEnabled],
   );
@@ -675,7 +674,6 @@ function TerminalSide({ dbType, redisEnabled, zoomed, onZoom }) {
             style={{ display: target === t.id ? "flex" : "none" }}
           >
             <WorkspaceTerminal
-              wsPath={t.path}
               target={t.id}
               onStatus={(s) => setConn((prev) => ({ ...prev, [t.id]: s }))}
             />

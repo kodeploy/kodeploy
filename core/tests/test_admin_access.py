@@ -158,27 +158,6 @@ def test_root_manages_members_of_any_app_and_it_is_recorded(db, world):
     assert actions(db) == [("root", "shop", "owner", "POST /apps/{app_id}/invites")]
 
 
-# --- 터미널 WebSocket (주인 전용) ---
-
-def _ws(app_id):
-    return SimpleNamespace(
-        path_params={"app_id": str(app_id)},
-        scope={"type": "websocket", "route": SimpleNamespace(path="/apps/{app_id}/deploy/app/terminal")},
-        url=SimpleNamespace(path=f"/apps/{app_id}/deploy/app/terminal"),
-    )
-
-
-def test_terminal_opens_for_root_and_owner_but_not_admin(db, world):
-    a = world.app.id
-    assert deploy_router._ws_app(db, _ws(a), world.owner.id).id == a
-    assert actions(db) == []
-    assert deploy_router._ws_app(db, _ws(a), world.root.id).id == a
-    assert actions(db) == [("root", "shop", "owner", "WS /deploy/app/terminal")]
-    assert deploy_router._ws_app(db, _ws(a), world.admin.id) is None           # 보기 권한으로는 터미널 X
-    assert deploy_router._ws_app(db, _ws(a), world.stranger.id) is None
-    assert deploy_router._ws_app(db, _ws("not-a-uuid"), world.root.id) is None
-
-
 # --- 관리자 화면 API ---
 
 def admin_client(db, user):

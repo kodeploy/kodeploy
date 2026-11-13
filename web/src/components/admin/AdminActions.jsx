@@ -19,6 +19,8 @@ const ACTION_LABEL = {
   "DELETE /deploy/app/storage/objects": "저장소 파일 삭제",
   "POST /deploy/db/stage-dump": "DB 덤프 올리기",
   "POST /deploy/db/restore": "DB 복원",
+  "POST /apps/{app_id}/exec-tickets": "터미널 접속",
+  // 2026-11 kodeploy-exec 전환 전 기록 (core가 직접 중계하던 터미널 WebSocket)
   "WS /deploy/app/terminal": "터미널 접속",
   "WS /deploy/app/db-terminal": "DB 터미널 접속",
   "WS /deploy/app/redis-terminal": "Redis 터미널 접속",
