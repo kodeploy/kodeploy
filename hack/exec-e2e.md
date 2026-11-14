@@ -367,10 +367,20 @@ kubectl get pods -A -l kodeploy.com/component=exec        # 테넌트 수만큼 
 - 출력 없이 75초 걸리는 적재(`SELECT SLEEP(75)`)는 성공했다. 조용한 시간만으로는 끊기지 않는다.
 - 그 밖에 정상이었던 것: 198 MiB 덤프 다운로드(gz 119 MB, 48초), TTY 터미널 90초 유휴.
 
-큰 복원을 받기 전에 정할 것:
-- master 메모리 여유: calico-apiserver 메모리 누수(재시작 수백 회)와 master의 pmdalinux(0.27 GB)를 정리한다.
-- 복원 상한을 낮출지.
-- 작은 DB(512Mi)에 큰 덤프를 넣으면 OOM이 난다는 점을 사용자에게 알릴지.
+같은 날 후속 조치:
+- **master 4 → 6 GB, worker2 10 → 8 GB** (terraform). 같은 크기(198 MiB)를 다시 복원해 보니 7단계 모두 성공했다(179초).
+  - apiserver는 864 MB에서 1136 MB까지 늘었고, master에는 3.0 GB가 남았다.
+  - 적재가 가벼운 주석 덤프로 시험했다. 그래서 MySQL 적재 메모리는 따로 남은 문제다.
+- **덤프를 나눠 보내는 방안은 효과가 작다.** 지금도 256 KB 조각으로 흘려보낸다. 64 MB를 2 MB/s로 제한해 보내도 apiserver 증가가 +164 MB에서 +114 MB로 줄 뿐이었다. 중계한 바이트만큼 Go 쓰레기 메모리가 생기는 구조다.
+  - 근본 대책은 둘 중 하나다: apiserver를 거치지 않게 하거나, kube-apiserver에 `GOMEMLIMIT`을 건다.
+  - 사용자가 `.sql.gz`로 올리면 압축된 채로 지나간다. 평문 `.sql`을 core가 stage할 때 압축하는 건 아직 하지 않았다.
+- **calico-apiserver 누수 원인과 조치:** 원인은 v3.27.0에 들어 있는 `k8s.io/apiserver`의 etcd 상태 점검(`newETCD3Check`)이다.
+  - calico에는 etcd가 없어서 점검이 계속 실패하고 재시도된다. 재시도마다 otelgrpc 계측기가 OTel 전역 meter에 쌓이고 지워지지 않았다(pprof 힙의 47%).
+  - OTel v1.30에서 고쳐졌으므로 Calico를 v3.32.4로 올렸다(ansible `50-cni.yml`).
+
+남은 것:
+- 작은 DB(512Mi)에 큰 덤프를 넣으면 OOM이 난다. 사용자에게 알릴지, 테넌트 MySQL 메모리를 손볼지(glibc arena 의심) 정한다.
+- master의 pmdalinux(0.27 GB)를 정리한다.
 
 ## 되돌리기
 
