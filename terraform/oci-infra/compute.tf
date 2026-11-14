@@ -15,7 +15,9 @@ locals {
     master = {
       hostname  = "kodeploy-master"
       ocpus     = 1 # control plane CPU request 합계 750m. 순간 피크는 1코어를 넘을 수 있음(감수)
-      memory_gb = 4
+      # 4GB에선 kube-apiserver(0.9~1.4GB)+calico-apiserver 누수로 여유가 1GB 안팎이었고,
+      # 큰 exec 스트림(200MiB 복원)에 스래싱 → apiserver 재시작까지 갔다(2026-11-14). 워커2에서 2GB를 가져온다.
+      memory_gb = 6
       role      = "master"
     }
     # K8s 워커 노드 1 — 실제 파드(컨테이너)가 스케줄링되는 노드
@@ -29,7 +31,7 @@ locals {
     worker2 = {
       hostname  = "kodeploy-worker2"
       ocpus     = 1
-      memory_gb = 10
+      memory_gb = 8 # 실사용 3.4GB(2026-11-14). 2GB를 master로 — 합계는 그대로 4 OCPU·24GB
       role      = "worker"
     }
   }
