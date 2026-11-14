@@ -289,6 +289,89 @@ kubectl exec -n $NS $POD -c mysql -- rm -f "$BK"
 kubectl exec -n $NS $POD -c mysql -- sh -c 'ls /tmp/kodeploy-restore/backup-*.sql.gz 2>/dev/null'
 ```
 
+## 사고 대응: exec를 전부 내리고 키를 바꾼다
+
+exec 이미지, HMAC 키(`kodeploy-exec-hmac`), exec SA 토큰 중 하나라도 새어 나갔다고 의심될 때 쓴다. 모든 테넌트에서 exec를 멈춘다. 그러면 터미널·DB 콘솔·덤프·복원이 같이 멈추고, 앱 자체는 그대로 돈다. 키를 새로 만든 뒤 다시 켠다.
+2026-11-14에 dailo(tenant-b1545e9c) 하나로 1~5를 그대로 해 봤다. 결과는 각 단계 밑에 적었다.
+
+1. **Argo가 되돌리지 못하게 멈춘다.**
+   - Application은 ApplicationSet `kodeploy-apps`가 만든다. 앱만 고치면 ApplicationSet 컨트롤러가 템플릿대로 되돌리므로 컨트롤러부터 멈춘다.
+   - 멈춘 동안에는 새 앱의 Application이 생기지 않는다. 그동안 들어온 첫 배포는 기다린다.
+   - 실측: replicas 0이 45초 넘게 그대로였다(Argo는 OutOfSync만 표시).
+
+```sh
+kubectl -n argocd scale deploy argocd-applicationset-controller --replicas=0
+for a in $(kubectl -n argocd get applications -o name); do
+  kubectl -n argocd patch $a --type=json -p='[{"op":"remove","path":"/spec/syncPolicy/automated"}]'
+done
+kubectl -n argocd get applications -o custom-columns=N:.metadata.name,AUTO:.spec.syncPolicy.automated   # 전부 <none>
+```
+
+2. **exec를 전부 0으로 줄인다.**
+   - 티켓은 exec 메모리에만 있으므로 Pod와 같이 사라진다.
+   - exec SA 토큰은 Pod에 묶인 projected 토큰이라 Pod가 지워지면 무효가 된다.
+   - 이때부터 웹 터미널은 열리지 않는다. DB 콘솔·덤프·복원은 "exec 서비스에 연결할 수 없습니다"로 실패한다(실측).
+
+```sh
+for ns in $(kubectl get deploy -A -l kodeploy.com/component=exec -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{end}'); do
+  kubectl -n $ns scale deploy kodeploy-exec --replicas=0
+done
+kubectl get pods -A -l kodeploy.com/component=exec        # 없어야 한다
+```
+
+3. **core 쪽: 재시작하지 않는다.**
+   - core는 ns별 키를 5분 캐시한다(`_KEY_TTL`). 대신 401을 받으면 그 ns의 캐시를 버리고 다음 호출에서 새로 읽는다.
+   - 그래서 교체 뒤 옛 키로 나가는 요청은 ns마다 많아야 하나이고, 그 하나가 401로 실패한다.
+   - core를 재시작하면 첫 배포의 초기 복원 대기(`_pending_dumps`, 메모리)가 사라지므로 하지 않는다.
+   - 발급 기록은 core 로그(`exec_ticket` 이벤트)에 남아 있다. 사고 범위를 볼 때 쓴다.
+
+4. **테넌트별 HMAC 키를 교체한다.**
+   - 이미지가 의심되면 여기서 kodeploy-charts `platform/exec.yaml`의 `image`를 믿을 수 있는 digest로 바꾸는 PR을 머지한다(재개하면 그 digest로 뜬다).
+   - exec는 키 파일을 시작할 때만 읽는다. 키를 바꾼 뒤에는 Pod가 새로 떠야 새 키를 쓴다. 지금은 0개이므로 5번에서 새로 뜬다.
+
+```sh
+for ns in $(kubectl get deploy -A -l kodeploy.com/component=exec -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{end}'); do
+  kubectl -n $ns patch secret kodeploy-exec-hmac --type=merge \
+    -p "{\"data\":{\"hmac\":\"$(head -c 32 /dev/urandom | base64 -w0)\"}}"
+done
+```
+
+5. **재개한다.**
+   - ApplicationSet 컨트롤러를 켜면 앱마다 `automated`(prune·selfHeal)가 템플릿대로 돌아온다. selfHeal이 replicas를 1로 되돌린다.
+   - 실측: 컨트롤러를 켜고 39초 뒤 새 키로 뜬 exec가 Ready가 됐다. 그 직후 DB 콘솔 쿼리가 통과했다.
+
+```sh
+kubectl -n argocd scale deploy argocd-applicationset-controller --replicas=1
+kubectl -n argocd get applications -o custom-columns=N:.metadata.name,S:.status.sync.status,AUTO:.spec.syncPolicy.automated.selfHeal
+kubectl get pods -A -l kodeploy.com/component=exec        # 테넌트 수만큼 1/1
+```
+
+   확인: 9절 7번처럼 웹 터미널 3종을 열고, DB 콘솔에서 `SELECT 1`을 돌린다. exec 로그에 서명 실패가 계속 나오면 그 ns의 Secret과 Pod 시작 시각을 비교한다(Pod가 교체 전에 떴으면 `rollout restart`).
+
+## 큰 복원과 컨트롤 플레인 (2026-11-14 실측)
+
+상한(200 MiB) 근처 크기의 복원은 지금 클러스터에서 안전하지 않다. dailo에 198.5 MiB SQL을 두 번 복원해서 확인했다.
+
+- **업로드가 kube-apiserver를 지나간다.** K8s exec는 늘 apiserver를 거친다(옛 core 경로도 같았다).
+  - 업로드 중 apiserver 메모리가 0.9 GB에서 1.2~1.4 GB로 올랐다.
+  - master(3.6 GB)는 원래 여유가 적다. calico-apiserver가 메모리를 새게 해서 master 쪽 사본이 0.5 GB를 쓰고 있었다.
+  - 그래서 master가 메모리 스래싱에 빠졌다. 사용 가능 메모리가 350 MB까지 떨어지고, load average가 12를 넘었다.
+- **1차: 적재 단계에서 연결이 끊겼다.** apiserver가 61초 동안 퐁을 보내지 못했다(client-go 하트비트 기한 61초).
+  - 적재 자체는 끝까지 됐다. 하지만 결과를 몰라서 백업이 남았다(위 "복원 백업이 남았을 때"대로 정리했다).
+- **2차: kube-apiserver가 liveness 실패로 재시작됐다.** calico-apiserver 두 개와 Argo repo-server가 따라서 재시작됐다.
+  - Argo 애플리케이션 컨트롤러가 Calico 타입 스키마를 잃어 `Unknown`이 계속됐다. 컨트롤러를 `rollout restart`하고 앱을 hard refresh해서 풀었다.
+- **2차에서 dailo MySQL이 OOMKilled됐다.** 상한 512Mi, 평소 anon이 약 460 MB라 적재를 못 버텼다.
+  - rollback도 못 했고, `/tmp`의 백업도 컨테이너 재시작으로 사라졌다.
+  - 시험 덤프가 새 표 하나만 만들었으므로 그 표만 지웠다. 나머지 93개 표는 `CHECK TABLE` OK였다.
+- **exec 자체는 멀쩡했다.** memory.current 최고 25 MiB, cgroup memory.peak 30 MiB(상한 128Mi), 재시작 없음.
+- 출력 없이 75초 걸리는 적재(`SELECT SLEEP(75)`)는 성공했다. 조용한 시간만으로는 끊기지 않는다.
+- 그 밖에 정상이었던 것: 198 MiB 덤프 다운로드(gz 119 MB, 48초), TTY 터미널 90초 유휴.
+
+큰 복원을 받기 전에 정할 것:
+- master 메모리 여유: calico-apiserver 메모리 누수(재시작 수백 회)와 master의 pmdalinux(0.27 GB)를 정리한다.
+- 복원 상한을 낮출지.
+- 작은 DB(512Mi)에 큰 덤프를 넣으면 OOM이 난다는 점을 사용자에게 알릴지.
+
 ## 되돌리기
 
 권한 회수 뒤에는 옛 경로가 없다. 플래그로 즉시 되돌리는 길은 없고, exec 이미지·차트를 고치거나 아래 비상 절차를 쓴다.
@@ -299,4 +382,4 @@ kubectl exec -n $NS $POD -c mysql -- sh -c 'ls /tmp/kodeploy-restore/backup-*.sq
 | 특정 ns의 exec Pod가 문제 | 그 앱의 터미널·DB 콘솔·덤프·복원만 안 된다(앱 자체는 그대로). `kubectl rollout restart deploy/kodeploy-exec -n $NS`, 안 되면 `kubectl describe`·로그. 차트에서 그 ns를 빼면(`all: false` + 목록) 그 ns의 exec 기능이 아예 없어진다 |
 | 옛 경로로 돌아가야 한다 (비상) | ① `deploy/k8s/core/rbac.yaml`의 kodeploy-core-tenant에 `pods/exec` `get, create`를 되살려 적용 ② core를 정리 전 이미지(`sha-3ad8939@sha256:5eae3c56…`, 플래그·옛 경로가 있는 마지막 이미지)로 되돌림 ③ configMap에 플래그를 켜지 않으면 전부 옛 경로다 |
 | VAP가 무언가를 막는다 | `kubectl delete -f deploy/k8s/core/exec-admission-policy.yaml` |
-| 사고 (키 유출 등) | Argo auto-sync 일시정지 → exec Deployment 0 → 테넌트별 HMAC 키 교체 → 재개 |
+| 사고 (키 유출 등) | 위 "사고 대응" 1~5: ApplicationSet 컨트롤러 정지·auto-sync 해제 → exec 0 → 테넌트별 HMAC 키 교체 → 재개 |
