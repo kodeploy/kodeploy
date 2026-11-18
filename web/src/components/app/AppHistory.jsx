@@ -6,8 +6,8 @@
 //
 // 치수 주석의 숫자는 시안 원본 px이고, 실제 값은 ÷1.3665(시안 스케일 = 1536폭 렌더 / CSS 1124)한
 // CSS px이다. 콘텐츠 폭 1426px ÷ 1.3665 = 1043 ≈ --kd-w-app의 1040과 맞는다.
-// 데이터는 AppLayout이 폴링해 내려준 GET /deploy 응답 그대로다. 커밋 sha/메시지는
-// Build 모델에 없어서(시안의 "a81c92f" 자리) 빌드 ID로 대체했다 — 없는 값은 만들지 않는다.
+// 데이터는 AppLayout이 폴링해 내려준 GET /deploy 응답 그대로다. 커밋은 빌더가 알려 준 source_sha가 있을 때만
+// 앞 7자를 붙인다(시안의 "a81c92f" 자리). 옛 빌드엔 없어서 빌드 ID는 그대로 둔다 — 없는 값은 만들지 않는다.
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { can } from "../../lib/roles.js";
@@ -150,7 +150,14 @@ function BuildRow({ build, number, selected, onSelect }) {
           >
             {isEnv
               ? build.env_change_summary || "(상세 없음)"
-              : `${build.branch || "—"} · ${build.build_id}${build.rollback_of ? " · 롤백" : ""}`}
+              : [
+                  build.branch || "—",
+                  build.source_sha && build.source_sha.slice(0, 7),
+                  build.build_id,
+                  build.rollback_of && "롤백",
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
           </span>
         </span>
 

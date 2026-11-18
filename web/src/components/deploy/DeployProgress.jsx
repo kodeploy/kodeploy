@@ -343,7 +343,7 @@ export default function DeployProgress() {
         </Link>
 
         {/* 실패 — 원인은 위 AI 분석에서 봤으니 고친 뒤 다시 배포하는 자리.
-            재배포 화면(/deploy)은 마지막 빌드 설정을 채워 열린다(사이드바 "재배포"와 같은 목적지). */}
+            배포 폼(/deploy)은 마지막 빌드 설정을 채워 열린다(사이드바 "설정 변경"과 같은 목적지라 이름도 같다). */}
         {failed ? (
           <div className="flex items-center flex-wrap justify-end" style={{ gap: "8px 16px" }}>
             <span className="kd-t-caption text-fg-3">수정 사항을 반영한 뒤 다시 배포해 주세요.</span>
@@ -352,7 +352,7 @@ export default function DeployProgress() {
               className="kd-btn-primary kd-btn-md inline-flex items-center no-underline"
               style={{ gap: 8 }}
             >
-              재배포
+              설정 변경
             </Link>
           </div>
         ) : done ? (

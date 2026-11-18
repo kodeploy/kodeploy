@@ -108,6 +108,21 @@ export function rollbackBuild(buildId) {
   return request(`/deploy/${buildId}/rollback`, { method: "POST" });
 }
 
+// 지금 설정 그대로 다시 배포한다 (앱 화면의 "배포하기" — CLI·CI와 같은 API). commitSha를 주면 그 커밋(40자),
+// 없으면 브랜치 최신을 빌드한다. 설정·환경변수·정적 사이트는 서버가 라이브 배포에서 다시 만들어서 여기선 보내지 않는다.
+// 부를 때마다 새 Idempotency-Key를 실어, 같은 요청이 두 번 가도(재전송·연타) 빌드는 한 번만 시작된다.
+// 응답: { app_id, requested_sha, replayed, builds: [{ build_id, slot: "server"|"static", status, ref }] }
+// 409면 다시 만들 성공한 배포가 없다 — 첫 배포는 설정 변경(배포 폼)으로 (err.status로 가른다).
+export function redeployApp(appId, { commitSha } = {}) {
+  return request("/deploy/redeploy", {
+    appId,
+    method: "POST",
+    // request()는 options.headers로 기본 헤더를 통째로 바꾸므로 Content-Type도 같이 적는다
+    headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify(commitSha ? { commit_sha: commitSha } : {}),
+  });
+}
+
 export function createDeploy({
   repoUrl,
   branch = "main",
