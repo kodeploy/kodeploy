@@ -160,7 +160,8 @@ def build_payload(
     image_repo = build.image.rsplit(":", 1)[0]
     spec = {
         "repo": build.repo_url,
-        "ref": build.branch,
+        # 재배포가 커밋을 지정했으면 그 커밋(40자 hex — 빌더가 그 커밋만 받는다), 아니면 브랜치 최신
+        "ref": build.requested_sha or build.branch,
         "image_repo": image_repo,
         "image_tag": build.build_id,
     }

@@ -8,6 +8,7 @@
 """
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from app.deploy.build import diagnose, pipeline, postwatch
@@ -42,6 +43,27 @@ def _append_logs(build: Build, lines: list[str]) -> None:
     build.logs = f"{build.logs}\n{text}" if build.logs else text
 
 
+_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+
+
+# 빌더가 알려 준 앱 소스 커밋(source_sha)을 적는다. 처음 온 값만 쓰고, 이미 있는데 다른 값이 오면 덮지 않고 경고만 남긴다
+# (한 빌드는 한 커밋만 받는다 — 다르면 어딘가 잘못된 것이라 처음 값을 지킨다). 이벤트의 commit_sha는 kodeploy-apps 커밋이라 쓰지 않는다.
+def _record_source(build: Build, ev: dict) -> None:
+    sha = ev.get("source_sha")
+    if not sha:
+        return
+    if not isinstance(sha, str) or not _SHA_RE.match(sha):
+        logger.warning("build %s: ignoring malformed source_sha %r", build.build_id, sha)
+        return
+    if build.source_sha is None:
+        build.source_sha = sha
+    elif build.source_sha != sha:
+        logger.warning(
+            "build %s: source_sha %s differs from the recorded %s — keeping the recorded one",
+            build.build_id, sha, build.source_sha,
+        )
+
+
 # 이벤트 하나를 반영한다. 반환값은 결과 이름 (로그·테스트용): 이벤트 type | "duplicate" | "ignored".
 def apply(build_id: str, ev: dict) -> str:
     db = SessionLocal()
@@ -59,6 +81,8 @@ def apply(build_id: str, ev: dict) -> str:
         )
 
         diagnosis = None
+        if build.status != "cancelled":
+            _record_source(build, ev)
         if build.status == "cancelled":
             if kind == "cancelled" and record is not None and record.finished_at is None:
                 close_record(record, "cancelled")

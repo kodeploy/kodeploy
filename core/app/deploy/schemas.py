@@ -155,6 +155,8 @@ class StatusResponse(BaseModel):
     error: str | None = None
     env_change_summary: str | None = None            # kind="env_change" 전용 — 바뀐 키 목록
     rollback_of: str | None = None                   # 롤백 배포면 되돌아간 원본 배포의 build_id
+    source_sha: str | None = None                    # 실제로 빌드한 앱 소스 커밋 (40자 hex, 빌더가 알려 준다)
+    requested_sha: str | None = None                 # 재배포 요청이 지정한 커밋 (없으면 브랜치 최신을 빌드했다)
     rollbackable: bool = False                       # 이 배포 버전으로 되돌릴 수 있나 (v2: digest 있는 성공 배포)
     ai_analysis: str | None = None                   # 실패 진단 JSON (실패 + 기능 ON일 때만)
     ai_status: str | None = None                     # 진단 진행 상태: None | "pending" | "done" (model.Build.ai_status)

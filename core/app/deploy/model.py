@@ -59,6 +59,11 @@ class Build(Base):
     user_id: Mapped[uuid.UUID | None] = mapped_column(Uuid, nullable=True)
     # 롤백 배포면 되돌아간 원본 배포의 build_id. 일반 배포는 NULL. (v2만 — 이미지 digest로 되돌린다)
     rollback_of: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    # 앱 소스 저장소의 커밋 (40자 hex). kodeploy-apps에 values를 커밋한 SHA(빌더 이벤트의 commit_sha)와는 다르다.
+    # source_sha: 실제로 빌드한 커밋 — 빌더 이벤트로 채운다 (롤백은 원본 배포의 값을 옮겨 적는다). 옛 행·clone 전 실패는 NULL.
+    # requested_sha: 재배포 요청이 지정한 커밋 — 빌더에 브랜치 대신 이 값을 ref로 보낸다. NULL이면 브랜치 최신.
+    source_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    requested_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
     # 이 빌드가 돈 K8s ns (apps.namespace의 사본). NULL인 옛 행은 tenant-<user hex8>이다 (tenant_id 참고).
     namespace: Mapped[str | None] = mapped_column(String(63), nullable=True)
     # 이 빌드가 속한 앱 (apps.id). 1단계에서 칸만 추가했고 아직 쓰지 않는다 — NULL이면 백필 전·삭제된 앱의 기록.
