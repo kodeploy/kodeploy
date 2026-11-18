@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, ConfigDict, HttpUrl
 
 
 # 서버 슬롯 런타임 — "none"이면 서버 없음 (정적 사이트 단독).
@@ -61,6 +61,29 @@ class DeployResponse(BaseModel):
     app_id: uuid.UUID | None = None                      # 배포가 속한 앱 — 첫 배포에서 생긴 앱의 화면으로 가는 데 쓴다
     app_name: str
     builds: list[DeployBuildRef]
+
+
+# POST /deploy/redeploy 입력 — 설정은 받지 않는다 (라이브 빌드에서 다시 만든다). 환경변수·초기 덤프 같은 칸이 오면 422.
+# 계약: docs/deploy-api-contract.md
+class RedeployRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    commit_sha: str | None = None                        # 40자 hex. 없으면 브랜치 최신
+    repo: str | None = None                              # 커밋을 적용할 저장소. 없으면 서버 슬롯(없으면 정적 슬롯)의 저장소
+
+
+class RedeployBuildRef(BaseModel):
+    build_id: str
+    slot: Literal["server", "static"]
+    status: str
+    ref: str                                             # 빌더에 보낸 ref — 지정한 커밋 또는 브랜치
+
+
+class RedeployResponse(BaseModel):
+    app_id: uuid.UUID
+    requested_sha: str | None = None
+    replayed: bool = False                               # 같은 Idempotency-Key로 이미 처리한 요청이면 true (200)
+    builds: list[RedeployBuildRef]
 
 
 # POST /deploy/app/db/query 입력 — DB 콘솔에서 실행할 단발 SQL.

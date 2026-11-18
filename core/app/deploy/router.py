@@ -1,9 +1,8 @@
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 import asyncio
-import json
 import re
 import uuid
 from datetime import datetime, timezone
@@ -17,7 +16,7 @@ from app.auth.model import User
 from app.auth import github_app
 from app.deploy import crud, status
 from app.builder import client as builder
-from app.deploy.build import github, pipeline, v2, validation
+from app.deploy.build import github, pipeline, redeploy, v2, validation
 from app.deploy.build.naming import repo_key
 from app.deploy.console import dbbrowse, dbquery, logs, metrics, snapshots
 from app.deploy.routing import hostnames
@@ -33,6 +32,9 @@ from app.deploy.schemas import (
     DomainRequest,
     EnvVarsRequest,
     EnvVarsResponse,
+    RedeployBuildRef,
+    RedeployRequest,
+    RedeployResponse,
     SavedQueryCreate,
     SavedQueryOut,
     SavedQueryUpdate,
@@ -92,6 +94,19 @@ def viewer_app_or_none(
     return _app_at(app_id, db, user, "viewer", request)
 
 
+# app_id가 꼭 있어야 하는 라우트 (편집 권한 이상). 옛 경로처럼 비우면 "내 첫 앱"으로 가지 않고 400이다 —
+# 앱을 말하지 않은 요청이 다른 앱을 재배포하면 안 된다.
+def editor_app_required(
+    request: Request,
+    app_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> App:
+    if app_id is None:
+        raise HTTPException(status_code=400, detail="app_id가 필요해요 (/apps/{app_id}/deploy/redeploy 또는 ?app_id=)")
+    return _app_at(app_id, db, user, "editor", request)
+
+
 def _required(app: App | None) -> App:
     if app is None:
         raise HTTPException(status_code=400, detail="배포된 앱이 없습니다")
@@ -122,11 +137,7 @@ def _to_status(build: Build, timing: dict | None = None) -> StatusResponse:
         db_type=build.db_type or "none",
         use_redis=build.use_redis or False,
         use_storage=build.use_storage or False,
-        # 영속저장소 모드 파생 — object(R2) 우선, 아니면 local(PVC) 있으면 local, 둘 다 없으면 none.
-        storage=(
-            "object" if build.use_storage
-            else ("local" if build.volume_mount_path else "none")
-        ),
+        storage=build.storage_mode,                # 영속저장소 모드 파생 (재배포 API와 같은 규칙)
         volume_mount_path=build.volume_mount_path or "",
         volume_storage_class=build.volume_storage_class or "local-path",
         volume_size=build.volume_size or "5Gi",
@@ -135,7 +146,7 @@ def _to_status(build: Build, timing: dict | None = None) -> StatusResponse:
         project_path=build.project_path or "",
         build_cmd=build.build_cmd or "",
         output_dir=build.output_dir or "",
-        static_env=json.loads(build.build_env) if build.build_env else {},
+        static_env=build.static_env,
         dockerfile_content=build.dockerfile_content,
         error=build.error,
         env_change_summary=build.env_change_summary,
@@ -212,6 +223,45 @@ async def create_deploy(
         builds=[
             DeployBuildRef(build_id=b.build_id, runtime=b.runtime, status=b.status)
             for b in builds
+        ],
+    )
+
+
+# 재배포 — 지금 라이브인 설정 그대로 다시 배포한다 (선택: commit_sha로 커밋 지정). CLI·CI·웹 원클릭 재배포가 같이 쓴다.
+# 설정은 요청으로 받지 않고 라이브 빌드에서 다시 만든다 (build/redeploy.py). 환경변수·초기 덤프는 건드리지 않는다.
+# 새로 시작하면 202, 같은 Idempotency-Key로 이미 처리한 요청이면 그때의 빌드를 200으로 돌려준다. 계약: docs/deploy-api-contract.md
+@router.post("/redeploy", response_model=RedeployResponse, status_code=202)
+async def redeploy_app(
+    response: Response,
+    req: RedeployRequest | None = None,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    app: App = Depends(editor_app_required),
+) -> RedeployResponse:
+    req = req or RedeployRequest()
+    try:
+        result = await redeploy.start_redeploy(
+            db, user, app,
+            commit_sha=req.commit_sha,
+            repo=req.repo,
+            key=idempotency_key,
+            # 편집 권한 멤버는 이 앱이 쓰던 저장소로만 (POST /deploy와 같은 규칙)
+            allowed_repos=apps_service.app_repo_keys(db, app) if app.owner_id != user.id else None,
+        )
+    except redeploy.RedeployError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    if result.replayed:
+        response.status_code = 200
+    return RedeployResponse(
+        app_id=app.id,
+        requested_sha=result.requested_sha,
+        replayed=result.replayed,
+        builds=[
+            RedeployBuildRef(
+                build_id=b.build_id, slot=redeploy.slot_of(b), status=b.status, ref=b.requested_sha or b.branch,
+            )
+            for b in result.builds
         ],
     )
 
