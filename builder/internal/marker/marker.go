@@ -12,6 +12,8 @@
 //
 // 원본 정규식이 맞추지 못하는 줄은 여기서도 맞지 않는다 (좁히기만 했다. marker_test가 확인).
 // kodeploy-bench/markers.py는 원본 정규식과 동기화 대상이며, 이 파일은 그 대상이 아니다.
+//
+// source.go의 Source는 init 로그에서 실제로 빌드한 앱 소스 커밋(KODEPLOY_SOURCE_SHA 줄)을 찾는다.
 package marker
 
 import "regexp"

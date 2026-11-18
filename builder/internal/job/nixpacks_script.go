@@ -1,7 +1,7 @@
 package job
 
-// 원본 nixpacks_buildkit_job.yaml.j2의 init 컨테이너(nixpacks) 스크립트 — 글자 하나 바꾸지 않고 옮겼다
-// (testdata/original-nixpacks-*.json이 그 렌더 결과이고 job_test.go가 둘을 비교한다).
+// 원본 nixpacks_buildkit_job.yaml.j2의 init 컨테이너(nixpacks) 스크립트 — clone 부분만 공통 조각(cloneSource)으로
+// 바꾸고 나머지는 글자 하나 바꾸지 않고 옮겼다 (testdata/original-nixpacks-*.json이 그 렌더 결과이고 job_test.go가 둘을 비교한다).
 // nixpacks를 받아 소스를 clone하고(private면 GIT_AUTH_TOKEN으로), 프로젝트 경로를 정하고(비면 자동 탐색),
 // Dockerfile을 만들어 PSS restricted에 맞게 후처리한다. 결과는 /workspace에 남고 main(BuildKit)이 읽는다.
 const nixpacksScript = `set -eu
@@ -17,13 +17,8 @@ apk add --no-cache curl >/dev/null
 curl -sSL "https://github.com/railwayapp/nixpacks/releases/download/${NIXPACKS_VERSION}/nixpacks-${NIXPACKS_VERSION}-${ARCH}.tar.gz" \
   | tar xz -C /usr/local/bin
 
-echo "[2/5] cloning ${REPO_URL} (${BRANCH})..."
-# private repo: 토큰을 URL rewrite(insteadOf)로 주입 — REPO_URL/로그엔 토큰 안 보임(set -x 꺼짐)
-if [ -n "${GIT_AUTH_TOKEN:-}" ]; then
-  git config --global url."https://x-access-token:${GIT_AUTH_TOKEN}@github.com/".insteadOf "https://github.com/"
-fi
-git clone --depth 1 -b "$BRANCH" "$REPO_URL" /workspace/src
-
+echo "[2/5] cloning ${REPO_URL} (${REF})..."
+` + cloneSource + `
 # PROJECT_PATH 결정 — 사용자 명시값이 있으면 그대로, 없으면 자동 탐색.
 # 자동 탐색: 표준 manifest 파일을 max-depth 3까지 검색해 가장 먼저 발견된 dirname.
 # 결과를 로그에 명시 → 사용자가 "왜 이 디렉토리가 빌드됐는지" 알 수 있음.

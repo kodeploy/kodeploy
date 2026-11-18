@@ -90,6 +90,11 @@ func TestValidate(t *testing.T) {
 			r.Build.Ref = "release/v1.2.0"
 			return r
 		}, ""},
+		{"build ok commit ref", func() *contract.DeployRequest {
+			r := validBuild()
+			r.Build.Ref = "0123456789abcdef0123456789abcdef01234567"
+			return r
+		}, ""},
 		{"build ok go runtime", func() *contract.DeployRequest { r := validBuild(); r.Unit.Runtime = "go"; return r }, ""},
 		{"set-image ok", validSetImage, ""},
 		{"set-image static ok", func() *contract.DeployRequest {

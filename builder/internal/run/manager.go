@@ -242,9 +242,13 @@ func (m *Manager) Resume(ctx context.Context) (int, error) {
 			resumed:   true,
 			digest:    ann[job.AnnDigest],
 			commitSHA: ann[job.AnnCommitSHA],
+			sourceSHA: ann[job.AnnSourceSHA],
 			synced:    ann[job.AnnSynced] != "",
 			firstSeq:  acked + 1 + seqResumeMargin,
 			logLines:  logLines,
+		}
+		if !contract.IsCommitSHA(st.sourceSHA) {
+			st.sourceSHA = "" // 손상된 값은 버린다. 로그를 다시 읽으면 init 줄에서 다시 찾는다
 		}
 		m.d.Log.Info("resuming build", "build_id", req.BuildID, "digest", st.digest != "", "commit", st.commitSHA != "", "synced", st.synced)
 		m.startLocked(newRun(m, &req, st))

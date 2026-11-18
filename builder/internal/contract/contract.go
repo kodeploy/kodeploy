@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 )
 
@@ -51,7 +52,7 @@ type Unit struct {
 // BuildSpec은 kind=build의 빌드 입력이다 (repo·ref·Dockerfile 위치·이미지 경로).
 type BuildSpec struct {
 	Repo           string `json:"repo"`
-	Ref            string `json:"ref"`
+	Ref            string `json:"ref"` // 브랜치 이름, 또는 40자 소문자 hex면 그 커밋 (IsCommitSHA)
 	Mode           string `json:"mode"`
 	DockerfileDir  string `json:"dockerfile_dir,omitempty"`
 	DockerfileName string `json:"dockerfile_name,omitempty"`
@@ -62,6 +63,11 @@ type BuildSpec struct {
 	ProjectPath    string `json:"project_path,omitempty"`    // auto·static: 프로젝트 서브디렉토리 (auto는 비면 nixpacks가 자동 탐색, static은 비면 repo root)
 	DockerfileB64  string `json:"dockerfile_b64,omitempty"`  // static 전용: core가 만든 Dockerfile 본문 (base64) — repo엔 Dockerfile이 없다
 }
+
+var commitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
+
+// IsCommitSHA는 ref가 커밋 하나를 가리키는 40자 소문자 hex인지다. 짧은 SHA·대문자는 브랜치 이름으로 본다.
+func IsCommitSHA(ref string) bool { return commitSHARe.MatchString(ref) }
 
 // CoreValues는 values.yaml에서 core가 주인인 칸이다 (설계 문서 3-4).
 // 포인터 = 보냈는지 구분용. nil이면 git의 현재 값을 유지한다.
@@ -157,7 +163,8 @@ type Event struct {
 	Lines []string `json:"lines,omitempty"` // log
 
 	Image          string     `json:"image,omitempty"`      // committed, deployed
-	CommitSHA      string     `json:"commit_sha,omitempty"` // committed, deleted
+	CommitSHA      string     `json:"commit_sha,omitempty"` // committed, deleted — kodeploy-apps에 values를 커밋한 SHA
+	SourceSHA      string     `json:"source_sha,omitempty"` // build의 committed, deployed, finished, failed(clone 뒤) — 빌드한 앱 소스 커밋
 	PushDoneAt     *time.Time `json:"push_done_at,omitempty"`
 	TriggeredEarly *bool      `json:"triggered_early,omitempty"`
 

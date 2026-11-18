@@ -37,9 +37,19 @@ type resumeState struct {
 	jobName   string
 	digest    string
 	commitSHA string
+	sourceSHA string
 	synced    bool
 	firstSeq  int64
 	logLines  int64
+}
+
+// sourceMismatchError는 요청 ref가 커밋인데 init이 실제로 받은 커밋이 다를 때 run ctx를 끊는 원인이다.
+// cleanup이 이걸 보고 Job을 지우고 failed(build)를 보낸다.
+type sourceMismatchError struct{ requested, got string }
+
+// Error는 failed 이벤트의 reason이다.
+func (e *sourceMismatchError) Error() string {
+	return fmt.Sprintf("source mismatch: requested %s, got %s", e.requested, e.got)
 }
 
 // jobOutcome은 Job 대기 결과다 (watchJob이 채널로 보낸다).
@@ -78,6 +88,7 @@ type run struct {
 	mu       sync.Mutex // 로그 고루틴과 나눠 쓰는 칸
 	pushDig  string
 	pushAt   time.Time
+	srcSHA   string // init 로그에서 읽은 앱 소스 커밋 (재개면 어노테이션에서 복원)
 	lastRing []string
 
 	ackMu        sync.Mutex
@@ -87,7 +98,7 @@ type run struct {
 // newRun은 run을 만들고 콜백 큐를 띄운다. build면 Job 이름을 정하고 acked-seq 기록(onAck)을 연결한다.
 func newRun(m *Manager, req *contract.DeployRequest, st resumeState) *run {
 	ctx, cancel := context.WithCancelCause(m.base)
-	r := &run{m: m, req: req, st: st, ctx: ctx, cancel: cancel,
+	r := &run{m: m, req: req, st: st, ctx: ctx, cancel: cancel, srcSHA: st.sourceSHA,
 		log: m.d.Log.With("build_id", req.BuildID, "kind", req.Kind, "namespace", req.Namespace)}
 	var onAck func(callback.Ack)
 	if req.Kind == contract.KindBuild {
@@ -188,7 +199,7 @@ func (r *run) createJob() error {
 		UserID:                *r.req.Values.UserID,
 		Image:                 b.ImageRepo + ":" + b.ImageTag,
 		RepoURL:               b.Repo,
-		Branch:                b.Ref,
+		Ref:                   b.Ref,
 		DockerfileSubdir:      b.DockerfileDir,
 		DockerfileFilename:    b.DockerfileName,
 		CacheRef:              b.CacheRef,
@@ -239,10 +250,16 @@ func (r *run) afterJob(out jobOutcome, pipe *logPipe) {
 		r.emit(contract.Event{Type: contract.EventCancelled, Reason: "build job was deleted"})
 	case !out.res.Succeeded:
 		r.waitLogs(pipe)
+		if r.sourceRejected() {
+			return // cleanup이 failed(source mismatch)를 보낸다
+		}
 		r.markFinished()
 		r.fail(contract.StageBuild, "build failed", r.lastLines())
 	default:
 		r.waitLogs(pipe) // 마커가 마지막 줄까지 보게 한다
+		if r.sourceRejected() {
+			return
+		}
 		digest, _ := r.pushed()
 		if digest == "" {
 			// 폴백: 마커 없이 성공 → 태그로 digest 조회 (설계 문서 4-2 8)
@@ -337,10 +354,15 @@ func (r *run) startLogs(pushDone chan<- string) *logPipe {
 	}()
 	go func() {
 		m := marker.New(b.ImageRepo, b.ImageTag)
+		src := marker.NewSource(logs.MainHeader)
+		rejected := false     // 받은 소스가 요청 커밋과 달라 빌드를 멈췄다 — push 마커는 더 보지 않는다
 		skip := r.st.logLines // 재개: 이미 core에 보낸 줄은 마커만 보고 다시 보내지 않는다
 		for l := range lines {
 			r.remember(l)
-			if d, ok := m.Feed(l); ok {
+			if sha, ok := src.Feed(l); ok && !r.setSource(sha) {
+				rejected = true
+			}
+			if d, ok := m.Feed(l); ok && !rejected {
 				r.setPushed(d)
 				pushDone <- d // 버퍼 1, 한 번만
 			}
@@ -405,6 +427,37 @@ func (r *run) setPushed(d string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.pushDig, r.pushAt = d, time.Now().UTC()
+}
+
+// setSource는 init 로그에서 찾은 소스 커밋을 적고 어노테이션에 남긴다 (로그 고루틴에서 부른다).
+// 요청 ref가 커밋인데 받은 커밋이 다르면 run ctx를 sourceMismatchError로 끊고 false를 준다.
+func (r *run) setSource(sha string) bool {
+	r.mu.Lock()
+	prev := r.srcSHA
+	r.srcSHA = sha
+	r.mu.Unlock()
+	if prev != sha {
+		r.annotate(map[string]string{job.AnnSourceSHA: sha})
+	}
+	if ref := r.req.Build.Ref; contract.IsCommitSHA(ref) && ref != sha {
+		r.log.Warn("source mismatch", "requested", ref, "got", sha)
+		r.cancel(&sourceMismatchError{requested: ref, got: sha})
+		return false
+	}
+	return true
+}
+
+// source는 이 빌드가 실제로 받은 소스 커밋이다. 아직 모르거나 build가 아니면 "".
+func (r *run) source() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.srcSHA
+}
+
+// sourceRejected는 소스 불일치로 run이 멈췄는지다.
+func (r *run) sourceRejected() bool {
+	var mm *sourceMismatchError
+	return errors.As(context.Cause(r.ctx), &mm)
 }
 
 // pushed는 마커가 찾은 digest와 시각이다. 못 찾았으면 "".
@@ -649,6 +702,15 @@ func (r *run) cleanup() {
 		r.log.Info("stopped for shutdown; job kept for resume")
 		return
 	}
+	var mm *sourceMismatchError
+	if errors.As(cause, &mm) {
+		// 요청한 커밋이 아닌 소스를 받았다 — 빌드를 버리고 실패로 알린다 (배포 전에만 생긴다: 소스 줄은 init 로그다)
+		r.deleteJob()
+		if !r.terminal {
+			r.fail(contract.StageBuild, mm.Error(), r.lastLines())
+		}
+		return
+	}
 	if r.req.Kind == contract.KindBuild {
 		r.deleteJob()
 	}
@@ -679,9 +741,14 @@ func (r *run) deleteJob() {
 
 // ---- 이벤트·어노테이션 ------------------------------------------------------------------------------
 
-// emit은 시각을 붙여 이벤트를 큐에 넣는다.
+// emit은 시각을 붙여 이벤트를 큐에 넣는다. 소스 커밋을 알면 committed·deployed·finished·failed에 싣는다
+// (failed는 clone이 끝난 뒤에만 안다 — 소스 줄은 clone 직후에 찍힌다).
 func (r *run) emit(ev contract.Event) {
 	ev.At = time.Now().UTC()
+	switch ev.Type {
+	case contract.EventCommitted, contract.EventDeployed, contract.EventFinished, contract.EventFailed:
+		ev.SourceSHA = r.source()
+	}
 	r.q.Event(ev)
 }
 

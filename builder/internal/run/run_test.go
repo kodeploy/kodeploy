@@ -1135,3 +1135,189 @@ func TestRemoveServer(t *testing.T) {
 		t.Fatalf("remove must not create a job: %d", len(j.Items))
 	}
 }
+
+// ---- 앱 소스 커밋 (KODEPLOY_SOURCE_SHA) ---------------------------------------------------------------
+
+const (
+	srcSHA   = "0123456789abcdef0123456789abcdef01234567"
+	otherSHA = "fedcba9876543210fedcba9876543210fedcba98"
+)
+
+// sourceLines는 init에 소스 줄이 있고, main에 사용자 RUN이 찍은 가짜 줄이 섞인 로그다.
+func sourceLines(initSHA string) []string {
+	return append([]string{
+		"=== clone (init) ===", "[1/1] cloning", "KODEPLOY_SOURCE_SHA=" + initSHA, "",
+		"=== buildkit (main) ===", "KODEPLOY_SOURCE_SHA=" + otherSHA, "#16 12.0 BUILD SUCCESSFUL",
+	}, pushLines...)
+}
+
+func TestBuildReportsTheSourceCommit(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t, nil)
+	defer h.close()
+	h.logs.before = sourceLines(srcSHA)
+
+	_ = h.m.Submit(buildReq())
+	committed := h.waitEvent(contract.EventCommitted)
+	deployed := h.waitEvent(contract.EventDeployed)
+	close(h.logs.gate)
+	h.finishJob(true)
+	fin := h.waitEvent(contract.EventFinished)
+	h.idle()
+	for _, ev := range []contract.Event{committed, deployed, fin} {
+		if ev.SourceSHA != srcSHA {
+			t.Fatalf("%s source_sha %q, want the init line (main lines are ignored)", ev.Type, ev.SourceSHA)
+		}
+	}
+	if committed.CommitSHA == srcSHA {
+		t.Fatal("commit_sha is the gitops commit, not the source commit")
+	}
+	if got := h.job().Annotations[job.AnnSourceSHA]; got != srcSHA {
+		t.Fatalf("source-sha annotation %q", got)
+	}
+	// 소스 줄은 사용자 빌드 로그에 그대로 남는다
+	if !strings.Contains(strings.Join(logLines(h.core.list()), "\n"), "KODEPLOY_SOURCE_SHA="+srcSHA) {
+		t.Fatal("source line should stay in the build log")
+	}
+}
+
+// 커밋을 지정한 빌드가 그 커밋을 받았으면 그대로 배포한다.
+func TestRequestedCommitThatMatchesDeploys(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t, nil)
+	defer h.close()
+	h.logs.before = sourceLines(srcSHA)
+	req := buildReq()
+	req.Build.Ref = srcSHA
+
+	_ = h.m.Submit(req)
+	deployed := h.waitEvent(contract.EventDeployed)
+	close(h.logs.gate)
+	h.finishJob(true)
+	h.waitEvent(contract.EventFinished)
+	h.idle()
+	if deployed.SourceSHA != srcSHA {
+		t.Fatalf("deployed %+v", deployed)
+	}
+	if got := strings.Join(types(h.core.list()), ","); got != "committed,deployed,finished" {
+		t.Fatalf("events %s", got)
+	}
+}
+
+// 커밋을 지정했는데 다른 커밋을 받았으면 배포 전에 실패한다 (push 줄이 와도 커밋하지 않는다).
+func TestSourceMismatchFailsBeforeDeploy(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t, nil)
+	defer h.close()
+	h.logs.before = sourceLines(otherSHA)
+	req := buildReq()
+	req.Build.Ref = srcSHA
+
+	_ = h.m.Submit(req)
+	failed := h.waitEvent(contract.EventFailed)
+	h.idle()
+	want := "source mismatch: requested " + srcSHA + ", got " + otherSHA
+	if failed.Stage != contract.StageBuild || failed.Reason != want {
+		t.Fatalf("failed %+v", failed)
+	}
+	if failed.SourceSHA != otherSHA {
+		t.Fatalf("failed source_sha %q, want what was actually cloned", failed.SourceSHA)
+	}
+	if h.git.commits != 0 {
+		t.Fatal("a mismatched source must never be committed")
+	}
+	if h.job() != nil {
+		t.Fatal("job should be deleted")
+	}
+	if got := strings.Join(types(h.core.list()), ","); got != "failed" {
+		t.Fatalf("events %s", got)
+	}
+}
+
+// 브랜치 빌드는 받은 커밋이 무엇이든 그대로 기록만 한다.
+func TestBranchBuildNeverMismatches(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t, nil)
+	defer h.close()
+	h.logs.before = sourceLines(otherSHA)
+
+	_ = h.m.Submit(buildReq()) // ref=main
+	deployed := h.waitEvent(contract.EventDeployed)
+	close(h.logs.gate)
+	h.finishJob(true)
+	h.waitEvent(contract.EventFinished)
+	h.idle()
+	if deployed.SourceSHA != otherSHA {
+		t.Fatalf("deployed %+v", deployed)
+	}
+}
+
+// clone 뒤 빌드가 실패하면 failed에 소스 커밋이 실리고, clone 전에 실패하면 비어 있다.
+func TestFailedEventCarriesTheSourceOnlyAfterClone(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		lines []string
+		want  string
+	}{
+		{"after clone", []string{"=== clone (init) ===", "KODEPLOY_SOURCE_SHA=" + srcSHA, "", "=== buildkit (main) ===", "#9 ERROR: failed to solve"}, srcSHA},
+		{"clone failed", []string{"=== clone (init) ===", "fatal: Remote branch nope not found"}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer goleak.VerifyNone(t)
+			h := newHarness(t, nil)
+			defer h.close()
+			h.logs.before = tc.lines
+			close(h.logs.gate)
+			h.logs.after = nil
+
+			_ = h.m.Submit(buildReq())
+			h.finishJob(false)
+			failed := h.waitEvent(contract.EventFailed)
+			h.idle()
+			if failed.Stage != contract.StageBuild || failed.SourceSHA != tc.want {
+				t.Fatalf("failed %+v", failed)
+			}
+		})
+	}
+}
+
+// 재개하면 어노테이션에서 소스 커밋을 되살린다 (커밋 뒤 재개는 로그를 다시 읽지 않는다).
+func TestResumeRestoresTheSourceCommit(t *testing.T) {
+	defer goleak.VerifyNone(t)
+	h := newHarness(t, nil)
+	defer h.close()
+	h.logs.before = sourceLines(srcSHA)
+	h.argo.block = make(chan struct{})
+
+	_ = h.m.Submit(buildReq())
+	h.waitEvent(contract.EventCommitted)
+	h.waitFor("commit-sha annotation", func() bool { return h.job().Annotations[job.AnnCommitSHA] != "" })
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	_ = h.m.Shutdown(ctx)
+	cancel()
+	if got := h.job().Annotations[job.AnnSourceSHA]; got != srcSHA {
+		t.Fatalf("source-sha annotation %q", got)
+	}
+	before := len(h.core.list())
+
+	h.argo.mu.Lock()
+	h.argo.block = nil
+	h.argo.mu.Unlock()
+	h.logs.mu.Lock()
+	h.logs.before = nil // 재개 뒤엔 로그에서 다시 찾을 수 없다
+	h.logs.mu.Unlock()
+	h.m = h.newManager()
+	if n, _ := h.m.Resume(context.Background()); n != 1 {
+		t.Fatal("not resumed")
+	}
+	h.waitEvent(contract.EventDeployed)
+	close(h.logs.gate)
+	h.finishJob(true)
+	h.waitEvent(contract.EventFinished)
+	h.idle()
+	for _, ev := range h.core.list()[before:] {
+		if ev.Type != contract.EventLog && ev.SourceSHA != srcSHA {
+			t.Fatalf("resumed %s source_sha %q", ev.Type, ev.SourceSHA)
+		}
+	}
+}

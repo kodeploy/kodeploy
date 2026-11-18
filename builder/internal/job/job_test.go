@@ -19,7 +19,7 @@ func goldenParams(cache bool) Params {
 		UserID:                "d6d8b75985524d6f9a9000665e7ca0da",
 		Image:                 "ghcr.io/yuntyu01/d6d8b759/kodeploy-test-spring:3f9a2c1d",
 		RepoURL:               "https://github.com/yuntyu01/kodeploy-test-spring.git",
-		Branch:                "r2-test-v1",
+		Ref:                   "r2-test-v1",
 		BuildKitImage:         "moby/buildkit:v0.30.0-rootless",
 		ActiveDeadlineSeconds: 900,
 		RequestJSON:           `{"build_id":"3f9a2c1d"}`,
