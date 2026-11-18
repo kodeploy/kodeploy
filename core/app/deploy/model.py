@@ -1,9 +1,10 @@
 """deploy 도메인 ORM."""
 
+import json
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Index, Integer, String, Text, Uuid
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, Float, Index, Integer, String, Text, UniqueConstraint, Uuid
 from sqlalchemy.dialects.mysql import LONGTEXT
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -77,6 +78,19 @@ class Build(Base):
         default=lambda: datetime.now(timezone.utc),
         onupdate=lambda: datetime.now(timezone.utc),
     )
+
+    # 영속저장소 모드 — object(R2) 우선, 아니면 local(PVC) 있으면 local, 둘 다 없으면 none.
+    # 상태 응답(재배포 폼 prefill)과 재배포 API의 설정 재구성이 같이 쓴다 — 규칙을 한 곳에만 둔다.
+    @property
+    def storage_mode(self) -> str:
+        if self.use_storage:
+            return "object"
+        return "local" if self.volume_mount_path else "none"
+
+    # 정적 빌드 타임 변수 (build_env JSON → dict). 비어 있으면 {}.
+    @property
+    def static_env(self) -> dict[str, str]:
+        return json.loads(self.build_env) if self.build_env else {}
 
     # tenant_id: 이 빌드가 도는 ns 이름. 저장된 namespace가 있으면 그것, 없는 옛 행은 user_id에서 파생,
     # user_id도 None이면 default ns로 fallback.
@@ -168,6 +182,24 @@ class BuildRecord(Base):
     # Grafana 패널이 전부 $__timeFilter(started_at)로 들어오고, admin 빌드 기록 목록도
     # ORDER BY started_at DESC LIMIT이다 — 두 읽기 경로가 같은 컬럼을 탄다.
     __table_args__ = (Index("ix_build_records_started_at", "started_at"),)
+
+
+# 재배포 요청의 Idempotency-Key 선점 기록 (POST /deploy/redeploy).
+# 키 하나가 빌드 여러 개(서버·정적)에 대응하고, 같은 키가 동시에 두 번 와도 하나만 통과해야 해서 builds 행이 아니라
+# 따로 둔다. (app_id, key) 유일 — 먼저 넣은 요청만 빌드를 시작하고, 나머지는 여기 적힌 빌드를 그대로 돌려받는다.
+# build_ids가 비어 있으면 아직 처리 중이다. 빌드 시작이 실패하면 행을 지워 같은 키로 다시 시도할 수 있게 한다.
+class DeployRequestKey(Base):
+    __tablename__ = "deploy_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    app_id: Mapped[uuid.UUID] = mapped_column(Uuid, nullable=False)
+    key: Mapped[str] = mapped_column(String(100), nullable=False)
+    build_ids: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
+
+    __table_args__ = (UniqueConstraint("app_id", "key", name="uq_deploy_requests_app_key"),)
 
 
 # DB 콘솔에서 유저가 저장한 SQL — **플랫폼(관리) DB**에 둔다.

@@ -285,6 +285,9 @@ async def start_deploy(
     static_env: dict[str, str] | None = None,
     app: App | None = None,                # 배포할 앱. None이면 유저의 앱(없으면 첫 배포로 새로 만든다)
     allowed_repos: set[str] | None = None,  # 주어지면 이 저장소(repo_key)로만 배포 — 편집 권한 멤버용
+    # 재배포 API 전용 — 이 슬롯은 브랜치 최신 대신 이 커밋(40자 hex)을 빌드한다. 배포 폼(POST /deploy)은 넘기지 않는다
+    requested_sha: str | None = None,
+    static_requested_sha: str | None = None,
 ) -> list[Build]:
     has_server = runtime != "none"
     if not has_server and not use_static:
@@ -396,6 +399,7 @@ async def start_deploy(
             build_mode=build_mode,
             dockerfile_path=dockerfile_path,
             project_path=project_path.strip("/"),  # 앞뒤 슬래시 정리 — manifest에서 ${PROJECT_PATH:+/$PROJECT_PATH}로 결합
+            requested_sha=requested_sha,
             last_event_seq=0,                      # v2 빌드 표시 겸 콜백 seq 시작점
         )
         builds.append(crud.create_build(db, server_build))
@@ -431,6 +435,7 @@ async def start_deploy(
             build_cmd=build_cmd,
             output_dir=output_dir,
             build_env=json.dumps(static_env) if static_env else None,
+            requested_sha=static_requested_sha,
             last_event_seq=0,
         )
         builds.append(crud.create_build(db, static_build))
