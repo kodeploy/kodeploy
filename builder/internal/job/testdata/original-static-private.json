@@ -66,7 +66,7 @@
         "initContainers": [
           {
             "args": [
-              "set -eu\necho \"[1/2] cloning ${REPO_URL} (${BRANCH})...\"\n# private repo: 토큰을 URL rewrite로 주입 — REPO_URL/로그엔 토큰 안 보임(set -x 꺼짐)\nif [ -n \"${GIT_AUTH_TOKEN:-}\" ]; then\n  git config --global url.\"https://x-access-token:${GIT_AUTH_TOKEN}@github.com/\".insteadOf \"https://github.com/\"\nfi\ngit clone --depth 1 -b \"$BRANCH\" \"$REPO_URL\" /workspace/src\necho \"[2/2] writing generated Dockerfile...\"\nmkdir -p /workspace/df\necho \"$DOCKERFILE_B64\" | base64 -d > /workspace/df/Dockerfile\necho \"===KODEPLOY_DOCKERFILE_START===\"\ncat /workspace/df/Dockerfile\necho \"===KODEPLOY_DOCKERFILE_END===\"\n"
+              "set -eu\necho \"[1/2] cloning ${REPO_URL} (${REF})...\"\n# private repo: 토큰을 URL rewrite(insteadOf)로 주입 — REPO_URL/로그엔 토큰 안 보임(set -x 꺼짐)\nif [ -n \"${GIT_AUTH_TOKEN:-}\" ]; then\n  git config --global url.\"https://x-access-token:${GIT_AUTH_TOKEN}@github.com/\".insteadOf \"https://github.com/\"\nfi\nif echo \"$REF\" | grep -Eq '^[0-9a-f]{40}$'; then\n  git init -q /workspace/src\n  git -C /workspace/src remote add origin \"$REPO_URL\"\n  git -C /workspace/src fetch --depth 1 origin \"$REF\"\n  git -C /workspace/src checkout -q --detach FETCH_HEAD\nelse\n  git clone --depth 1 -b \"$REF\" \"$REPO_URL\" /workspace/src\nfi\necho \"KODEPLOY_SOURCE_SHA=$(git -C /workspace/src rev-parse HEAD)\"\necho \"[2/2] writing generated Dockerfile...\"\nmkdir -p /workspace/df\necho \"$DOCKERFILE_B64\" | base64 -d > /workspace/df/Dockerfile\necho \"===KODEPLOY_DOCKERFILE_START===\"\ncat /workspace/df/Dockerfile\necho \"===KODEPLOY_DOCKERFILE_END===\"\n"
             ],
             "command": [
               "sh",
@@ -78,7 +78,7 @@
                 "value": "https://github.com/yuntyu01/kodeploy-test-spring.git"
               },
               {
-                "name": "BRANCH",
+                "name": "REF",
                 "value": "r2-test-v1"
               },
               {

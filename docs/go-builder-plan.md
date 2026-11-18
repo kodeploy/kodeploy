@@ -108,10 +108,10 @@ POST /internal/deploys
 ```
 POST {CORE_URL}/internal/builds/{build_id}/events
 { "seq": 1, "type": "log",       "at": "...", "lines": ["..."] }
-{ "seq": 7, "type": "committed", "at": "...", "image": "...", "commit_sha": "...", "push_done_at": "...", "triggered_early": true }
-{ "seq": 8, "type": "deployed",  "at": "...", "image": "...", "synced_at": "...", "healthy_at": "..." }
-{ "seq": 9, "type": "finished",  "at": "...", "job_ended_at": "...", "job_succeeded": true, "export_failed": false }
-{ "seq": 9, "type": "failed",    "at": "...", "stage": "build|commit|sync|health|timeout", "reason": "...", "last_lines": ["..."] }
+{ "seq": 7, "type": "committed", "at": "...", "image": "...", "commit_sha": "...", "source_sha": "...", "push_done_at": "...", "triggered_early": true }
+{ "seq": 8, "type": "deployed",  "at": "...", "image": "...", "source_sha": "...", "synced_at": "...", "healthy_at": "..." }
+{ "seq": 9, "type": "finished",  "at": "...", "source_sha": "...", "job_ended_at": "...", "job_succeeded": true, "export_failed": false }
+{ "seq": 9, "type": "failed",    "at": "...", "source_sha": "...", "stage": "build|commit|sync|health|timeout", "reason": "...", "last_lines": ["..."] }
 { "seq": 9, "type": "cancelled", "at": "..." }
 { "seq": 2, "type": "deleted",   "at": "...", "commit_sha": "..." }
 ```
@@ -120,6 +120,8 @@ POST {CORE_URL}/internal/builds/{build_id}/events
 - **최소 한 번 전달**: 2xx를 받을 때까지 백오프(1s → 최대 30s)로 재전송한다. 순서를 지키기 위해 빌드마다 큐 하나, 보내는 고루틴 하나. 받은 마지막 seq를 Job 어노테이션 `kodeploy.io/acked-seq`에 적는다.
 - `log`는 1초 배치, 이벤트당 최대 200줄. 큐에 5,000줄 넘게 쌓이면 오래된 줄부터 버리고 "N줄 생략" 한 줄을 남긴다.
 - `committed`·`deployed`·`failed`·`finished`는 절대 버리지 않는다.
+- `commit_sha`는 kodeploy-apps에 values를 커밋한 SHA, `source_sha`는 실제로 빌드한 앱 소스 커밋(40자 hex)이다. `source_sha`는 `kind=build`에서 init 스크립트가 clone 직후 찍는 `KODEPLOY_SOURCE_SHA=<sha>` 줄로 알고, init 컨테이너 로그에서만 읽는다(main 로그의 같은 줄은 무시). 알면 `committed`·`deployed`·`finished`와 clone 뒤의 `failed`에 싣고, Job 어노테이션 `kodeploy.io/source-sha`에 적어 재개 때 되살린다.
+- `build.ref`가 40자 소문자 hex면 그 커밋만 받는다(`fetch --depth 1 origin <sha>` → detached checkout). 받은 커밋이 다르면 배포 전에 `failed(build, "source mismatch: requested <a>, got <b>")`. 짧은 SHA는 브랜치 이름으로 본다.
 
 ### 3-3. 서명 (양방향 같은 규칙)
 

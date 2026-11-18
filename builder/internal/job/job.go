@@ -46,31 +46,47 @@ const (
 	AnnSynced    = "kodeploy.io/synced"
 	AnnFinished  = "kodeploy.io/finished"
 	AnnAckedSeq  = "kodeploy.io/acked-seq"
+	// 실제로 빌드한 앱 소스 커밋(40자 hex). init 로그의 KODEPLOY_SOURCE_SHA 줄에서 읽는다.
+	// AnnCommitSHA(kodeploy-apps에 values를 커밋한 SHA)와 다른 값이다.
+	AnnSourceSHA = "kodeploy.io/source-sha"
 	// 재개할 때 이미 core에 보낸 로그 줄을 다시 보내지 않으려고 적는다 (설계 문서에 없는 추가분)
 	AnnAckedLogLines = "kodeploy.io/acked-log-lines"
 )
 
-// 원본 init 컨테이너 스크립트 그대로. private repo면 GitAuthSecret의 GIT_AUTH_TOKEN이 clone 컨테이너에만
-// 주입되고(main 컨테이너엔 안 간다), 없으면 public clone이다.
-const cloneScript = `set -eu
-echo "[1/1] cloning ${REPO_URL} (${BRANCH})..."
-# private repo: 토큰을 URL rewrite(insteadOf)로 주입 — REPO_URL/로그엔 토큰 안 보임(set -x 꺼짐)
+// SourceMarker는 init 스크립트가 clone 직후 찍는 줄의 머리다: "KODEPLOY_SOURCE_SHA=<40자 hex>".
+// 빌더는 이 줄을 init 컨테이너 로그에서만 읽는다 (marker.Source).
+const SourceMarker = "KODEPLOY_SOURCE_SHA="
+
+// cloneSource는 세 init 스크립트(clone·static·nixpacks)가 함께 쓰는 소스 받기 조각이다. 앞에 set -eu와
+// 진행 메시지가 온다. REF가 40자 커밋이면 그 커밋만 받고(clone -b는 커밋을 받지 못한다), 아니면 브랜치를 clone한다.
+// 짧은 SHA는 브랜치 이름으로 본다. 받은 뒤 실제 HEAD를 SourceMarker 줄로 찍는다.
+// private repo면 GitAuthSecret의 GIT_AUTH_TOKEN이 clone하는 init 컨테이너에만 주입되고(main 컨테이너엔 안 간다),
+// insteadOf는 clone과 fetch에 똑같이 걸린다. 없으면 public clone이다.
+const cloneSource = `# private repo: 토큰을 URL rewrite(insteadOf)로 주입 — REPO_URL/로그엔 토큰 안 보임(set -x 꺼짐)
 if [ -n "${GIT_AUTH_TOKEN:-}" ]; then
   git config --global url."https://x-access-token:${GIT_AUTH_TOKEN}@github.com/".insteadOf "https://github.com/"
 fi
-git clone --depth 1 -b "$BRANCH" "$REPO_URL" /workspace/src
+if echo "$REF" | grep -Eq '^[0-9a-f]{40}$'; then
+  git init -q /workspace/src
+  git -C /workspace/src remote add origin "$REPO_URL"
+  git -C /workspace/src fetch --depth 1 origin "$REF"
+  git -C /workspace/src checkout -q --detach FETCH_HEAD
+else
+  git clone --depth 1 -b "$REF" "$REPO_URL" /workspace/src
+fi
+echo "` + SourceMarker + `$(git -C /workspace/src rev-parse HEAD)"
 `
 
-// 정적 사이트 init 스크립트 — 원본 static_buildkit_job.yaml.j2 그대로. clone한 뒤 core가 만든 Dockerfile을
-// 따로 쓴다 (repo엔 Dockerfile이 없다). 표지 두 줄은 core가 화면의 Dockerfile 탭에 쓰던 것이라 남겼다.
+// Dockerfile 모드 init 스크립트. 원본 buildkit_job.yaml.j2의 clone 부분을 cloneSource로 바꿨다.
+const cloneScript = `set -eu
+echo "[1/1] cloning ${REPO_URL} (${REF})..."
+` + cloneSource
+
+// 정적 사이트 init 스크립트 — 원본 static_buildkit_job.yaml.j2에서 clone 부분만 cloneSource로 바꿨다. clone한 뒤
+// core가 만든 Dockerfile을 따로 쓴다 (repo엔 Dockerfile이 없다). 표지 두 줄은 core가 화면의 Dockerfile 탭에 쓰던 것이라 남겼다.
 const staticScript = `set -eu
-echo "[1/2] cloning ${REPO_URL} (${BRANCH})..."
-# private repo: 토큰을 URL rewrite로 주입 — REPO_URL/로그엔 토큰 안 보임(set -x 꺼짐)
-if [ -n "${GIT_AUTH_TOKEN:-}" ]; then
-  git config --global url."https://x-access-token:${GIT_AUTH_TOKEN}@github.com/".insteadOf "https://github.com/"
-fi
-git clone --depth 1 -b "$BRANCH" "$REPO_URL" /workspace/src
-echo "[2/2] writing generated Dockerfile..."
+echo "[1/2] cloning ${REPO_URL} (${REF})..."
+` + cloneSource + `echo "[2/2] writing generated Dockerfile..."
 mkdir -p /workspace/df
 echo "$DOCKERFILE_B64" | base64 -d > /workspace/df/Dockerfile
 echo "===KODEPLOY_DOCKERFILE_START==="
@@ -88,7 +104,7 @@ type Params struct {
 	UserID                string // 32 hex
 	Image                 string // <image_repo>:<image_tag>
 	RepoURL               string
-	Branch                string
+	Ref                   string // 브랜치 이름 또는 40자 커밋 SHA (cloneSource가 나눠 받는다)
 	DockerfileSubdir      string
 	DockerfileFilename    string // 비면 Dockerfile
 	CacheRef              string // 비면 캐시 플래그 생략
@@ -186,7 +202,7 @@ func gitAuthEnv(secret string) []corev1.EnvVar {
 func dockerfileContainers(p Params, workspace corev1.VolumeMount) corev1.Container {
 	env := append([]corev1.EnvVar{
 		{Name: "REPO_URL", Value: p.RepoURL},
-		{Name: "BRANCH", Value: p.Branch},
+		{Name: "REF", Value: p.Ref},
 	}, gitAuthEnv(p.GitAuthSecret)...)
 	return corev1.Container{
 		Name:         InitContainer,
@@ -255,7 +271,7 @@ func mainContainer(p Params, args []string, command []string, workspace corev1.V
 func nixpacksContainers(p Params, workspace corev1.VolumeMount) (corev1.Container, corev1.Container, string) {
 	env := append([]corev1.EnvVar{
 		{Name: "REPO_URL", Value: p.RepoURL},
-		{Name: "BRANCH", Value: p.Branch},
+		{Name: "REF", Value: p.Ref},
 		{Name: "PROJECT_PATH", Value: p.ProjectPath},
 		{Name: "NIXPACKS_VERSION", Value: nixpacksVersion},
 	}, gitAuthEnv(p.GitAuthSecret)...)
@@ -287,7 +303,7 @@ func nixpacksContainers(p Params, workspace corev1.VolumeMount) (corev1.Containe
 func staticContainers(p Params, workspace corev1.VolumeMount) (corev1.Container, corev1.Container, string) {
 	env := append([]corev1.EnvVar{
 		{Name: "REPO_URL", Value: p.RepoURL},
-		{Name: "BRANCH", Value: p.Branch},
+		{Name: "REF", Value: p.Ref},
 		{Name: "DOCKERFILE_B64", Value: p.DockerfileB64},
 	}, gitAuthEnv(p.GitAuthSecret)...)
 	initC := corev1.Container{
