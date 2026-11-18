@@ -103,6 +103,25 @@ def test_unknown_build_id_is_404(monkeypatch):
     assert client.get("/deploy/zzzzzzzz").status_code == 404
 
 
+def test_status_reports_the_source_and_requested_commits(monkeypatch):
+    from datetime import datetime
+
+    from app.deploy.model import Build
+
+    src, req = "0123456789abcdef0123456789abcdef01234567", "89abcdef0123456789abcdef0123456789abcdef"
+    row = Build(build_id="abc12345", repo_url="https://github.com/u/repo.git", branch="main", image="i",
+                app_name="foo", port=80, runtime="python", build_mode="dockerfile", status="running", kind="build",
+                source_sha=src, requested_sha=req, created_at=datetime(2026, 11, 18), updated_at=datetime(2026, 11, 18))
+    monkeypatch.setattr(status, "get_state", lambda db, bid, app_id=None: row)
+    client = make_client(user=make_user())
+    body = client.get("/deploy/abc12345").json()
+    assert (body["source_sha"], body["requested_sha"]) == (src, req)
+
+    row.source_sha = row.requested_sha = None          # 옛 행
+    body = client.get("/deploy/abc12345").json()
+    assert (body["source_sha"], body["requested_sha"]) == (None, None)
+
+
 # --- 에러 매핑 ---
 
 def test_start_deploy_valueerror_maps_to_400(monkeypatch):

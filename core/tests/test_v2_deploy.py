@@ -142,6 +142,20 @@ def test_payload_matches_contract(monkeypatch):
     assert not {"image", "runtime", "port"} & set(p["values"])  # 빌더 소유 칸 (넣으면 400)
 
 
+def test_payload_ref_is_the_requested_commit_when_pinned(monkeypatch):
+    monkeypatch.setattr(config, "BUILD_REGISTRY_CACHE_ENABLED", False)
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    pinned = v2.build_payload(make_build(requested_sha=sha), User(id=UID), ["demo.kodeploy.com"])
+    assert pinned["build"]["ref"] == sha
+    static = v2.build_payload(
+        make_build(runtime="static", app_name="demo-static", build_mode="static", requested_sha=sha),
+        User(id=UID), ["demo-api.kodeploy.com"], static_hosts=["demo.kodeploy.com"],
+    )
+    assert static["build"]["ref"] == sha
+    # 지정이 없으면 지금처럼 브랜치
+    assert v2.build_payload(make_build(), User(id=UID), ["demo.kodeploy.com"])["build"]["ref"] == "main"
+
+
 def test_payload_cache_ref_only_when_enabled(monkeypatch):
     monkeypatch.setattr(config, "BUILD_REGISTRY_CACHE_ENABLED", True)
     p = v2.build_payload(make_build(dockerfile_path="Dockerfile"), User(id=UID), ["demo.kodeploy.com"])
@@ -570,6 +584,21 @@ def test_start_rollback_records_a_new_deploy_and_submits(monkeypatch):
     assert (new.status, new.last_event_seq, new.app_id, new.namespace) == ("deploying", 0, APP_ID, app.namespace)
     assert new.build_id != "aa11bb22" and new.kind == "build"
     assert calls == [("cancel", "server"), (v2.run_v2_rollback, (new.build_id,))]    # 진행 중이던 서버 배포는 대체된다
+
+
+def test_start_rollback_carries_the_source_commit(monkeypatch):
+    import asyncio
+
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    target = rb_build(source_sha=sha, requested_sha="f" * 40)
+    monkeypatch.setattr(pipeline, "spawn_background", lambda fn, *a: None)
+    monkeypatch.setattr(pipeline, "_cancel_stale_builds", lambda *a, **kw: None)
+    monkeypatch.setattr(pipeline.crud, "get_build", lambda db, bid, app_id=None: target)
+    monkeypatch.setattr(pipeline.crud, "create_build", lambda db, b: b)
+
+    new = asyncio.run(pipeline.start_rollback(MagicMock(), User(id=UID), v2_app(), "aa11bb22"))
+    assert new.source_sha == sha              # 같은 이미지라 소스 커밋도 같다
+    assert new.requested_sha is None          # 롤백은 커밋을 요청한 배포가 아니다
 
 
 def test_start_rollback_rejects_without_touching_anything(monkeypatch):

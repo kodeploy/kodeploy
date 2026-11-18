@@ -471,6 +471,7 @@ async def start_rollback(db: Session, user: User, app: App, build_id: str) -> Bu
         kind="build",
         status="deploying",
         rollback_of=target.build_id,
+        source_sha=target.source_sha,             # 같은 이미지다 — 빌드한 소스 커밋도 같다
         last_event_seq=0,                         # v2 빌드 표시 겸 콜백 seq 시작점
     )
     crud.create_build(db, rollback)

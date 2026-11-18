@@ -342,3 +342,53 @@ def test_initial_dump_is_dropped_when_the_deploy_fails(env, monkeypatch):
     env.post({"seq": 1, "type": "failed", "stage": "build", "reason": "exit 1"})
     assert dropped == [BID]
     assert all(fn.__name__ != "restore_initial_dump" for fn, _ in env.spawned)
+
+
+# --- 앱 소스 커밋 (source_sha) ---
+
+SRC = "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_source_sha_is_recorded_once(env):
+    env.post({"seq": 1, "type": "committed", "at": "2026-09-28T12:02:00Z",
+              "image": "ghcr.io/u/x/demo:3f9a2c1d@sha256:" + "a" * 64, "commit_sha": "c" * 40, "source_sha": SRC})
+    b, _ = env.row()
+    assert b.source_sha == SRC                       # commit_sha(kodeploy-apps 커밋)는 여기에 들어가지 않는다
+    env.post({"seq": 2, "type": "deployed", "at": "2026-09-28T12:03:00Z", "source_sha": SRC})
+    assert env.row()[0].source_sha == SRC
+
+
+def test_source_sha_is_not_overwritten_by_a_different_value(env, caplog):
+    env.post({"seq": 1, "type": "committed", "at": "2026-09-28T12:02:00Z", "source_sha": SRC})
+    other = "f" * 40
+    with caplog.at_level("WARNING", logger="app.internal.events"):
+        env.post({"seq": 2, "type": "finished", "job_ended_at": "2026-09-28T12:04:00Z", "source_sha": other})
+    assert env.row()[0].source_sha == SRC
+    assert any(other in r.getMessage() and SRC in r.getMessage() for r in caplog.records)
+
+
+def test_source_sha_from_a_failed_event_after_clone(env):
+    env.post({"seq": 1, "type": "failed", "stage": "build", "reason": "build failed", "source_sha": SRC})
+    b, _ = env.row()
+    assert (b.status, b.source_sha) == ("failed", SRC)
+
+
+def test_event_without_source_sha_leaves_it_empty(env):
+    env.post({"seq": 1, "type": "failed", "stage": "build", "reason": "build failed"})
+    assert env.row()[0].source_sha is None
+
+
+@pytest.mark.parametrize("bad", ["abc1234", SRC.upper(), SRC + "0", 12345, ["x"]])
+def test_malformed_source_sha_is_ignored(env, bad):
+    r = env.post({"seq": 1, "type": "committed", "at": "2026-09-28T12:02:00Z", "source_sha": bad})
+    assert r.status_code == 200
+    b, _ = env.row()
+    assert b.source_sha is None and b.status == "deploying"
+
+
+def test_cancelled_build_does_not_take_the_source_sha(env):
+    with events.SessionLocal() as s:
+        s.get(Build, BID).status = "cancelled"
+        s.commit()
+    env.post({"seq": 1, "type": "deployed", "at": "2026-09-28T12:03:10Z", "source_sha": SRC})
+    assert env.row()[0].source_sha is None
