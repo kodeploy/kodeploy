@@ -7,7 +7,7 @@
 // 치수는 design/라이트모드-시안/09_앱_개요.png에서 실측한 값(시안 px ÷ 1.45)이다 — 주석의 숫자가 시안 원본 px.
 import { useCallback, useEffect, useState } from "react";
 import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { getAppStatus, getEnvVars, listBuilds } from "../../api/deploy.js";
+import { getAppStatus, getEnvVars, listBuilds, redeployApp } from "../../api/deploy.js";
 import { useAppShell } from "../../contexts/AppShellContext.jsx";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import AppInfoDrawer from "./AppInfoDrawer.jsx";
@@ -48,6 +48,13 @@ export default function AppLayout() {
   const [envVars, setEnvVars] = useState(null);
   const [error, setError] = useState(null);
   const [infoOpen, setInfoOpen] = useState(false);
+  // 배포하기 — busy 동안 버튼을 잠근다. 못 하면 needsForm(409: 성공한 배포 없음)이나 error를 띄운다
+  const [redeploy, setRedeploy] = useState({ busy: false, error: null, needsForm: false });
+
+  // 배포 안내는 그 자리에서만 — 다른 화면으로 옮기면 걷는다
+  useEffect(() => {
+    setRedeploy((r) => (r.busy ? r : { busy: false, error: null, needsForm: false }));
+  }, [location.pathname]);
 
   // 미로그인 가드
   useEffect(() => {
@@ -134,6 +141,25 @@ export default function AppLayout() {
     };
   }, [authLoading, user?.id, app?.id]);
 
+  // 배포하기 — 설정은 지금 그대로 두고, 코드는 브랜치의 최신 커밋을 새로 받아 빌드·배포한다
+  // (설정·환경변수는 서버가 성공한 마지막 배포에서 가져온다). 시작되면 롤백처럼 새 배포의 진행 화면으로 간다 —
+  // 두 슬롯이면 첫 빌드(서버)를 따라간다.
+  const redeployAsIs = async () => {
+    setRedeploy({ busy: true, error: null, needsForm: false });
+    try {
+      const res = await redeployApp(app.id);
+      const first = res.builds?.[0]?.build_id;
+      navigate(first ? `${base}/deploy/progress?build=${first}` : `${base}/deploy/progress`);
+    } catch (err) {
+      if (onAuthError(err)) return;
+      if (err.status === 409) {
+        setRedeploy({ busy: false, error: null, needsForm: true });
+      } else {
+        setRedeploy({ busy: false, error: err.message?.replace(/^\d+ /, "") || "배포를 시작하지 못했어요", needsForm: false });
+      }
+    }
+  };
+
   if (authLoading || !user) return null;
 
   // 서버 슬롯의 최신 빌드 — 런타임·DB·스토리지 토글의 "지금" 값.
@@ -141,9 +167,29 @@ export default function AppLayout() {
   const serverBuild = builds.find((b) => b.runtime !== "static" && b.kind !== "env_change");
   const appHost = `${app.name}.kodeploy.com`;
 
+  // 배포하기가 빌드할 브랜치 — 누르기 전에 무엇이 나가는지 보여 준다. 서버가 설정을 다시 만들 때와 같은 기준이다:
+  // 슬롯별로 성공한(running) 가장 최근 배포. 롤백 행은 원본 배포의 브랜치를 복사해 둬서 그대로 쓴다. 정적은 사이트가 켜져 있을 때만.
+  // 정적만 남겨 서버를 내린 앱은 서버가 빼고 배포하는데, 여기선 그 판정까지 하지 않는다(브랜치 표시만 하는 자리라서).
+  const isBuild = (b) => (b.kind || "build") === "build" && b.status === "running";
+  const liveServer = builds.find((b) => b.runtime !== "static" && isBuild(b));
+  const liveStatic = app.site_enabled ? builds.find((b) => b.runtime === "static" && isBuild(b)) : null;
+  const deployHint = (() => {
+    const s = liveServer?.branch;
+    const t = liveStatic?.branch;
+    if (!s && !t) return null;
+    const branches = s && t && s !== t ? `서버 ${s}, 정적 ${t}` : s || t;
+    return `${branches} 최신 커밋 · 현재 설정`;
+  })();
+  const hintEl = deployHint && (
+    <span className="kd-t-caption text-fg-3 block" style={{ overflowWrap: "anywhere" }}>
+      {deployHint}
+    </span>
+  );
+
   // 앱 액션 — 사이드바 맨 아래. 화면마다 머리 줄을 두지 않으므로 여기 한 곳에만 있다.
-  // 재배포만 검은 버튼으로 세워 이 묶음에서 유일한 실행 동작이라는 걸 보이게 한다.
-  // 앱 액션 — 사이드바에서는 메뉴와 같은 줄 리듬으로 하나씩, 좁은 화면에서는 한 줄에 모아 쓴다.
+  // 배포하기만 검은 버튼으로 세워 이 묶음에서 바로 실행되는 동작이라는 걸 보이게 하고(아래에 무엇이 나가는지 한 줄),
+  // 설정 변경(배포 폼으로 이동)은 괘선 버튼으로 둔다. "재설정"은 초기화로 읽혀서 쓰지 않는다.
+  // 앱 액션 — 사이드바에서는 메뉴와 같은 줄 리듬으로 하나씩, 좁은 화면에서는 메뉴 줄 오른쪽에 모으고 배포 버튼 둘은 그 아래 줄에 둔다.
   const actionOpen = (
     <a
       href={`https://${appHost}`}
@@ -164,20 +210,47 @@ export default function AppLayout() {
       앱 정보
     </button>
   );
-  const actionRedeploy = can(app, "editor") && (
+  const canDeploy = can(app, "editor");
+  const actionRedeploy = canDeploy && (
+    <button
+      onClick={redeployAsIs}
+      disabled={redeploy.busy}
+      title={deployHint || undefined}
+      className="kd-btn-primary kd-btn-md w-full inline-flex items-center justify-center whitespace-nowrap"
+    >
+      {redeploy.busy ? "배포 요청 중…" : "배포하기"}
+    </button>
+  );
+  const actionReconfigure = canDeploy && (
     <Link
       to={`${base}/deploy`}
-      className="kd-btn-primary kd-btn-md w-full inline-flex items-center justify-center no-underline"
+      className="kd-btn-secondary kd-btn-md w-full inline-flex items-center justify-center no-underline whitespace-nowrap"
     >
-      재배포
+      설정 변경
     </Link>
   );
-  const actions = (
-    <>
-      {actionOpen}
-      {actionInfo}
-      {actionRedeploy}
-    </>
+  // 좁은 화면 — 배포 버튼 둘은 메뉴 줄에 같이 두면 메뉴가 0px까지 눌려서(360px 이하는 화면 밖으로 넘친다)
+  // 메뉴 아래 한 줄에 반씩 나눠 둔다. 스크롤에 밀리지 않는 자리라는 점은 그대로다. 무엇이 나가는지는 그 아래 한 줄.
+  const narrowRedeploy = canDeploy && (
+    <div style={{ paddingBlock: 8, borderBottom: "1px solid var(--kd-border)" }}>
+      <div className="flex items-center" style={{ gap: 8 }}>
+        <button
+          onClick={redeployAsIs}
+          disabled={redeploy.busy}
+          title={deployHint || undefined}
+          className="kd-btn-primary kd-btn-sm flex-1 min-w-0 inline-flex items-center justify-center whitespace-nowrap"
+        >
+          {redeploy.busy ? "배포 요청 중…" : "배포하기"}
+        </button>
+        <Link
+          to={`${base}/deploy`}
+          className="kd-btn-secondary kd-btn-sm flex-1 min-w-0 inline-flex items-center justify-center no-underline whitespace-nowrap"
+        >
+          설정 변경
+        </Link>
+      </div>
+      {hintEl && <div style={{ marginTop: 6 }}>{hintEl}</div>}
+    </div>
   );
 
   const ctx = {
@@ -226,7 +299,15 @@ export default function AppLayout() {
           />
           <div style={SIDE_ROW}>{actionOpen}</div>
           <div style={SIDE_ROW}>{actionInfo}</div>
-          {actionRedeploy && <div style={{ paddingInline: 24, paddingTop: 8 }}>{actionRedeploy}</div>}
+          {canDeploy && (
+            <div className="flex flex-col" style={{ paddingInline: 24, paddingTop: 8, gap: 8 }}>
+              <div className="flex flex-col" style={{ gap: 6 }}>
+                {actionRedeploy}
+                {hintEl}
+              </div>
+              {actionReconfigure}
+            </div>
+          )}
         </div>
 
       </aside>
@@ -238,7 +319,7 @@ export default function AppLayout() {
             className="flex items-center h-12"
             style={{ borderBottom: "1px solid var(--kd-border)" }}
           >
-            {/* 메뉴만 옆으로 밀리고 액션은 오른쪽에 고정된다 — 재배포가 스크롤 밖으로 나가면 안 된다 */}
+            {/* 메뉴만 옆으로 밀리고 액션은 오른쪽에 고정된다 — 배포 버튼(아래 줄)도 스크롤 밖으로 나가면 안 된다 */}
             <nav className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto scroll-thin">
             {tabs.map((t) => {
               const on = isActive(t);
@@ -261,8 +342,12 @@ export default function AppLayout() {
               className="shrink-0"
               style={{ width: 1, height: 16, background: "var(--kd-border)", marginInline: 10 }}
             />
-            <div className="flex items-center gap-3.5 shrink-0">{actions}</div>
+            <div className="flex items-center gap-3.5 shrink-0">
+              {actionOpen}
+              {actionInfo}
+            </div>
           </div>
+          {narrowRedeploy}
         </div>
 
         {/* 관리자 권한으로 보는 남의 앱 — 여기서 바꾸는 것은 관리자 기록에 남는다 */}
@@ -274,6 +359,28 @@ export default function AppLayout() {
             >
               관리자로 보는 중 · 주인 {app.owner_login || "알 수 없음"} ·{" "}
               {app.role === "owner" ? "주인 권한 — 바꾸는 동작은 관리자 기록에 남아요" : "보기 전용"}
+            </div>
+          </div>
+        )}
+
+        {/* 배포하기를 못 했다 — 성공한 배포가 없으면(409) 설정 변경(배포 폼)으로 안내한다 */}
+        {(redeploy.needsForm || redeploy.error) && (
+          <div className="kd-page shrink-0">
+            <div
+              role="alert"
+              className="kd-t-caption mt-3 px-3 py-2"
+              style={{ border: "1px solid var(--kd-border)", borderRadius: 4, color: "var(--err-fg)" }}
+            >
+              {redeploy.needsForm ? (
+                <>
+                  아직 성공한 배포가 없어서 배포하기를 쓸 수 없어요. 첫 배포는 설정 변경에서 해주세요.{" "}
+                  <Link to={`${base}/deploy`} className="text-fg-1 underline underline-offset-4">
+                    설정 변경 열기
+                  </Link>
+                </>
+              ) : (
+                redeploy.error
+              )}
             </div>
           </div>
         )}

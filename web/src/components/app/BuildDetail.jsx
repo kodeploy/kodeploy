@@ -1,6 +1,6 @@
 // 배포 이력 · 우측 상세 — 선택한 빌드 하나를 보여준다. design/라이트모드-시안/14_배포_이력.png 기준.
 //
-// 제목(#N 결과) → 메타 줄(브랜치 · 빌드ID · 소요) → 탭(요약 / 빌드 로그 / Dockerfile).
+// 제목(#N 결과) → 메타 줄(브랜치 · 커밋 · 빌드ID · 소요) → 탭(요약 / 빌드 로그 / Dockerfile).
 // 빌드 로그는 잉크 면에 줄번호와 함께 깔고, 실패한 빌드면 그 아래 AI 분석 카드(AiDiagnosis)를 붙인다.
 //
 // 진행 중인 빌드는 로그가 계속 늘어나므로 getBuild(id)로 1초 폴링한다 —
@@ -17,6 +17,7 @@ import {
   Clock,
   Diamond,
   GitBranch,
+  GitCommitHorizontal,
   Loader,
   Maximize2,
   Minimize2,
@@ -162,6 +163,15 @@ export default function BuildDetail({ build: initialBuild, number, base, canRoll
         ) : (
           <>
             <Meta icon={GitBranch}>{build.branch || "—"}</Meta>
+            {/* 실제로 빌드한 커밋 — 빌더가 알려 준 뒤에만 있다 (옛 빌드·clone 전 실패는 없다) */}
+            {build.source_sha && (
+              <>
+                <MetaDivider />
+                <Meta icon={GitCommitHorizontal}>
+                  <span className="kd-t-code" title={build.source_sha}>{build.source_sha.slice(0, 7)}</span>
+                </Meta>
+              </>
+            )}
             <MetaDivider />
             <Meta icon={Diamond}>{build.build_id}</Meta>
             {build.rollback_of && (

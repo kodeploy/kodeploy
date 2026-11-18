@@ -28,7 +28,7 @@ export default function GettingStarted() {
       <Section title="3. 확인하고 배포">
         <Bullet>마지막 단계에서 설정을 확인하고 배포하세요. 진행 화면에서 빌드와 앱 시작 상태를 확인할 수 있어요.</Bullet>
         <Bullet>배포 후 앱 상세의 <Code>개요</Code>에서 서비스 주소를 열어 동작을 확인하세요. 실패하면 <Code>배포 이력</Code>의 빌드 로그와 <Code>작업 공간 → 터미널·로그</Code>를 확인합니다.</Bullet>
-        <Bullet>소스를 수정한 뒤에는 변경사항을 GitHub에 push하고 다시 배포하세요. 포트·런타임·DB 등 실행 설정도 재배포 화면에서 변경합니다.</Bullet>
+        <Bullet>소스를 수정한 뒤에는 변경사항을 GitHub에 push하고 앱 화면의 <Code>배포하기</Code>를 누르세요. 설정은 그대로 두고 브랜치의 최신 커밋을 빌드해요. 포트·런타임·DB 등 실행 설정은 <Code>설정 변경</Code>에서 바꿉니다.</Bullet>
       </Section>
 
       <Section title="서버와 프론트엔드 주소">
