@@ -13,24 +13,8 @@ import { useOutletContext, useSearchParams } from "react-router-dom";
 import { can } from "../../lib/roles.js";
 import { ArrowUpRight } from "lucide-react";
 import { listRecentCommits } from "../../api/deploy.js";
-import { formatDuration, formatFull, parseDate, relativeTime } from "../../lib/format.js";
+import { dayTime, formatDuration, relativeTime } from "../../lib/format.js";
 import BuildDetail, { resultIcon, statusLabel } from "./BuildDetail.jsx";
-
-// 시안의 "오늘 14:20 / 어제 18:10" 표기. lib/format.js에는 상대시간(relativeTime)과
-// 절대시간(formatFull)만 있어서 이 화면의 표기만 여기서 만든다 — 파싱은 parseDate 재사용.
-function dayTime(iso) {
-  const d = parseDate(iso);
-  if (!d) return "";
-  const pad = (n) => String(n).padStart(2, "0");
-  const hhmm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (d >= today) return `오늘 ${hhmm}`;
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (d >= yesterday) return `어제 ${hhmm}`;
-  return formatFull(iso); // 그 이전은 "YY.MM.DD HH:MM"
-}
 
 export default function AppHistory() {
   const { builds, app, base } = useOutletContext();

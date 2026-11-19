@@ -123,6 +123,13 @@ export function redeployApp(appId, { commitSha } = {}) {
   });
 }
 
+// 배포하기에서 고를 커밋 — 커밋을 지정하면 걸리는 저장소(서버, 없으면 정적)의 브랜치 최근 커밋과 지금 떠 있는 커밋.
+// 응답: { repo, branch, current_sha, commits: [{ sha(40자), message, date, url }] (최신순 최대 3개), current }
+// current는 지금 커밋이 commits에 없을 때만 온다. GitHub 조회가 실패하면 commits가 빈다. 성공한 배포가 없으면 409.
+export function listRedeployCommits(appId) {
+  return request("/deploy/redeploy/commits", { appId });
+}
+
 export function createDeploy({
   repoUrl,
   branch = "main",

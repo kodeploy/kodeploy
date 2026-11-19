@@ -33,7 +33,7 @@ import { STYLES_BUILD, STYLES_ENV } from "../StatusBadge.jsx";
 import DeleteAppModal from "../DeleteAppModal.jsx";
 import { useAuth } from "../../contexts/AuthContext.jsx";
 import { ROLE_LABEL, can } from "../../lib/roles.js";
-import { formatFull, parseDate } from "../../lib/format.js";
+import { dayTime } from "../../lib/format.js";
 
 // 진행 중인 빌드 — 폴링 주기 단축 + Pod이 아직 없는 슬롯의 "빌드 중" 판정에 쓴다.
 const ACTIVE = new Set(["queued", "building", "built", "deploying"]);
@@ -66,22 +66,6 @@ const STATUS_COLOR = {
   crashing: "var(--err-fg)",
   missing: "var(--fg-4)",
 };
-
-// 시안의 "오늘 14:20" 표기. 그 이전 날짜는 lib/format의 절대시간으로 떨어진다.
-// (AppHistory에도 같은 표기가 있지만 export가 아니라 여기서 parseDate만 재사용한다)
-function dayTime(iso) {
-  const d = parseDate(iso);
-  if (!d) return "";
-  const pad = (n) => String(n).padStart(2, "0");
-  const hhmm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  if (d >= today) return `오늘 ${hhmm}`;
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (d >= yesterday) return `어제 ${hhmm}`;
-  return formatFull(iso);
-}
 
 // 앱 하나의 화면용 값 — 슬롯 판별과 호스트 규칙을 한 곳에서 계산한다.
 function viewOf(app, builds, slotStatus) {

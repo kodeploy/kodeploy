@@ -50,3 +50,18 @@ export function formatFull(iso) {
   const min = pad(d.getMinutes());
   return `${yy}.${mm}.${dd} ${hh}:${min}`;
 }
+
+// ISO → "오늘 14:20" / "어제 18:10" / 그 이전은 "YY.MM.DD HH:MM"(formatFull). 시안의 목록 시각 표기.
+export function dayTime(iso) {
+  const d = parseDate(iso);
+  if (!d) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  const hhmm = `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (d >= today) return `오늘 ${hhmm}`;
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d >= yesterday) return `어제 ${hhmm}`;
+  return formatFull(iso);
+}
