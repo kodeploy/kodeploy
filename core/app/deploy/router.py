@@ -33,6 +33,7 @@ from app.deploy.schemas import (
     EnvVarsRequest,
     EnvVarsResponse,
     RedeployBuildRef,
+    RedeployCommitsResponse,
     RedeployRequest,
     RedeployResponse,
     SavedQueryCreate,
@@ -263,6 +264,37 @@ async def redeploy_app(
             )
             for b in result.builds
         ],
+    )
+
+
+# 배포하기에서 고를 수 있는 최근 커밋 수 (사이드바 버튼 위로 펼쳐지는 목록)
+REDEPLOY_PICK_COMMITS = 3
+
+
+# 배포하기 커밋 고르기 — 기준 저장소·브랜치의 최근 커밋 3개와 지금 떠 있는 커밋.
+# 라이브 판정은 POST /redeploy와 같아서 성공한 배포가 없으면 똑같이 409다. 비공개 저장소는 앱 주인의 GitHub 연결로 읽는다.
+# GitHub 조회가 실패하면 commits가 빈다 — 화면은 커밋을 지정하지 않는 "브랜치 최신"만 남긴다.
+@router.get("/redeploy/commits", response_model=RedeployCommitsResponse)
+def redeploy_commits(
+    db: Session = Depends(get_db),
+    app: App = Depends(editor_app_required),
+) -> RedeployCommitsResponse:
+    try:
+        base, current_sha = redeploy.commit_base(db, app)
+    except redeploy.RedeployError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    inst = apps_service.repo_installation_id(db, app)
+    recent = github.fetch_recent_commits(base.repo_url, base.branch, installation_id=inst)
+    commits = recent[:REDEPLOY_PICK_COMMITS]
+    current = None
+    if current_sha and all(c["sha"] != current_sha for c in commits):
+        current = (
+            next((c for c in recent if c["sha"] == current_sha), None)
+            or github.fetch_commit(base.repo_url, current_sha, installation_id=inst)
+            or {"sha": current_sha}
+        )
+    return RedeployCommitsResponse(
+        repo=base.repo_url, branch=base.branch, current_sha=current_sha, commits=commits, current=current,
     )
 
 

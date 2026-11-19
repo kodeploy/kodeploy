@@ -86,6 +86,22 @@ class RedeployResponse(BaseModel):
     builds: list[RedeployBuildRef]
 
 
+# GET /deploy/redeploy/commits — 배포하기에서 고를 커밋. sha는 40자.
+class RedeployCommit(BaseModel):
+    sha: str
+    message: str = ""
+    date: str | None = None
+    url: str | None = None
+
+
+class RedeployCommitsResponse(BaseModel):
+    repo: str                                            # 커밋을 지정하면 걸리는 저장소 (서버, 없으면 정적)
+    branch: str
+    current_sha: str | None = None                       # 그 슬롯에 지금 떠 있는 커밋 (기록 전 배포면 null)
+    commits: list[RedeployCommit]                        # 브랜치 최근 커밋, 최신순 최대 3개. GitHub 조회 실패면 빈 목록
+    current: RedeployCommit | None = None                # current_sha가 commits에 없을 때만 — 그 커밋 (조회 실패면 sha만)
+
+
 # POST /deploy/app/db/query 입력 — DB 콘솔에서 실행할 단발 SQL.
 # offset: SELECT/WITH 쿼리의 페이지네이션 시작 위치(다음 500개 보기). 그 외 쿼리는 무시.
 class DbQueryRequest(BaseModel):

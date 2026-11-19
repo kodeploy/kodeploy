@@ -106,6 +106,15 @@ def live_slots(db: Session, app: App) -> LiveSlots:
     return live
 
 
+# 배포하기에서 커밋을 고를 기준 — 커밋을 지정하면 걸리는 슬롯의 행(서버, 없으면 정적. repo를 안 줬을 때의 기준 저장소)과
+# 그 슬롯에 지금 떠 있는 커밋. 롤백 행은 원본의 source_sha를 복사해 두지만, 그 전에 만든 롤백 행은 비어 있어 원본에서 읽는다.
+def commit_base(db: Session, app: App) -> tuple[Build, str | None]:
+    live = live_slots(db, app)
+    if live.server is not None:
+        return live.server_code, live.server.source_sha or live.server_code.source_sha
+    return live.static, live.static.source_sha
+
+
 # 라이브 행들 → start_deploy 인자. 환경변수·초기 덤프는 보내지 않는다.
 def redeploy_args(app: App, live: LiveSlots) -> dict:
     args: dict = {"app": app, "env_vars": None, "init_dump_token": None, "use_static": live.static is not None}

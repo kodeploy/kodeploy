@@ -219,39 +219,59 @@ def _choose_runtime(tree: "list[dict]", project_path: "str | None") -> dict:
 
 
 # GitHub 커밋 캐시 — unauthenticated 한도(IP당 60req/h, core egress IP 공유) 보호.
-# (owner, repo, branch) → {"etag", "data", "at"}.
-# - TTL 안: 네트워크 생략 (탭/유저 수와 무관하게 repo당 분당 최대 1회)
+# (owner, repo, branch, installation_id) → {"etag", "data", "at"}. 토큰으로 읽은 비공개 저장소 목록이
+# 토큰 없는 요청에 새지 않게 installation을 키에 넣는다.
+# - TTL 안: 네트워크 생략. 배포하기 커밋 고르기가 방금 푸시한 커밋을 보여야 해서 짧게 둔다
 # - TTL 후: If-None-Match 조건부 요청 — 304는 GitHub이 rate limit에서 차감 안 함
 # - 403(한도 초과) 등 실패: stale 캐시라도 반환 — UI가 갑자기 비지 않게
 _COMMITS_CACHE: dict[tuple, dict] = {}
-_COMMITS_TTL_SECONDS = 60
+_COMMITS_TTL_SECONDS = 10
+
+# 커밋 하나 — sha로 찾은 커밋은 바뀌지 않아 TTL 없이 둔다. 너무 커지면 비운다.
+_COMMIT_CACHE: dict[tuple, dict] = {}
+_COMMIT_CACHE_MAX = 500
 
 
-# 최근 커밋 조회 — public repo 한정 (unauthenticated GitHub API).
-# private repo 지원은 App installation token 도입 시 분기 추가.
+def _github_headers(installation_id: "int | None") -> dict:
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "kodeploy"}
+    token = github_app.get_clone_token(installation_id)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+# GitHub 커밋 응답 하나 → 화면용 dict. sha는 40자 그대로 (배포하기가 커밋을 지정할 때 쓴다 — 표시는 화면이 자른다).
+def _commit_view(c: dict) -> dict:
+    title, _, body = c["commit"]["message"].partition("\n")
+    return {
+        "sha": c["sha"],
+        "message": title.strip(),
+        "body": body.strip(),  # 빈 문자열 가능 — UI에서 "(본문 없음)" 처리
+        "author": c["commit"]["author"].get("name", "unknown"),
+        "date": c["commit"]["author"].get("date"),
+        "url": c["html_url"],
+    }
+
+
+# 브랜치의 최근 커밋 (최신순). installation_id가 있으면 그 토큰으로 읽어 비공개 저장소도 된다.
 # 실패는 캐시 fallback → 빈 리스트로 swallow — UI에서 "없음" 표시되면 충분.
 def fetch_recent_commits(
-    repo_url: str, branch: str, per_page: int = 10,
+    repo_url: str, branch: str, per_page: int = 10, installation_id: "int | None" = None,
 ) -> list[dict]:
     m = _GITHUB_REPO_PATTERN.match(repo_url.rstrip("/"))
     if not m:
         return []
     owner, repo = m.group(1), m.group(2)
 
-    key = (owner, repo, branch)
+    key = (owner, repo, branch, installation_id)
     now = time.time()
     cached = _COMMITS_CACHE.get(key)
     if cached and now - cached["at"] < _COMMITS_TTL_SECONDS:
         return cached["data"]
 
-    api_url = (
-        f"https://api.github.com/repos/{owner}/{repo}/commits"
-        f"?sha={branch}&per_page={per_page}"
-    )
-    headers = {
-        "Accept": "application/vnd.github+json",
-        "User-Agent": "kodeploy",
-    }
+    q = urllib.parse.urlencode({"sha": branch, "per_page": per_page})
+    api_url = f"https://api.github.com/repos/{owner}/{repo}/commits?{q}"
+    headers = _github_headers(installation_id)
     if cached and cached.get("etag"):
         headers["If-None-Match"] = cached["etag"]
     try:
@@ -267,19 +287,33 @@ def fetch_recent_commits(
     except (urllib.error.URLError, TimeoutError, ValueError):
         return cached["data"] if cached else []
     out = []
-    for c in data:
+    for c in data if isinstance(data, list) else []:
         try:
-            full_msg = c["commit"]["message"]
-            title, _, body = full_msg.partition("\n")
-            out.append({
-                "sha": c["sha"][:7],
-                "message": title.strip(),
-                "body": body.strip(),  # 빈 문자열 가능 — UI에서 "(본문 없음)" 처리
-                "author": c["commit"]["author"].get("name", "unknown"),
-                "date": c["commit"]["author"].get("date"),
-                "url": c["html_url"],
-            })
-        except (KeyError, TypeError):
+            out.append(_commit_view(c))
+        except (KeyError, TypeError, AttributeError):
             continue
     _COMMITS_CACHE[key] = {"etag": etag, "data": out, "at": now}
+    return out
+
+
+# 커밋 하나 (40자 sha). 없거나 조회 실패면 None — 배포하기에서 지금 라이브 커밋이 최근 목록 밖일 때 날짜를 보여 주려고 쓴다.
+def fetch_commit(repo_url: str, sha: str, installation_id: "int | None" = None) -> "dict | None":
+    m = _GITHUB_REPO_PATTERN.match(repo_url.rstrip("/"))
+    if not m:
+        return None
+    key = (m.group(1), m.group(2), sha, installation_id)
+    if key in _COMMIT_CACHE:
+        return _COMMIT_CACHE[key]
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{m.group(1)}/{m.group(2)}/commits/{urllib.parse.quote(sha)}",
+        headers=_github_headers(installation_id),
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            out = _commit_view(json.load(resp))
+    except (urllib.error.URLError, TimeoutError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    if len(_COMMIT_CACHE) >= _COMMIT_CACHE_MAX:
+        _COMMIT_CACHE.clear()
+    _COMMIT_CACHE[key] = out
     return out

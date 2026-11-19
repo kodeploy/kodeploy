@@ -643,3 +643,120 @@ def test_http_editor_gets_the_allowed_repos_rule(env, http, monkeypatch):
     http.access[OWNER] = "owner"
     http.client(User(id=OWNER)).post(f"/apps/{APP_ID}/deploy/redeploy")
     assert seen["allowed_repos"] is None                                    # 주인은 제한 없음
+
+
+# --- 배포하기 커밋 고르기 (GET /redeploy/commits) ---
+
+def _commit(i):
+    return {"sha": f"{i:040x}", "message": f"commit {i}", "body": "", "author": "a",
+            "date": f"2026-11-{20 - i:02d}T00:00:00Z", "url": f"https://github.com/acme/api/commit/{i:040x}"}
+
+
+@pytest.fixture
+def gh(monkeypatch):
+    state = SimpleNamespace(recent=[_commit(i) for i in range(10)], single={}, calls=[])
+
+    def recent(repo_url, branch, per_page=10, installation_id=None):
+        state.calls.append(("recent", repo_url, branch, installation_id))
+        return state.recent
+
+    def one(repo_url, sha, installation_id=None):
+        state.calls.append(("one", repo_url, sha, installation_id))
+        return state.single.get(sha)
+
+    monkeypatch.setattr(deploy_router.github, "fetch_recent_commits", recent)
+    monkeypatch.setattr(deploy_router.github, "fetch_commit", one)
+    monkeypatch.setattr(apps_service, "repo_installation_id", lambda db, app: 42)
+    return state
+
+
+def _picker(http, path=None):
+    http.access[OWNER] = "owner"
+    return http.client(User(id=OWNER)).get(path or f"/apps/{APP_ID}/deploy/redeploy/commits")
+
+
+def test_picker_lists_three_commits_of_the_server_branch(env, http, gh):
+    with env.Session() as s:
+        _two_repos(s)
+        s.query(Build).filter_by(build_id="a0000001").update({"source_sha": _commit(1)["sha"]})
+        s.commit()
+    r = _picker(http)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert (body["repo"], body["branch"]) == (API_REPO, "main")
+    assert [c["sha"] for c in body["commits"]] == [_commit(i)["sha"] for i in range(3)]
+    assert body["current_sha"] == _commit(1)["sha"] and body["current"] is None   # 목록 안에 있으면 따로 안 준다
+    assert gh.calls == [("recent", API_REPO, "main", 42)]                          # 비공개 저장소는 주인의 연결로
+
+
+def test_picker_takes_an_older_current_commit_from_the_recent_list(env, http, gh):
+    with env.Session() as s:
+        _server_only(s)
+        s.query(Build).update({"source_sha": _commit(7)["sha"]})
+        s.commit()
+    body = _picker(http).json()
+    assert body["branch"] == "release" and len(body["commits"]) == 3
+    assert body["current"]["sha"] == _commit(7)["sha"] and body["current"]["date"] == _commit(7)["date"]
+    assert [c[0] for c in gh.calls] == ["recent"]
+
+
+def test_picker_looks_up_a_current_commit_beyond_the_recent_list(env, http, gh):
+    old = "f" * 40
+    gh.single[old] = {**_commit(0), "sha": old, "message": "old one"}
+    with env.Session() as s:
+        _server_only(s)
+        s.query(Build).update({"source_sha": old})
+        s.commit()
+    body = _picker(http).json()
+    assert body["current"]["sha"] == old and body["current"]["message"] == "old one"
+    assert gh.calls[-1] == ("one", API_REPO, old, 42)
+
+
+def test_picker_keeps_the_current_sha_when_github_fails(env, http, gh):
+    gh.recent = []
+    with env.Session() as s:
+        _server_only(s)
+        s.query(Build).update({"source_sha": SHA})
+        s.commit()
+    body = _picker(http).json()
+    assert body["commits"] == [] and body["current"] == {"sha": SHA, "message": "", "date": None, "url": None}
+
+
+def test_picker_reads_the_origin_commit_for_an_old_rollback_row(env, http, gh):
+    with env.Session() as s:
+        app = make_app(s)
+        add_server(s, "a0000001", 0, source_sha=_commit(4)["sha"], branch="stable")
+        add_server(s, "a0000002", 5, status="superseded")
+        add_server(s, "a0000003", 10, rollback_of="a0000001", source_sha=None)   # 기록 전에 만든 롤백 행
+        base, current = redeploy.commit_base(s, app)
+        assert (base.build_id, current) == ("a0000001", _commit(4)["sha"])
+    assert _picker(http).json()["branch"] == "stable"
+
+
+def test_picker_uses_the_static_repo_without_a_server(env, http, gh):
+    with env.Session() as s:
+        _static_only(s)
+    body = _picker(http).json()
+    assert (body["repo"], body["branch"], body["current_sha"]) == (WEB_REPO, "gh-pages", None)
+
+
+@pytest.mark.parametrize("role,path,code", [
+    ("owner", "/deploy/redeploy/commits", 400),        # app_id 없음
+    ("viewer", "/apps/{app}/deploy/redeploy/commits", 403),
+    (None, "/apps/{app}/deploy/redeploy/commits", 404),
+])
+def test_picker_access(env, http, gh, role, path, code):
+    with env.Session() as s:
+        _server_only(s)
+    user = User(id=OWNER) if role == "owner" else User(id=uuid.uuid4())
+    if role:
+        http.access[user.id] = role
+    assert http.client(user).get(path.replace("{app}", str(APP_ID))).status_code == code
+    assert gh.calls == []
+
+
+def test_picker_without_a_live_build_is_409(env, http, gh):
+    with env.Session() as s:
+        make_app(s)
+    r = _picker(http)
+    assert r.status_code == 409 and "배포 폼" in r.json()["detail"]

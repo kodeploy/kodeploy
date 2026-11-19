@@ -1,6 +1,6 @@
 # 배포 API 계약 (CLI·CI용)
 
-CLI와 GitHub Actions가 "이 커밋을, 지금 설정 그대로" 배포할 때 쓰는 core API다. 웹 앱 화면의 "배포하기" 버튼(설정은 그대로, 코드는 브랜치 최신 커밋)도 같은 API를 쓴다. 설정을 바꾸는 배포는 "설정 변경"(배포 폼, `POST /deploy`)이다.
+CLI와 GitHub Actions가 "이 커밋을, 지금 설정 그대로" 배포할 때 쓰는 core API다. 웹 앱 화면의 "배포하기" 버튼(설정은 그대로, 코드는 브랜치 최신이나 고른 최근 커밋)도 같은 API를 쓴다. 설정을 바꾸는 배포는 "설정 변경"(배포 폼, `POST /deploy`)이다.
 CLI(B 묶음)는 이 문서만 보고 만들 수 있어야 한다. 서버 구현은 `core/app/deploy/build/redeploy.py`, 라우트는 `core/app/deploy/router.py`의 `redeploy_app`이다.
 
 ## 1. 범위와 제약
@@ -88,6 +88,30 @@ Idempotency-Key: <선택, 1~100자, [A-Za-z0-9._-]>
 | 404 | 앱이 없거나 접근 권한이 없음 |
 | 409 | 라이브 배포가 없음(첫 배포는 웹 배포 폼으로), 선언된 슬롯에 성공한 배포가 없음, 같은 키의 요청이 아직 처리 중이거나 방금 실패함 |
 | 422 | 본문 형식 오류(모르는 칸, 문자열이 아닌 값) |
+
+### 3-5. 고를 커밋 목록
+
+```
+GET /apps/{app_id}/deploy/redeploy/commits
+```
+
+웹의 배포하기가 커밋을 고를 때 쓴다. CLI는 쓰지 않아도 된다.
+
+```json
+{
+  "repo": "https://github.com/acme/api.git",
+  "branch": "main",
+  "current_sha": "<지금 떠 있는 커밋, 기록 전 배포면 null>",
+  "commits": [{"sha": "<40자>", "message": "<첫 줄>", "date": "2026-11-18T06:20:00Z", "url": "<GitHub 커밋 주소>"}],
+  "current": null
+}
+```
+
+- `repo`·`branch`는 `repo` 없이 커밋을 지정할 때의 기준 저장소(3-1)와 그 슬롯의 브랜치다.
+- `commits`는 그 브랜치의 최근 커밋, 최신순 최대 3개다. GitHub 조회에 실패하면 빈 목록이다. 비공개 저장소는 앱 주인의 GitHub 연결로 읽는다.
+- `current`는 `current_sha`가 `commits`에 없을 때만 그 커밋을 준다(조회에 실패하면 `sha`만).
+- 권한과 409 조건은 재배포와 같다.
+- 웹은 최신을 고르면 `commit_sha` 없이 보낸다. 목록은 몇 초 늦을 수 있고, 정적 슬롯이 같은 저장소의 다른 브랜치를 쓸 때 그 슬롯까지 서버 브랜치의 커밋으로 고정되지 않게 하려는 것이다.
 
 ## 4. 상태 조회
 
