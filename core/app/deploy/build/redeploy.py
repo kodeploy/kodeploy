@@ -61,6 +61,14 @@ class LiveSlots:
     static: Build | None = None       # 정적 슬롯의 라이브 행
 
 
+# CI 토큰이 배포할 수 있는 범위 (app/ci). 그 저장소·브랜치의 그 커밋만.
+@dataclass
+class CiScope:
+    repo_url: str       # https://github.com/<owner/repo>.git
+    branch: str         # ref의 refs/heads/ 뒤
+    sha: str            # 40자 소문자 hex
+
+
 @dataclass
 class RedeployResult:
     builds: list[Build] = field(default_factory=list)
@@ -178,6 +186,7 @@ def check_key(key: str | None) -> None:
 
 async def _start(
     db: Session, user: User, app: App, commit_sha: str | None, repo: str | None, allowed_repos: set[str] | None,
+    ci_branch: str | None = None,
 ) -> RedeployResult:
     live = live_slots(db, app)
     args = redeploy_args(app, live)
@@ -190,15 +199,24 @@ async def _start(
     if repo is not None and repo.strip():
         base = repo_key(_normalize_repo_url(repo))
         if base not in used:
+            if ci_branch is not None:
+                raise RedeployError(403, "저장소가 이 앱이 배포하는 저장소와 달라요", "repo_mismatch")
             raise RedeployError(400, "이 앱의 어느 슬롯도 그 저장소를 쓰지 않아요", "repo_not_used")
     else:
         base = repo_key(slot_repos["server"] or slot_repos["static"])
     # 커밋은 기준 저장소를 쓰는 슬롯에만 — 다른 저장소의 슬롯은 그 브랜치 최신으로 같이 다시 빌드된다
     # (start_deploy는 선언된 슬롯을 모두 빌드하고, 빠진 슬롯은 내린다)
+    # CI 경로(ci_branch)는 브랜치까지 같아야 고정한다 — 같은 저장소라도 다른 브랜치를 쓰는 슬롯(예: 정적 gh-pages)은
+    # 그 브랜치 최신으로 다시 빌드된다. 웹 세션 경로는 지금처럼 저장소만 본다.
+    branches = {slot: branch for slot, (_, branch) in slot_sources(live).items()}
     pins = {
-        slot: commit_sha if commit_sha and url and repo_key(url) == base else None
+        slot: commit_sha
+        if commit_sha and url and repo_key(url) == base and (ci_branch is None or branches.get(slot) == ci_branch)
+        else None
         for slot, url in slot_repos.items()
     }
+    if ci_branch is not None and not any(pins.values()):
+        raise RedeployError(403, "브랜치가 이 앱의 배포 브랜치와 달라요", "branch_mismatch")
 
     # 편집 권한 멤버는 이 앱이 쓰던 저장소로만 (start_deploy도 같은 검사를 400으로 하지만, 여기선 권한 문제라 403)
     if allowed_repos is not None and not used <= allowed_repos:
@@ -262,17 +280,18 @@ async def start_redeploy(
     repo: str | None = None,
     key: str | None = None,
     allowed_repos: set[str] | None = None,
+    ci_branch: str | None = None,
 ) -> RedeployResult:
     commit_sha = check_commit_sha(commit_sha)
     check_key(key)
     if key is None:
-        return await _start(db, user, app, commit_sha, repo, allowed_repos)
+        return await _start(db, user, app, commit_sha, repo, allowed_repos, ci_branch)
 
     claim_id = _claim(db, app.id, key)
     if claim_id is None:
         return await _replay(db, app.id, key)
     try:
-        result = await _start(db, user, app, commit_sha, repo, allowed_repos)
+        result = await _start(db, user, app, commit_sha, repo, allowed_repos, ci_branch)
     except BaseException:
         _release(db, claim_id)
         raise
@@ -281,6 +300,29 @@ async def start_redeploy(
     )
     db.commit()
     return result
+
+
+# CI 토큰으로 재배포 — 커밋과 저장소는 토큰의 값이다. 요청에 다른 값을 넣으면 403.
+# 빌드 사용자는 앱 주인이다(호출하는 쪽이 넘긴다). 토큰의 저장소·브랜치가 모두 같은 슬롯에만 커밋을 고정하고,
+# 나머지 슬롯(같은 저장소의 다른 브랜치, 다른 저장소)은 그 슬롯 브랜치의 최신으로 같이 다시 빌드된다.
+async def start_ci_redeploy(
+    db: Session,
+    owner: User,
+    app: App,
+    scope: CiScope,
+    *,
+    commit_sha: str | None = None,
+    repo: str | None = None,
+    key: str | None = None,
+) -> RedeployResult:
+    commit_sha = check_commit_sha(commit_sha)
+    if commit_sha is not None and commit_sha != scope.sha:
+        raise RedeployError(403, "CI 토큰으로는 그 워크플로가 돈 커밋만 배포할 수 있어요", "commit_mismatch")
+    if repo is not None and repo.strip() and repo_key(_normalize_repo_url(repo)) != repo_key(scope.repo_url):
+        raise RedeployError(403, "CI 토큰으로는 그 워크플로의 저장소만 배포할 수 있어요", "repo_mismatch")
+    return await start_redeploy(
+        db, owner, app, commit_sha=scope.sha, repo=scope.repo_url, key=key, allowed_repos=None, ci_branch=scope.branch,
+    )
 
 
 def slot_of(build: Build) -> str:

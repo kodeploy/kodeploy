@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.apps import sharing
 from app.apps.model import App
+from app.ci.model import CiBuild, CiToken
 from app.deploy import crud
 from app.deploy.routing import domains
 from app.deploy.stack import r2
@@ -152,6 +153,9 @@ def delete_app(db: Session, app: App) -> None:
     # 남겨두면 아무도 못 읽는 orphan row만 쌓인다.
     db.query(SavedQuery).filter(SavedQuery.app_id == app.id).delete()
     sharing.purge(db, app.id)          # 공유 멤버·대기 초대도 같이
+    # CI 토큰과 빌드 출처도 같이 (ci/service.py purge와 같은 일 — 순환 import를 피해 모델로 직접)
+    db.query(CiBuild).filter(CiBuild.app_id == app.id).delete(synchronize_session=False)
+    db.query(CiToken).filter(CiToken.app_id == app.id).delete(synchronize_session=False)
     db.delete(app)
     db.commit()
 

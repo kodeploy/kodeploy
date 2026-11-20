@@ -12,9 +12,10 @@ from sqlalchemy.orm import Session
 from app.admin import audit
 from app.apps import service, sharing
 from app.apps.model import App
-from app.apps.schemas import AppCreate, AppOut, InviteCreate, InviteOut, RoleUpdate
+from app.apps.schemas import AppCreate, AppOut, CiDeployUpdate, InviteCreate, InviteOut, RoleUpdate
 from app.auth.deps import get_current_user
 from app.auth.model import User
+from app.ci import service as ci_service
 from app.deploy.build import naming
 from app.shared.db import get_db
 
@@ -26,6 +27,7 @@ def _out(app: App, role: str, owner_login: str | None, admin: bool = False) -> A
     return AppOut(
         id=app.id, name=app.name, site_enabled=app.site_enabled, custom_domain=app.custom_domain,
         created_at=app.created_at, role=role, owner_login=owner_login, pipeline=app.pipeline, admin=admin,
+        ci_deploy_enabled=bool(app.ci_deploy_enabled),
     )
 
 
@@ -160,6 +162,26 @@ def remove_member(
     except sharing.ShareError as e:
         raise _share_error(e)
     return {"status": "removed"}
+
+
+# --- GitHub Actions 배포 허용 (앱 주인) -------------------------------------------
+
+# 켜면 이 앱 저장소의 배포 브랜치에서 돈 GitHub Actions가 ID 토큰을 CI 토큰으로 바꿔 재배포할 수 있다 (app/ci).
+# 끄면 아직 살아 있는 CI 토큰도 바로 만료시킨다 — 토큰은 쓸 때마다 허용을 다시 보지만, 다시 켰을 때 예전 토큰이 되살아나지 않게.
+@router.put("/{app_id}/ci-deploy")
+def set_ci_deploy(
+    app_id: uuid.UUID,
+    req: CiDeployUpdate,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    app = _owned_app(app_id, db, user, request)
+    app.ci_deploy_enabled = req.enabled
+    if not req.enabled:
+        ci_service.expire_tokens(db, app.id)
+    db.commit()
+    return {"ci_deploy_enabled": app.ci_deploy_enabled}
 
 
 # --- 받은 초대 (초대받은 쪽) ----------------------------------------------------
