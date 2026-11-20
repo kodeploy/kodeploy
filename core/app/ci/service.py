@@ -1,4 +1,4 @@
-"""CI 토큰 — GitHub ID 토큰 교환(발급)과 Bearer 확인.
+"""CI 토큰 — GitHub ID 토큰 교환(발급), Bearer 확인, CI 경로 재배포의 범위와 기록.
 
 교환 검사 순서 (계약 문서의 CI 절과 같다. 하나라도 걸리면 거절)
   1~4  서명(RS256, GitHub JWKS)·iss·aud·exp/iat/nbf — oidc.verify. 여기까지는 DB를 건드리지 않는다
@@ -18,14 +18,16 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from fastapi import Request
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import config
 from app.apps.model import App
 from app.ci import oidc
-from app.ci.model import CiToken
+from app.ci.model import CiBuild, CiToken
 from app.deploy.build import redeploy
+from app.deploy.model import Build
 from app.deploy.build.naming import _normalize_repo_url, repo_key
 
 logger = logging.getLogger(__name__)
@@ -158,3 +160,70 @@ def exchange(db: Session, app_id: uuid.UUID, id_token: str) -> Issued:
         raise _reject(app_id, 401, "이미 교환에 쓴 ID 토큰이에요. 새 ID 토큰을 받아 주세요", "token_reused")
     logger.info("ci token issued app=%s token_id=%s", app.id, row.id)
     return Issued(token=raw, row=row)
+
+
+# --- Bearer -------------------------------------------------------------------
+
+def bearer_token(request: Request) -> str | None:
+    """Authorization: Bearer <값>이면 그 값. 다른 방식이거나 없으면 None (쿠키 경로)."""
+    header = request.headers.get("authorization")
+    if not header:
+        return None
+    scheme, _, value = header.partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    return value.strip()
+
+
+def authenticate(db: Session, raw: str, app_id: uuid.UUID | None) -> tuple[CiToken, App]:
+    """요청마다 확인: 토큰이 있고, 만료 안 됐고, 경로의 앱이 토큰의 앱이고, 그 앱의 허용이 아직 켜져 있다."""
+    if not raw.startswith(TOKEN_PREFIX):
+        raise CiAuthError(401, "CI 토큰이 아니에요", "ci_token_invalid")
+    row = db.query(CiToken).filter(CiToken.token_hash == hash_token(raw)).first()
+    if row is None:
+        raise CiAuthError(401, "CI 토큰이 없거나 폐기됐어요", "ci_token_invalid")
+    if row.expires_at <= _now():
+        raise CiAuthError(401, "CI 토큰이 만료됐어요. 새 ID 토큰으로 다시 교환해 주세요", "ci_token_expired")
+    if app_id is None:
+        raise CiAuthError(400, "app_id가 필요해요 (/apps/{app_id}/deploy/...)", "app_id_required")
+    if row.app_id != app_id:
+        raise CiAuthError(403, "이 CI 토큰은 다른 앱용이에요", "ci_token_app_mismatch")
+    app = db.get(App, app_id)
+    if app is None:
+        raise CiAuthError(401, "CI 토큰이 없거나 폐기됐어요", "ci_token_invalid")
+    if not app.ci_deploy_enabled:
+        raise CiAuthError(401, "이 앱은 GitHub Actions 배포가 꺼져 있어요", "ci_deploy_disabled")
+    return row, app
+
+
+# 허용을 끄면 아직 살아 있는 토큰도 바로 끝낸다 — 다시 켰을 때 예전 토큰이 되살아나지 않게.
+def expire_tokens(db: Session, app_id: uuid.UUID) -> None:
+    now = _now()
+    db.query(CiToken).filter(CiToken.app_id == app_id, CiToken.expires_at > now).update(
+        {CiToken.expires_at: now}, synchronize_session=False,
+    )
+
+
+# --- CI 경로의 재배포 ------------------------------------------------------------
+
+def scope_of(token: CiToken) -> redeploy.CiScope:
+    """토큰이 배포할 수 있는 범위 — 그 저장소·브랜치의 그 커밋."""
+    return redeploy.CiScope(repo_url=repo_url_of(token.repository), branch=branch_of(token.ref) or "", sha=token.sha)
+
+
+def record_builds(db: Session, token: CiToken, builds: list[Build]) -> None:
+    for b in builds:
+        db.merge(CiBuild(
+            build_id=b.build_id, app_id=token.app_id, token_id=token.id,
+            repository=token.repository, ref=token.ref, sha=token.sha,
+            run_id=token.run_id, run_attempt=token.run_attempt, actor=token.actor,
+            workflow=token.workflow, event_name=token.event_name,
+        ))
+    db.commit()
+
+
+def runs_for(db: Session, build_ids: list[str]) -> dict[str, CiBuild]:
+    if not build_ids:
+        return {}
+    rows = db.query(CiBuild).filter(CiBuild.build_id.in_(build_ids)).all()
+    return {r.build_id: r for r in rows}

@@ -168,6 +168,18 @@ class EnvVarsResponse(BaseModel):
 
 
 # GET /deploy 상태 조회 응답
+# CI 토큰으로 시작한 빌드의 Actions 실행 (ci_builds). 웹 세션으로 시작한 빌드는 null.
+class CiRunOut(BaseModel):
+    actor: str | None = None
+    repository: str                                      # owner/repo
+    ref: str                                             # refs/heads/<branch>
+    sha: str
+    run_id: str | None = None
+    run_attempt: str | None = None
+    workflow: str | None = None
+    event_name: str
+
+
 class StatusResponse(BaseModel):
     build_id: str
     status: str
@@ -205,3 +217,4 @@ class StatusResponse(BaseModel):
     total_seconds: float | None = None
     created_at: datetime
     updated_at: datetime
+    ci: CiRunOut | None = None                       # GitHub Actions(CI 토큰)로 시작한 빌드면 그 실행

@@ -5,14 +5,17 @@ from sqlalchemy.orm import Session
 import asyncio
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from app.admin import audit
 from app.apps import service as apps_service
 from app.apps import sharing
 from app.apps.model import App
-from app.auth.deps import get_current_user
+from app.auth.deps import get_current_user, get_current_user_optional
 from app.auth.model import User
+from app.ci import service as ci_service
+from app.ci.model import CiBuild, CiToken
 from app.auth import github_app
 from app.deploy import crud, status
 from app.builder import client as builder
@@ -24,6 +27,7 @@ from app.deploy.stack import env, resources
 from app.deploy.model import Build, SavedQuery
 from app import config
 from app.deploy.schemas import (
+    CiRunOut,
     DbBrowseRequest,
     DbQueryRequest,
     DeployBuildRef,
@@ -42,6 +46,7 @@ from app.deploy.schemas import (
     StatusResponse,
 )
 from app.shared.db import get_db
+from app.shared.errors import ApiError
 
 router = APIRouter(prefix="/deploy", tags=["deploy"])
 
@@ -108,6 +113,58 @@ def editor_app_required(
     return _app_at(app_id, db, user, "editor", request)
 
 
+# --- CI 토큰(Bearer)을 받는 두 곳: 재배포와 상태 조회 ------------------------------------
+# Authorization: Bearer kdci_… 는 아래 두 의존성을 쓰는 라우트에서만 받는다. 나머지 라우트는 get_current_user(쿠키)만 보므로
+# Bearer만 온 요청은 401이다. Bearer 헤더가 있으면 쿠키는 보지 않는다 (잘못된 토큰이 쿠키로 넘어가 통과하지 않게).
+# 토큰은 요청마다 확인한다: 해시가 있고, 만료 안 됐고, 경로의 앱이 토큰의 앱이고, 그 앱의 허용이 아직 켜져 있다 (ci/service.py).
+@dataclass
+class DeployPrincipal:
+    user: User                  # 세션 유저. CI 토큰이면 앱 주인 — 빌드 소유·쿼터 규칙이 주인 기준으로 그대로 돈다
+    app: App
+    ci: CiToken | None = None   # CI 토큰으로 들어왔으면 그 토큰
+
+
+def _ci_principal(request: Request, app_id: uuid.UUID | None, db: Session) -> DeployPrincipal | None:
+    raw = ci_service.bearer_token(request)
+    if raw is None:
+        return None
+    try:
+        token, app = ci_service.authenticate(db, raw, app_id)
+    except ci_service.CiAuthError as e:
+        raise ApiError(e.status, e.detail, e.code)
+    owner = db.get(User, app.owner_id)
+    if owner is None:
+        raise ApiError(401, "CI 토큰이 없거나 폐기됐어요", "ci_token_invalid")
+    return DeployPrincipal(user=owner, app=app, ci=token)
+
+
+# 재배포 — 쿠키면 editor_app_required와 같은 규칙(app_id 필수, 편집 권한 이상)
+def redeploy_principal(
+    request: Request,
+    app_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user_optional),
+) -> DeployPrincipal:
+    ci = _ci_principal(request, app_id, db)
+    if ci is not None:
+        return ci
+    user = get_current_user(user)
+    return DeployPrincipal(user=user, app=editor_app_required(request, app_id, db, user))
+
+
+# 상태 조회 — 쿠키면 viewer_app_or_none과 같은 규칙(옛 경로는 내 첫 앱). CI 토큰은 그 앱의 빌드만 보인다.
+def status_app(
+    request: Request,
+    app_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user_optional),
+) -> App | None:
+    ci = _ci_principal(request, app_id, db)
+    if ci is not None:
+        return ci.app
+    return _app_at(app_id, db, get_current_user(user), "viewer", request)
+
+
 def _required(app: App | None) -> App:
     if app is None:
         raise HTTPException(status_code=400, detail="배포된 앱이 없습니다")
@@ -124,7 +181,7 @@ def viewer_app(app: App | None = Depends(viewer_app_or_none)) -> App:
 
 # Build ORM 객체 → StatusResponse 응답 DTO 변환.
 # timing: get_build_timings()가 준 {total/nixpacks/buildkit_seconds} (없으면 빈 dict).
-def _to_status(build: Build, timing: dict | None = None) -> StatusResponse:
+def _to_status(build: Build, timing: dict | None = None, ci: CiBuild | None = None) -> StatusResponse:
     timing = timing or {}
     return StatusResponse(
         build_id=build.build_id,
@@ -161,6 +218,17 @@ def _to_status(build: Build, timing: dict | None = None) -> StatusResponse:
         total_seconds=timing.get("total_seconds"),
         created_at=build.created_at,
         updated_at=build.updated_at,
+        ci=_ci_run(ci),
+    )
+
+
+# CI 토큰으로 시작한 빌드면 그 Actions 실행 (화면의 "GitHub Actions · <actor> · run <run_id>")
+def _ci_run(ci: CiBuild | None) -> CiRunOut | None:
+    if ci is None:
+        return None
+    return CiRunOut(
+        actor=ci.actor, repository=ci.repository, ref=ci.ref, sha=ci.sha, run_id=ci.run_id,
+        run_attempt=ci.run_attempt, workflow=ci.workflow, event_name=ci.event_name,
     )
 
 
@@ -231,27 +299,37 @@ async def create_deploy(
 # 재배포 — 지금 라이브인 설정 그대로 다시 배포한다 (선택: commit_sha로 커밋 지정). CLI·CI·웹 원클릭 재배포가 같이 쓴다.
 # 설정은 요청으로 받지 않고 라이브 빌드에서 다시 만든다 (build/redeploy.py). 환경변수·초기 덤프는 건드리지 않는다.
 # 새로 시작하면 202, 같은 Idempotency-Key로 이미 처리한 요청이면 그때의 빌드를 200으로 돌려준다. 계약: docs/deploy-api-contract.md
+# 쿠키(웹) 또는 CI 토큰(Bearer)으로 들어온다. CI 토큰이면 커밋·저장소가 토큰의 값으로 정해지고(다르면 403), 빌드는 앱 주인
+# 이름으로 시작하고, 만든 빌드에 Actions 실행 정보를 남긴다. 오류 본문에는 기계용 code가 붙는다 (계약 문서 3-4).
 @router.post("/redeploy", response_model=RedeployResponse, status_code=202)
 async def redeploy_app(
     response: Response,
     req: RedeployRequest | None = None,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-    app: App = Depends(editor_app_required),
+    p: DeployPrincipal = Depends(redeploy_principal),
 ) -> RedeployResponse:
     req = req or RedeployRequest()
+    app = p.app
     try:
-        result = await redeploy.start_redeploy(
-            db, user, app,
-            commit_sha=req.commit_sha,
-            repo=req.repo,
-            key=idempotency_key,
-            # 편집 권한 멤버는 이 앱이 쓰던 저장소로만 (POST /deploy와 같은 규칙)
-            allowed_repos=apps_service.app_repo_keys(db, app) if app.owner_id != user.id else None,
-        )
+        if p.ci is not None:
+            result = await redeploy.start_ci_redeploy(
+                db, p.user, app, ci_service.scope_of(p.ci),
+                commit_sha=req.commit_sha, repo=req.repo, key=idempotency_key,
+            )
+        else:
+            result = await redeploy.start_redeploy(
+                db, p.user, app,
+                commit_sha=req.commit_sha,
+                repo=req.repo,
+                key=idempotency_key,
+                # 편집 권한 멤버는 이 앱이 쓰던 저장소로만 (POST /deploy와 같은 규칙)
+                allowed_repos=apps_service.app_repo_keys(db, app) if app.owner_id != p.user.id else None,
+            )
     except redeploy.RedeployError as e:
-        raise HTTPException(status_code=e.status, detail=e.detail)
+        raise ApiError(e.status, e.detail, e.code)
+    if p.ci is not None and not result.replayed:
+        ci_service.record_builds(db, p.ci, result.builds)
     if result.replayed:
         response.status_code = 200
     return RedeployResponse(
@@ -835,18 +913,19 @@ def reserved_keys(user: User = Depends(get_current_user)) -> dict:
     return validation.reserved_env_keys_map()
 
 
-# build_id 단건 상태 조회 — 본인 빌드만 (다른 user의 build_id는 404로 마스킹)
+# build_id 단건 상태 조회 — 그 앱의 빌드만 (다른 앱의 build_id는 404로 마스킹). 쿠키 또는 CI 토큰(Bearer)으로 들어온다.
 @router.get("/{build_id}", response_model=StatusResponse)
 def get_status(
     build_id: str,
     db: Session = Depends(get_db),
-    app: App | None = Depends(viewer_app_or_none),
+    app: App | None = Depends(status_app),
 ) -> StatusResponse:
     build = status.get_state(db, build_id, app_id=app.id) if app else None
     if not build:
         raise HTTPException(status_code=404, detail="build not found")
     timings = pipeline.get_build_timings(db, [build.build_id])
-    return _to_status(build, timings.get(build.build_id))
+    runs = ci_service.runs_for(db, [build.build_id])
+    return _to_status(build, timings.get(build.build_id), runs.get(build.build_id))
 
 
 # 빌드 목록 — 본인 것만, 최신순
@@ -856,5 +935,7 @@ def list_builds(
     app: App | None = Depends(viewer_app_or_none),
 ) -> list[StatusResponse]:
     builds = status.list_builds(db, app_id=app.id) if app else []
-    timings = pipeline.get_build_timings(db, [b.build_id for b in builds])
-    return [_to_status(b, timings.get(b.build_id)) for b in builds]
+    ids = [b.build_id for b in builds]
+    timings = pipeline.get_build_timings(db, ids)
+    runs = ci_service.runs_for(db, ids)
+    return [_to_status(b, timings.get(b.build_id), runs.get(b.build_id)) for b in builds]

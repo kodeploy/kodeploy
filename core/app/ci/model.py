@@ -34,3 +34,25 @@ class CiToken(Base):
     event_name: Mapped[str] = mapped_column(String(30))
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
+
+
+# CI 토큰으로 시작한 빌드 하나의 출처 — 어느 저장소·브랜치·커밋의 어느 Actions 실행이 이 빌드를 불렀나.
+# 빌드 목록·상세의 "GitHub Actions · <actor> · run <run_id>" 표시가 읽는다.
+# deploy_requests(Idempotency-Key 선점)에 칸을 더하지 않고 따로 둔 이유: 그 행은 키를 보낸 요청에만 생기고, 키 하나가
+# 빌드 여러 개를 가리켜 빌드에서 거꾸로 찾기 어렵다. 토큰 행(ci_tokens)만 가리키지 않고 값을 옮겨 적는 이유는
+# 토큰이 만료돼 지워져도 빌드의 출처는 남아야 해서다. 앱을 지우면 빌드 행과 함께 지운다 (deploy/status.py delete_app).
+class CiBuild(Base):
+    __tablename__ = "ci_builds"
+
+    build_id: Mapped[str] = mapped_column(String(8), primary_key=True)
+    app_id: Mapped[uuid.UUID] = mapped_column(Uuid, index=True)
+    token_id: Mapped[int | None] = mapped_column(Integer, nullable=True)   # ci_tokens.id (FK는 걸지 않는다)
+    repository: Mapped[str] = mapped_column(String(200))
+    ref: Mapped[str] = mapped_column(String(255))
+    sha: Mapped[str] = mapped_column(String(40))
+    run_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    run_attempt: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    workflow: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    event_name: Mapped[str] = mapped_column(String(30))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)

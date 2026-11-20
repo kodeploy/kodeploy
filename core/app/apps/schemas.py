@@ -19,6 +19,11 @@ class AppOut(BaseModel):
     owner_login: str | None = None   # 공유받은 앱이면 주인의 GitHub 아이디
     pipeline: str = "v2"             # 화면이 롤백을 보일지 정한다 (v1 앱은 이제 없다)
     admin: bool = False              # 관리자 권한으로 보는 남의 앱이면 True — 화면이 "관리자로 보는 중" 띠를 띄운다
+    ci_deploy_enabled: bool = False  # GitHub Actions 배포 허용 (앱 설정, 주인만 바꾼다)
+
+
+class CiDeployUpdate(BaseModel):
+    enabled: bool
 
 
 class InviteCreate(BaseModel):
