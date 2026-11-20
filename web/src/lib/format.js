@@ -65,3 +65,17 @@ export function dayTime(iso) {
   if (d >= yesterday) return `어제 ${hhmm}`;
   return formatFull(iso);
 }
+
+// GitHub Actions(CI 토큰)로 시작한 빌드의 출처 한 줄 — "GitHub Actions · <actor> · run <run_id>".
+// ci는 빌드 응답의 ci 칸({ actor, repository, run_id, ... }). 웹에서 시작한 빌드는 null이라 null을 돌려준다.
+export function ciRunLabel(ci) {
+  if (!ci) return null;
+  return ["GitHub Actions", ci.actor, ci.run_id && `run ${ci.run_id}`].filter(Boolean).join(" · ");
+}
+
+// 그 Actions 실행 페이지 (저장소와 run_id가 있을 때만)
+export function ciRunUrl(ci) {
+  if (!ci?.repository || !ci?.run_id) return null;
+  const attempt = ci.run_attempt && ci.run_attempt !== "1" ? `/attempts/${ci.run_attempt}` : "";
+  return `https://github.com/${ci.repository}/actions/runs/${ci.run_id}${attempt}`;
+}

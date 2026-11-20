@@ -28,14 +28,18 @@ import {
 } from "lucide-react";
 import {
   CUSTOM_DOMAIN_CNAME_TARGET,
+  apiOrigin,
   dbExportUrl,
   deleteDomain,
   getDomain,
   restoreDb,
+  setCiDeploy,
   setDomain,
 } from "../../api/deploy.js";
 import DomainStatusBadge from "../DomainStatusBadge.jsx";
 import DeleteAppModal from "../DeleteAppModal.jsx";
+import { Checkbox, Disclosure } from "../deploy/steps/wizardParts.jsx";
+import { useCurrentApp } from "./AppScope.jsx";
 import { repoSlug } from "../../lib/format.js";
 
 // 서브내비 + 접힌 행이 공유하는 섹션 정의.
@@ -44,6 +48,7 @@ const SECTIONS = [
   { id: "general", nav: "일반", row: "빌드와 실행 설정" },
   { id: "domain", nav: "도메인", row: "도메인 설정" },
   { id: "storage", nav: "스토리지", row: "스토리지 설정" },
+  { id: "ci", nav: "GitHub Actions", row: "GitHub Actions 배포" },
   { id: "danger", row: "앱 삭제" },
 ];
 const SECTION_IDS = new Set(SECTIONS.map((s) => s.id));
@@ -83,7 +88,9 @@ function AppSettingsBody() {
   const q = params.get("section");
   // 초대하기는 멤버 탭으로 나갔다 — 예전 링크(?section=share)는 그쪽으로 보낸다
   if (q === "share") return <Navigate to={`${base}/members`} replace />;
-  const section = SECTION_IDS.has(q) ? q : "domain"; // 시안 기본 선택 = 도메인
+  // GitHub Actions 배포는 그 칸을 주는 서버에서만 보인다 (서버가 먼저 올라가기 전에 웹이 배포돼도 깨지지 않게)
+  const sections = SECTIONS.filter((s) => s.id !== "ci" || app.ci_deploy_enabled !== undefined);
+  const section = SECTION_IDS.has(q) && sections.some((s) => s.id === q) ? q : "domain"; // 시안 기본 선택 = 도메인
   const select = (id) => setParams({ section: id }, { replace: true });
 
 
@@ -110,7 +117,7 @@ function AppSettingsBody() {
             className="flex flex-col"
             style={{ paddingTop: 6, paddingRight: 13, gap: 3 }}
           >
-            {SECTIONS.filter((s) => s.nav).map((s) => {
+            {sections.filter((s) => s.nav).map((s) => {
               const on = s.id === section;
               return (
                 <button
@@ -130,11 +137,12 @@ function AppSettingsBody() {
             {section === "domain" && <DomainSection appHost={appHost} />}
             {section === "general" && <GeneralSection build={serverBuild} />}
             {section === "storage" && <StorageSection build={serverBuild} />}
+            {section === "ci" && <CiSection app={app} branch={serverBuild?.branch} />}
             {section === "danger" && <DangerSection onDelete={() => setDeleteOpen(true)} />}
 
             {/* 접힌 나머지 섹션 — 시안 괘선 y819/882/945, 행 높이 63 ⇒ 42(var(--row-lg)) */}
             <div style={{ marginTop: 24 }}>
-              {SECTIONS.filter((s) => s.id !== section).map((s) => (
+              {sections.filter((s) => s.id !== section).map((s) => (
                 <button
                   key={s.id}
                   onClick={() => select(s.id)}
@@ -664,6 +672,116 @@ function StorageSection({ build }) {
       )}
     </>
   );
+}
+
+/* ─────────────────────────── GitHub Actions 배포 ─────────────────────────── */
+
+// "GitHub Actions 배포 허용" 토글 + 워크플로 예시(접힘). 주인만 이 화면에 들어온다 (서버도 주인만 받는다).
+// 켜면 이 앱 저장소의 배포 브랜치에서 돈 Actions가 GitHub ID 토큰을 CI 토큰으로 바꿔 재배포를 부른다.
+// 끄면 이미 발급된 CI 토큰도 바로 무효가 된다.
+function CiSection({ app, branch }) {
+  const { refreshApp } = useCurrentApp();
+  const [enabled, setEnabled] = useState(!!app.ci_deploy_enabled);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => setEnabled(!!app.ci_deploy_enabled), [app.ci_deploy_enabled]);
+
+  const onToggle = async () => {
+    if (busy) return;
+    const next = !enabled;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await setCiDeploy(app.id, next);
+      setEnabled(!!res.ci_deploy_enabled);
+      refreshApp?.();
+    } catch (e) {
+      setError(e.message || "바꾸지 못했어요");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const yaml = ciWorkflowExample(app.id, branch || "main");
+
+  return (
+    <>
+      <SectionHead>GitHub Actions 배포</SectionHead>
+      <div style={{ marginTop: 14 }}>
+        <Checkbox checked={enabled} onChange={onToggle} disabled={busy}>
+          GitHub Actions 배포 허용
+        </Checkbox>
+      </div>
+      <p className="kd-t-body-s text-fg-2" style={{ marginTop: 10 }}>
+        켜면 이 앱 저장소의 배포 브랜치에서 실행된 GitHub Actions가 이 앱을 배포할 수 있어요. 저장소에 push할 수 있는
+        사람이 배포할 수 있게 돼요.
+      </p>
+      {error && (
+        <p className="kd-t-caption" style={{ color: "var(--err-fg)", marginTop: 8 }}>
+          {error}
+        </p>
+      )}
+
+      <div style={{ marginTop: 16, borderTop: "1px solid var(--kd-border)", paddingTop: 8 }}>
+        <Disclosure open={open} onToggle={() => setOpen((v) => !v)} label="워크플로 예시">
+          <p className="kd-t-caption text-fg-3">
+            저장소의 .github/workflows/ 아래에 넣으면 {branch || "main"} 브랜치에 push할 때마다 지금 설정 그대로 그 커밋을
+            배포해요. 다른 브랜치나 pull request에서 실행하면 거절돼요.
+          </p>
+          <div className="relative" style={{ marginTop: 10 }}>
+            <pre
+              className="kd-t-code whitespace-pre overflow-auto scroll-thin"
+              style={{
+                padding: 12,
+                borderRadius: 4,
+                background: "var(--kd-surface)",
+                border: "1px solid var(--kd-border)",
+                color: "var(--fg-1)",
+              }}
+            >
+              {yaml}
+            </pre>
+            <span className="absolute" style={{ top: 10, right: 10 }}>
+              <CopyButton text={yaml} title="워크플로 복사" />
+            </span>
+          </div>
+        </Disclosure>
+      </div>
+    </>
+  );
+}
+
+// 워크플로 예시 — ID 토큰(audience=kodeploy)을 CI 토큰으로 바꾸고 재배포를 부른다.
+// 이름표(Idempotency-Key)는 실행마다 하나라서, 같은 실행 안에서 다시 보내도 빌드는 한 번만 시작된다.
+function ciWorkflowExample(appId, branch) {
+  return `name: kodeploy
+on:
+  push:
+    branches: [${branch}]
+permissions:
+  id-token: write
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: deploy to KoDeploy
+        env:
+          APP_ID: ${appId}
+          API: ${apiOrigin()}
+        run: |
+          set -eu
+          ID_TOKEN=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \\
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=kodeploy" | jq -r .value)
+          TOKEN=$(curl -fsS -X POST "$API/apps/$APP_ID/ci/token" \\
+            -H 'Content-Type: application/json' -d "{\\"id_token\\":\\"$ID_TOKEN\\"}" | jq -r .token)
+          curl -fsS -X POST "$API/apps/$APP_ID/deploy/redeploy" \\
+            -H "Authorization: Bearer $TOKEN" \\
+            -H "Idempotency-Key: gha-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \\
+            -H 'Content-Type: application/json' -d '{}'
+`;
 }
 
 /* ─────────────────────────── 앱 삭제 ─────────────────────────── */
