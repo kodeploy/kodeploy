@@ -160,18 +160,21 @@ GET /apps/{app_id}/deploy/{build_id}
 3. 모두 `running`이면 성공
 4. 그 외(진행 중이 남음)면 계속 조회
 
-`running`이 된 서버 빌드는 그 뒤 60초 동안 서버가 앱 Pod을 더 본다(`core/app/deploy/build/postwatch.py`, `WATCH_SECONDS = 60`). 그 사이 재시작이나 OOM이 보이면 같은 빌드가 `failed`로 바뀐다. CLI가 이 60초를 기다릴지는 B 묶음에서 정한다.
+`running`이 된 서버 빌드는 그 뒤 60초 동안 서버가 앱 Pod을 더 본다(`core/app/deploy/build/postwatch.py`, `WATCH_SECONDS = 60`). 그 사이 재시작이나 OOM이 보이면 같은 빌드가 `failed`로 바뀐다. CLI는 모두 `running`이 된 뒤에도 `--settle`(기본 60초) 동안 계속 조회하고, 그 사이 `failed`가 되면 실패로 끝낸다.
 
-### CLI exit code (예정)
+### CLI exit code
+
+`cli/README.md`와 같은 표다.
 
 | 코드 | 뜻 |
 |---|---|
-| 0 | 성공 |
-| 1 | 실패 |
-| 2 | 사용법 오류 |
-| 3 | 다른 배포에 밀림 |
+| 0 | 성공 (모든 빌드 `running`, 안정화 통과) |
+| 1 | 배포 실패 (`failed`, 안정화 중 `failed` 포함) |
+| 2 | 사용법 오류, 첫 배포 아님(409), 400·422 |
+| 3 | 다른 배포에 밀림 (실패 없이 `cancelled`) |
 | 4 | CLI 시간 초과 |
-| 125 | 인증·연결 오류 |
+| 125 | 인증, 권한, 연결 오류 |
+| 130 | 사용자가 중단 |
 
 ## 6. 시간 제한
 
