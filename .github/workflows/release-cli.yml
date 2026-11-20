@@ -1,0 +1,112 @@
+name: Release CLI
+
+# cli-v<버전> 태그 → 테스트 → 4개 대상 빌드 → kodeploy_<버전>_<os>_<arch>.tar.gz + checksums.txt로 GitHub Release.
+# GitHub Action(5단계)이 이 릴리스에서 바이너리를 내려받고 checksums.txt로 확인한다.
+# 쓰기 권한(contents: write)은 릴리스를 만드는 마지막 잡에만 준다.
+on:
+  push:
+    tags: ["cli-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-cli-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 태그 형식
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^cli-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "태그는 cli-v<major>.<minor>.<patch>여야 한다: $GITHUB_REF_NAME"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: vet + test
+        working-directory: cli
+        run: |
+          go vet ./...
+          go test -race ./...
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: 빌드 + 묶기
+        working-directory: cli
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#cli-v}"
+          NAME="kodeploy_${VERSION}_${GOOS}_${GOARCH}"
+          mkdir -p "dist/${NAME}"
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/kodeploy/kodeploy/cli/internal/cmd.version=${VERSION}" \
+            -o "dist/${NAME}/kodeploy" ./cmd/kodeploy
+          cp README.md "dist/${NAME}/"
+          tar -C "dist/${NAME}" -czf "dist/${NAME}.tar.gz" kodeploy README.md
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kodeploy-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: cli/dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write           # GitHub Release 만들기
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: kodeploy-*
+          merge-multiple: true
+
+      - name: checksums.txt
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum *.tar.gz > checksums.txt
+          cat checksums.txt
+          test "$(wc -l < checksums.txt)" -eq 4
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#cli-v}"
+          gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "kodeploy CLI ${VERSION}" \
+            --notes "kodeploy CLI ${VERSION}. 설치와 사용법은 cli/README.md. 받은 파일은 checksums.txt(sha256)로 확인한다."
