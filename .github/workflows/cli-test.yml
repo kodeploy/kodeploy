@@ -1,0 +1,33 @@
+name: CLI Test
+
+# cli/**가 바뀐 PR과 main push에서 vet + race 테스트. 이미지도 배포도 없는 검사 전용이라 권한은 읽기만.
+on:
+  pull_request:
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-test.yml"
+  push:
+    branches: [main]
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-test.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: vet + test
+        working-directory: cli
+        run: |
+          go vet ./...
+          go test -race ./...
