@@ -7,7 +7,7 @@ core는 이 테이블만 읽고 쓴다. users의 같은 칸들은 옛 값으로 
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, Uuid
+from sqlalchemy import Boolean, DateTime, Integer, String, Text, Uuid, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.db import Base
@@ -46,6 +46,9 @@ class App(Base):
     # 빌드·배포 경로. 지금은 모두 "v2"(Go 빌더 → kodeploy-apps 커밋 → Argo)다.
     # "v1"(core가 직접 Job·Deployment를 만들던 경로)은 2026-10에 모든 앱을 넘기고 코드를 지웠다 — 값만 남아 있다.
     pipeline: Mapped[str] = mapped_column(String(2), default="v2", server_default="v2")
+    # "GitHub Actions 배포 허용" — 켜면 이 앱 저장소의 배포 브랜치에서 돈 GitHub Actions가 ID 토큰을 CI 토큰으로 바꿔
+    # 재배포할 수 있다 (app/ci). 주인만 켜고 끈다. 끄면 이미 발급한 CI 토큰도 쓸 때 거절된다.
+    ci_deploy_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 

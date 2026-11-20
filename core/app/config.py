@@ -152,3 +152,17 @@ SESSION_LIFETIME_DAYS = int(os.getenv("SESSION_LIFETIME_DAYS", "30"))
 # OAuth state cookie (callback에서 검증 후 즉시 삭제, 짧은 만료)
 OAUTH_STATE_COOKIE_NAME = "kd_oauth_state"
 OAUTH_STATE_TTL_SECONDS = 600
+
+# --- CI 인증 (GitHub Actions OIDC → CI 토큰, app/ci) ---
+# Actions가 받은 GitHub ID 토큰을 이 발급자·audience·키로 검증하고, 그 앱의 그 커밋만 재배포할 수 있는 짧은 CI 토큰을 준다.
+CI_OIDC_ISSUER = os.getenv("CI_OIDC_ISSUER", "https://token.actions.githubusercontent.com")
+CI_OIDC_AUDIENCE = os.getenv("CI_OIDC_AUDIENCE", "kodeploy")
+CI_OIDC_JWKS_URL = os.getenv("CI_OIDC_JWKS_URL", "https://token.actions.githubusercontent.com/.well-known/jwks")
+# CI 토큰 수명. 배포 대기가 이보다 길면 CLI가 401을 받고 새 ID 토큰으로 다시 교환한다.
+CI_TOKEN_TTL_SECONDS = int(os.getenv("CI_TOKEN_TTL_SECONDS", "900"))
+# 교환을 받아 주는 워크플로 이벤트 (ID 토큰의 event_name). pull_request는 남의 포크에서도 돌 수 있어 넣지 않는다.
+CI_ALLOWED_EVENTS = [
+    e.strip()
+    for e in os.getenv("CI_ALLOWED_EVENTS", "push,workflow_dispatch").split(",")
+    if e.strip()
+]
