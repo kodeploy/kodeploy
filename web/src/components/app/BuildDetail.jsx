@@ -21,12 +21,13 @@ import {
   Loader,
   Maximize2,
   Minimize2,
+  Workflow,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { getBuild, rollbackBuild } from "../../api/deploy.js";
 import AiDiagnosis, { isDiagnosing } from "./AiDiagnosis.jsx";
 import { STYLES_BUILD, STYLES_ENV } from "../StatusBadge.jsx";
-import { formatDuration, formatFull, repoSlug } from "../../lib/format.js";
+import { ciRunLabel, ciRunUrl, formatDuration, formatFull, repoSlug } from "../../lib/format.js";
 
 // 빌드가 진행 중인(로그가 계속 늘어나는) 상태들 — 이 동안만 1초 폴링한다.
 const ACTIVE_BUILD = new Set(["queued", "building", "built", "deploying"]);
@@ -178,6 +179,26 @@ export default function BuildDetail({ build: initialBuild, number, base, canRoll
               <>
                 <MetaDivider />
                 <Meta icon={Clock}>롤백 · {build.rollback_of}</Meta>
+              </>
+            )}
+            {/* GitHub Actions(CI 토큰)로 시작한 빌드 — 그 실행 페이지로 간다 */}
+            {build.ci && (
+              <>
+                <MetaDivider />
+                <Meta icon={Workflow}>
+                  {ciRunUrl(build.ci) ? (
+                    <a
+                      href={ciRunUrl(build.ci)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-fg-1 no-underline hover:underline"
+                    >
+                      {ciRunLabel(build.ci)}
+                    </a>
+                  ) : (
+                    ciRunLabel(build.ci)
+                  )}
+                </Meta>
               </>
             )}
             {durationText && (

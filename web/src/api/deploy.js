@@ -1,6 +1,11 @@
 // API base는 빌드 시 VITE_API_BASE로 주입 (없으면 같은 origin 사용)
 const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
 
+// 바깥(GitHub Actions 워크플로 예시 등)에 적어 줄 API 주소
+export function apiOrigin() {
+  return API_BASE || window.location.origin;
+}
+
 // 지금 보고 있는 앱. 앱 화면(/apps/:appId/...)이 들어올 때 정하고 나갈 때 비운다 (AppScope).
 // /deploy/... 요청은 이 값이 있으면 /apps/{id}/deploy/... 로 간다 — 서버가 그 앱(내 앱만)에 적용한다.
 // 비어 있으면 옛 경로로 가고, 서버는 그걸 "내 첫 앱"으로 본다.
@@ -62,6 +67,7 @@ export function listApps() {
 
 // 앱 하나 — 앱 화면이 처음 띄울 때. 내 앱·공유받은 앱에 더해 관리자는 남의 앱도 받는다 (볼 수 없으면 404).
 // 응답: listApps 한 줄 + admin (관리자 권한으로 보는 남의 앱이면 true — root는 role "owner", admin은 "viewer")
+//       + ci_deploy_enabled (GitHub Actions 배포 허용)
 export function getApp(appId) {
   return request(`/apps/${appId}`);
 }
@@ -100,6 +106,12 @@ export function setMemberRole(appId, userId, role) {
 // 주인이 내보내거나, 멤버가 자기 id로 불러 스스로 나간다
 export function removeMember(appId, userId) {
   return request(`/apps/${appId}/members/${userId}`, { method: "DELETE" });
+}
+
+// (앱 주인) GitHub Actions 배포 허용 — 켜면 이 앱 저장소의 배포 브랜치에서 돈 GitHub Actions가 이 앱을 재배포할 수 있다.
+// 끄면 이미 발급된 CI 토큰도 바로 무효가 된다. 응답: { ci_deploy_enabled }
+export function setCiDeploy(appId, enabled) {
+  return request(`/apps/${appId}/ci-deploy`, { method: "PUT", body: JSON.stringify({ enabled }) });
 }
 
 // 이력의 한 배포로 되돌린다 (v2 앱, 편집 권한 이상). 이미지를 다시 빌드하지 않고 그 배포의 digest로 배포한다.

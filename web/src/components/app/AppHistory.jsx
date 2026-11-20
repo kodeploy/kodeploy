@@ -13,7 +13,7 @@ import { useOutletContext, useSearchParams } from "react-router-dom";
 import { can } from "../../lib/roles.js";
 import { ArrowUpRight } from "lucide-react";
 import { listRecentCommits } from "../../api/deploy.js";
-import { dayTime, formatDuration, relativeTime } from "../../lib/format.js";
+import { ciRunLabel, dayTime, formatDuration, relativeTime } from "../../lib/format.js";
 import BuildDetail, { resultIcon, statusLabel } from "./BuildDetail.jsx";
 
 export default function AppHistory() {
@@ -139,6 +139,7 @@ function BuildRow({ build, number, selected, onSelect }) {
                   build.source_sha && build.source_sha.slice(0, 7),
                   build.build_id,
                   build.rollback_of && "롤백",
+                  ciRunLabel(build.ci),
                 ]
                   .filter(Boolean)
                   .join(" · ")}
