@@ -44,12 +44,13 @@ REPLAY_WAIT_TRIES = 10
 
 
 class RedeployError(Exception):
-    """HTTP 상태와 화면에 보여도 되는 이유."""
+    """HTTP 상태, 화면에 보여도 되는 이유, 기계용 코드 (코드 목록은 계약 문서 3-4)."""
 
-    def __init__(self, status: int, detail: str):
+    def __init__(self, status: int, detail: str, code: str):
         super().__init__(detail)
         self.status = status
         self.detail = detail
+        self.code = code
 
 
 @dataclass
@@ -92,7 +93,7 @@ def live_slots(db: Session, app: App) -> LiveSlots:
     if servers and not _server_removed(servers[0], statics):
         live.server = next((b for b in servers if b.status == "running"), None)
         if live.server is None:
-            raise RedeployError(409, "서버가 한 번도 성공적으로 배포되지 않아 지금 설정 그대로 배포할 수 없어요. 설정 변경(배포 폼)에서 배포해 주세요")
+            raise RedeployError(409, "서버가 한 번도 성공적으로 배포되지 않아 지금 설정 그대로 배포할 수 없어요. 설정 변경(배포 폼)에서 배포해 주세요", "no_successful_slot")
         live.server_code = _rollback_origin(live.server, by_id)
         live.server_deps = next(
             (b for b in servers if b.status == "running" and not b.rollback_of), live.server_code,
@@ -100,10 +101,20 @@ def live_slots(db: Session, app: App) -> LiveSlots:
     if app.site_enabled:
         live.static = next((b for b in statics if b.status == "running"), None)
         if live.static is None:
-            raise RedeployError(409, "정적 사이트가 한 번도 성공적으로 배포되지 않아 지금 설정 그대로 배포할 수 없어요. 설정 변경(배포 폼)에서 배포해 주세요")
+            raise RedeployError(409, "정적 사이트가 한 번도 성공적으로 배포되지 않아 지금 설정 그대로 배포할 수 없어요. 설정 변경(배포 폼)에서 배포해 주세요", "no_successful_slot")
     if live.server is None and live.static is None:
-        raise RedeployError(409, "성공한 배포가 없어요. 첫 배포는 설정 변경(배포 폼)에서 해 주세요")
+        raise RedeployError(409, "성공한 배포가 없어요. 첫 배포는 설정 변경(배포 폼)에서 해 주세요", "no_live_deploy")
     return live
+
+
+# 슬롯별 (저장소, 브랜치) — 커밋을 지정하면 그 커밋이 걸리는 설정이다 (서버는 롤백이면 원본 배포의 값).
+def slot_sources(live: LiveSlots) -> dict[str, tuple[str, str]]:
+    out: dict[str, tuple[str, str]] = {}
+    if live.server is not None:
+        out["server"] = (live.server_code.repo_url, live.server_code.branch)
+    if live.static is not None:
+        out["static"] = (live.static.repo_url, live.static.branch)
+    return out
 
 
 # 배포하기에서 커밋을 고를 기준 — 커밋을 지정하면 걸리는 슬롯의 행(서버, 없으면 정적. repo를 안 줬을 때의 기준 저장소)과
@@ -156,13 +167,13 @@ def check_commit_sha(commit_sha: str | None) -> str | None:
         return None
     sha = commit_sha.lower()
     if not COMMIT_SHA_RE.match(sha):
-        raise RedeployError(400, "commit_sha는 40자 커밋 해시여야 해요 (짧은 해시는 받지 않아요)")
+        raise RedeployError(400, "commit_sha는 40자 커밋 해시여야 해요 (짧은 해시는 받지 않아요)", "invalid_commit_sha")
     return sha
 
 
 def check_key(key: str | None) -> None:
     if key is not None and not KEY_RE.match(key):
-        raise RedeployError(400, "Idempotency-Key는 1~100자의 영문·숫자·._- 만 쓸 수 있어요")
+        raise RedeployError(400, "Idempotency-Key는 1~100자의 영문·숫자·._- 만 쓸 수 있어요", "invalid_idempotency_key")
 
 
 async def _start(
@@ -179,7 +190,7 @@ async def _start(
     if repo is not None and repo.strip():
         base = repo_key(_normalize_repo_url(repo))
         if base not in used:
-            raise RedeployError(400, "이 앱의 어느 슬롯도 그 저장소를 쓰지 않아요")
+            raise RedeployError(400, "이 앱의 어느 슬롯도 그 저장소를 쓰지 않아요", "repo_not_used")
     else:
         base = repo_key(slot_repos["server"] or slot_repos["static"])
     # 커밋은 기준 저장소를 쓰는 슬롯에만 — 다른 저장소의 슬롯은 그 브랜치 최신으로 같이 다시 빌드된다
@@ -191,7 +202,7 @@ async def _start(
 
     # 편집 권한 멤버는 이 앱이 쓰던 저장소로만 (start_deploy도 같은 검사를 400으로 하지만, 여기선 권한 문제라 403)
     if allowed_repos is not None and not used <= allowed_repos:
-        raise RedeployError(403, "편집 권한으로는 이 앱이 쓰던 저장소로만 배포할 수 있어요")
+        raise RedeployError(403, "편집 권한으로는 이 앱이 쓰던 저장소로만 배포할 수 있어요", "repo_not_allowed")
 
     try:
         builds = await pipeline.start_deploy(
@@ -199,7 +210,7 @@ async def _start(
             requested_sha=pins["server"], static_requested_sha=pins["static"],
         )
     except ValueError as e:
-        raise RedeployError(400, str(e))
+        raise RedeployError(400, str(e), "deploy_rejected")
     return RedeployResult(builds=builds, replayed=False, requested_sha=commit_sha)
 
 
@@ -232,14 +243,14 @@ async def _replay(db: Session, app_id: uuid.UUID, key: str) -> RedeployResult:
         db.rollback()   # 새 트랜잭션에서 읽는다 (MySQL REPEATABLE READ는 같은 트랜잭션에서 옛 값을 보여 준다)
         row = db.query(DeployRequestKey).filter_by(app_id=app_id, key=key).first()
         if row is None:
-            raise RedeployError(409, "같은 Idempotency-Key로 처리하던 요청이 실패했어요. 같은 키로 다시 보내 주세요")
+            raise RedeployError(409, "같은 Idempotency-Key로 처리하던 요청이 실패했어요. 같은 키로 다시 보내 주세요", "key_released")
         if row.build_ids:
             builds = [b for b in (crud.get_build(db, bid, app_id=app_id) for bid in row.build_ids) if b is not None]
             sha = next((b.requested_sha for b in builds if b.requested_sha), None)
             return RedeployResult(builds=builds, replayed=True, requested_sha=sha)
         if attempt < REPLAY_WAIT_TRIES:
             await asyncio.sleep(REPLAY_WAIT_SECONDS)
-    raise RedeployError(409, "같은 Idempotency-Key의 요청을 아직 처리하고 있어요. 잠시 뒤 같은 키로 다시 보내 주세요")
+    raise RedeployError(409, "같은 Idempotency-Key의 요청을 아직 처리하고 있어요. 잠시 뒤 같은 키로 다시 보내 주세요", "key_in_progress")
 
 
 async def start_redeploy(
