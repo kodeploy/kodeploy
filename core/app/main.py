@@ -11,11 +11,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.admin.router import router as admin_router
 from app.apps.router import invites_router, router as apps_router
 from app.auth.router import router as auth_router
+from app.ci.router import router as ci_router
 from app.community.router import router as community_router
 from app.config import ALLOWED_ORIGINS
 from app.deploy.router import router as deploy_router
 from app.exec.router import router as exec_router
 from app.internal.router import router as internal_router
+from app.shared import errors
 
 
 @asynccontextmanager
@@ -25,6 +27,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="KoDeploy", lifespan=lifespan)
+# 오류 본문에 기계용 code를 붙이는 처리기 (재배포·CI 경로, shared/errors.py)
+errors.install(app)
 
 # Cloudflare Pages 등 별도 도메인 프론트에서 호출 허용
 app.add_middleware(
@@ -40,6 +44,8 @@ app.include_router(deploy_router)
 # 같은 deploy 라우터를 앱 경로에도 붙인다: /apps/{app_id}/deploy/... (옛 /deploy/... 는 유저의 첫 앱)
 app.include_router(deploy_router, prefix="/apps/{app_id}")
 app.include_router(apps_router)
+# CI 토큰 교환 (/apps/{app_id}/ci/token) — 인증 없이 열려 있고 본문의 GitHub ID 토큰이 인증이다
+app.include_router(ci_router)
 app.include_router(invites_router)
 app.include_router(community_router)
 app.include_router(admin_router)
