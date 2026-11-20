@@ -3,6 +3,7 @@
 package output
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -37,14 +38,23 @@ type Printer struct {
 	Out   io.Writer // 최종 결과
 	Err   io.Writer // 진행 상황
 	Color bool
+	JSON  bool // --output json: stdout에는 결과 객체 하나만
+	// GitHub Actions 안이면(GITHUB_ACTIONS=true) 실패에 ::error 한 줄, SummaryPath($GITHUB_STEP_SUMMARY)에 결과 표
+	GHA         bool
+	SummaryPath string
 
 	mu      sync.Mutex
 	secrets []string
 }
 
 // New는 터미널이 아니거나 NO_COLOR가 있으면 색을 쓰지 않는다.
-func New(out, errw io.Writer, getenv func(string) string) *Printer {
-	return &Printer{Out: out, Err: errw, Color: getenv("NO_COLOR") == "" && isTerminal(errw)}
+func New(out, errw io.Writer, getenv func(string) string, jsonOut bool) *Printer {
+	return &Printer{
+		Out: out, Err: errw, JSON: jsonOut,
+		Color:       getenv("NO_COLOR") == "" && isTerminal(errw),
+		GHA:         getenv("GITHUB_ACTIONS") == "true",
+		SummaryPath: getenv("GITHUB_STEP_SUMMARY"),
+	}
 }
 
 func isTerminal(w io.Writer) bool {
@@ -110,9 +120,38 @@ func Duration(d time.Duration) string {
 	return d.Round(time.Second).String()
 }
 
-// Result는 최종 결과를 쓴다. 오류(사용법·인증·연결)는 stderr, 배포 결과는 stdout.
+// Result는 최종 결과를 쓴다.
+//   - text: 배포 결과는 stdout, 오류(사용법·인증·연결)는 stderr
+//   - json: stdout에 결과 객체 하나 (오류 문구는 stderr에도)
+//   - GitHub Actions: 0이 아니면 ::error 한 줄, step summary에 표
 func (p *Printer) Result(r Report) {
-	p.text(r)
+	if p.JSON {
+		if r.Builds == nil {
+			r.Builds = []Build{}
+		}
+		b, _ := json.Marshal(r)
+		p.write(p.Out, string(b)+"\n")
+		if r.Result == "error" {
+			p.Progress("%s", r.Message)
+			if r.Hint != "" {
+				p.Progress("%s", r.Hint)
+			}
+		}
+	} else {
+		p.text(r)
+	}
+	if p.GHA {
+		if r.ExitCode != 0 {
+			w := p.Out
+			if p.JSON {
+				w = p.Err
+			}
+			p.write(w, "::error title=kodeploy::"+escapeData(p.Redact(errorLine(r)))+"\n")
+		}
+		if p.SummaryPath != "" {
+			p.appendSummary(r)
+		}
+	}
 }
 
 func (p *Printer) text(r Report) {

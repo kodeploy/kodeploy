@@ -1,0 +1,3 @@
+--- stdout
+--- stderr
+kodeploy: 오류 CI 토큰 교환이 거절됐어요: 이 앱은 GitHub Actions 배포가 꺼져 있어요. 앱 설정에서 켜 주세요

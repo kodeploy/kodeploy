@@ -1,0 +1,13 @@
+--- stdout
+::error title=kodeploy::CI 토큰 교환이 거절됐어요: 이 앱은 GitHub Actions 배포가 꺼져 있어요. 앱 설정에서 켜 주세요
+--- stderr
+kodeploy: 오류 CI 토큰 교환이 거절됐어요: 이 앱은 GitHub Actions 배포가 꺼져 있어요. 앱 설정에서 켜 주세요
+--- summary
+### KoDeploy 배포 오류
+
+| 앱 | 커밋 | exit |
+|---|---|---|
+| `app-1` | - | 125 |
+
+실패 이유: CI 토큰 교환이 거절됐어요: 이 앱은 GitHub Actions 배포가 꺼져 있어요. 앱 설정에서 켜 주세요
+
