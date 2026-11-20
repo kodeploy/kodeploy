@@ -1,0 +1,3 @@
+--- stdout
+{"result":"timeout","exit_code":4,"app_id":"app-1","requested_sha":null,"builds":[{"build_id":"3f9a2c1d","slot":"server","status":"building","source_sha":null,"error":null}],"message":"시간 제한(20s)을 넘겼어요. 빌드는 서버에서 계속 진행됩니다"}
+--- stderr

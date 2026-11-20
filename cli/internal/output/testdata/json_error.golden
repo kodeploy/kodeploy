@@ -1,0 +1,4 @@
+--- stdout
+{"result":"error","exit_code":125,"app_id":"app-1","requested_sha":null,"builds":[],"message":"CI 토큰 교환이 거절됐어요: 이 앱은 GitHub Actions 배포가 꺼져 있어요. 앱 설정에서 켜 주세요"}
+--- stderr
+kodeploy: CI 토큰 교환이 거절됐어요: 이 앱은 GitHub Actions 배포가 꺼져 있어요. 앱 설정에서 켜 주세요

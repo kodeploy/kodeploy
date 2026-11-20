@@ -1,0 +1,9 @@
+--- stdout
+kodeploy: 배포 실패 [server 3f9a2c1d]
+  [server 3f9a2c1d] build: exit 126 | permission denied
+  AI 진단: gradlew 실행 권한을 확인해 주세요.
+    원인: gradlew에 실행 권한이 없어요
+    1. 실행 권한을 더하세요
+         git update-index --chmod=+x gradlew
+         git commit -m fix
+--- stderr

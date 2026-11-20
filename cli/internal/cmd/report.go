@@ -79,7 +79,7 @@ type reporter struct {
 }
 
 func newReporter(d *Deps, g resolved) *reporter {
-	return &reporter{d: d, g: g, p: output.New(d.Stdout, d.Stderr, d.Getenv), res: output.Report{Builds: []output.Build{}}}
+	return &reporter{d: d, g: g, p: output.New(d.Stdout, d.Stderr, d.Getenv, g.output == "json"), res: output.Report{Builds: []output.Build{}}}
 }
 
 func (r *reporter) progress(format string, args ...any) { r.p.Progress(format, args...) }

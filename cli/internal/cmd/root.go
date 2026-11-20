@@ -65,7 +65,7 @@ func newRoot(d *Deps) *cobra.Command {
 	root.SetErr(d.Stderr)
 	g := &globalFlags{}
 	g.register(root)
-	root.AddCommand(newDeployCmd(d, g))
+	root.AddCommand(newDeployCmd(d, g), newStatusCmd(d, g), newVersionCmd(d, g))
 	return root
 }
 

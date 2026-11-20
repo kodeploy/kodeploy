@@ -1,0 +1,15 @@
+--- stdout
+kodeploy: 성공 source=3f9a1c2
+--- stderr
+--- summary
+### KoDeploy 배포 성공
+
+| 앱 | 커밋 | exit |
+|---|---|---|
+| `app-1` | `3f9a1c2` | 0 |
+
+| 슬롯 | 빌드 | 상태 | 시간 | 빌드한 커밋 |
+|---|---|---|---|---|
+| server | `3f9a2c1d` | running | 6m12s | `3f9a1c2` |
+| static | `8e7d6c5b` | running | 2m40s | `3f9a1c2` |
+
