@@ -30,6 +30,8 @@ from tests.test_redeploy import (  # noqa: F401 — env는 fixture
 OTHER_APP = uuid.UUID("99999999-2222-4333-8444-555555555555")
 TOKEN_SHA = ci.SHA          # ci_helpers의 기본 sha (test_redeploy의 SHA와 같은 값)
 SHA2 = "f" * 40
+LIVE_SERVER = "a1" * 20     # 지금 떠 있는 서버 커밋 (seed)
+LIVE_STATIC = "c3" * 20     # 지금 떠 있는 정적 커밋 (seed)
 
 
 @pytest.fixture
@@ -92,15 +94,15 @@ def h(env, monkeypatch):
                            bearer=bearer, redeploy=redeploy, as_owner=as_owner)
 
 
-def seed(h, *, enabled=True, static=None):
-    """서버 acme/api@main. static=(repo, branch)면 정적 슬롯도."""
+def seed(h, *, enabled=True, static=None, static_sha=LIVE_STATIC):
+    """서버 acme/api@main(떠 있는 커밋 LIVE_SERVER). static=(repo, branch)면 정적 슬롯도(떠 있는 커밋 static_sha)."""
     with h.env.Session() as s:
         app = make_app(s, site_enabled=static is not None)
         app.ci_deploy_enabled = enabled
         s.commit()
-        add_server(s, "a0000001", 0)
+        add_server(s, "a0000001", 0, source_sha=LIVE_SERVER)
         if static is not None:
-            add_static(s, "c0000001", 0, repo_url=static[0], branch=static[1])
+            add_static(s, "c0000001", 0, repo_url=static[0], branch=static[1], source_sha=static_sha)
 
 
 def refs(r):
@@ -279,11 +281,12 @@ def test_ci_request_cannot_choose_another_commit_or_repo(h, body, status, code):
         assert s.query(Build).count() == 1
 
 
-def test_same_repo_static_slot_on_another_branch_is_not_pinned(h):
+def test_same_repo_static_slot_on_another_branch_keeps_its_live_commit(h):
     seed(h, static=(API_REPO, "gh-pages"))
     r = h.redeploy(h.exchange(ref="refs/heads/main"))
     assert r.status_code == 202, r.text
-    assert refs(r) == {"server": TOKEN_SHA, "static": "gh-pages"}
+    assert refs(r) == {"server": TOKEN_SHA, "static": LIVE_STATIC}
+    assert r.json()["requested_sha"] == TOKEN_SHA
 
 
 def test_web_session_still_pins_every_slot_on_the_same_repo(h):
@@ -293,20 +296,48 @@ def test_web_session_still_pins_every_slot_on_the_same_repo(h):
     assert r.status_code == 202 and refs(r) == {"server": SHA2, "static": SHA2}     # 웹 경로 규칙은 그대로
 
 
-def test_a_token_for_the_static_branch_pins_only_the_static_slot(h):
+def test_a_token_for_the_static_branch_keeps_the_server_on_its_live_commit(h):
     seed(h, static=(API_REPO, "gh-pages"))
     r = h.redeploy(h.exchange(ref="refs/heads/gh-pages"))
-    assert r.status_code == 202 and refs(r) == {"server": "main", "static": TOKEN_SHA}
+    assert r.status_code == 202 and refs(r) == {"server": LIVE_SERVER, "static": TOKEN_SHA}
 
 
-def test_a_slot_on_another_repo_is_rebuilt_from_its_branch(h):
+def test_a_slot_on_another_repo_keeps_its_live_commit(h):
     seed(h, static=(WEB_REPO, "develop"))
     r = h.redeploy(h.exchange())
     assert r.status_code == 202, r.text
-    assert refs(r) == {"server": TOKEN_SHA, "static": "develop"}
+    assert refs(r) == {"server": TOKEN_SHA, "static": LIVE_STATIC}
     with h.env.Session() as s:
         static = s.get(Build, r.json()["builds"][1]["build_id"])
-        assert static.repo_url == WEB_REPO and static.requested_sha is None
+        assert static.repo_url == WEB_REPO and static.branch == "develop" and static.requested_sha == LIVE_STATIC
+
+
+def test_a_rolled_back_server_uses_the_origin_commit_when_the_rollback_row_has_none(h):
+    seed(h, static=(API_REPO, "gh-pages"))
+    with h.env.Session() as s:                                   # 커밋 기록 전에 만든 롤백 행 — source_sha가 비어 있다
+        s.get(Build, "a0000001").status = "superseded"
+        s.commit()
+        add_server(s, "a0000002", 1, rollback_of="a0000001", status="running")
+    r = h.redeploy(h.exchange(ref="refs/heads/gh-pages"))
+    assert r.status_code == 202 and refs(r) == {"server": LIVE_SERVER, "static": TOKEN_SHA}
+
+
+def test_a_slot_without_a_recorded_commit_is_409(h):
+    seed(h, static=(WEB_REPO, "develop"), static_sha=None)
+    r = h.redeploy(h.exchange(), key="k-unknown")
+    assert r.status_code == 409 and r.json()["code"] == "slot_commit_unknown"
+    with h.env.Session() as s:
+        assert s.query(Build).count() == 2 and s.query(CiBuild).count() == 0
+        assert s.query(DeployRequestKey).count() == 0                   # 선점을 풀어 같은 키로 다시 보낼 수 있다
+
+
+def test_web_session_still_rebuilds_another_repo_from_its_branch(h):
+    seed(h, static=(WEB_REPO, "develop"))
+    h.as_owner()
+    r = h.client.post(f"/apps/{APP_ID}/deploy/redeploy", json={"commit_sha": SHA2})
+    assert r.status_code == 202 and refs(r) == {"server": SHA2, "static": "develop"}     # 웹 경로 규칙은 그대로
+    r = h.client.post(f"/apps/{APP_ID}/deploy/redeploy", json={})
+    assert r.status_code == 202 and refs(r) == {"server": "main", "static": "develop"}
 
 
 def test_branch_changed_after_the_exchange_is_403(h):

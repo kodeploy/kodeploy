@@ -204,10 +204,10 @@ async def _start(
             raise RedeployError(400, "이 앱의 어느 슬롯도 그 저장소를 쓰지 않아요", "repo_not_used")
     else:
         base = repo_key(slot_repos["server"] or slot_repos["static"])
-    # 커밋은 기준 저장소를 쓰는 슬롯에만 — 다른 저장소의 슬롯은 그 브랜치 최신으로 같이 다시 빌드된다
+    # 커밋은 기준 저장소를 쓰는 슬롯에만 — 웹 세션 경로에서 다른 저장소의 슬롯은 그 브랜치 최신으로 같이 다시 빌드된다
     # (start_deploy는 선언된 슬롯을 모두 빌드하고, 빠진 슬롯은 내린다)
-    # CI 경로(ci_branch)는 브랜치까지 같아야 고정한다 — 같은 저장소라도 다른 브랜치를 쓰는 슬롯(예: 정적 gh-pages)은
-    # 그 브랜치 최신으로 다시 빌드된다. 웹 세션 경로는 지금처럼 저장소만 본다.
+    # CI 경로(ci_branch)는 브랜치까지 같아야 토큰 커밋으로 고정하고, 나머지 슬롯(다른 저장소, 같은 저장소의 다른 브랜치)은
+    # 지금 떠 있는 커밋으로 고정한다 — 한 저장소의 push가 다른 저장소의 아직 배포 안 된 커밋을 끌고 나가지 않게.
     branches = {slot: branch for slot, (_, branch) in slot_sources(live).items()}
     pins = {
         slot: commit_sha
@@ -217,6 +217,8 @@ async def _start(
     }
     if ci_branch is not None and not any(pins.values()):
         raise RedeployError(403, "브랜치가 이 앱의 배포 브랜치와 달라요", "branch_mismatch")
+    if ci_branch is not None:
+        pins = _pin_live(live, pins)
 
     # 편집 권한 멤버는 이 앱이 쓰던 저장소로만 (start_deploy도 같은 검사를 400으로 하지만, 여기선 권한 문제라 403)
     if allowed_repos is not None and not used <= allowed_repos:
@@ -230,6 +232,27 @@ async def _start(
     except ValueError as e:
         raise RedeployError(400, str(e), "deploy_rejected")
     return RedeployResult(builds=builds, replayed=False, requested_sha=commit_sha)
+
+
+# CI 경로 — 토큰 커밋이 걸리지 않은 슬롯은 그 슬롯에 지금 떠 있는 커밋으로 고정한다.
+# 서버는 라이브 행의 source_sha, 비어 있으면 원본 배포의 값(그 전에 만든 롤백 행은 비어 있다). 정적은 라이브 행의 source_sha.
+# 기록이 없으면(커밋 기록 전에 배포한 행) 최신을 대신 배포하지 않고 409다.
+def _pin_live(live: LiveSlots, pins: dict[str, str | None]) -> dict[str, str | None]:
+    current = {
+        "server": (live.server.source_sha or live.server_code.source_sha) if live.server is not None else None,
+        "static": live.static.source_sha if live.static is not None else None,
+    }
+    present = {"server": live.server is not None, "static": live.static is not None}
+    out = dict(pins)
+    for slot, pin in pins.items():
+        if pin or not present[slot]:
+            continue
+        if not current[slot]:
+            raise RedeployError(
+                409, "이 칸의 배포 커밋 기록이 없어요. 웹에서 배포하기를 한 번 한 뒤 다시 시도해 주세요", "slot_commit_unknown",
+            )
+        out[slot] = current[slot]
+    return out
 
 
 # (app_id, key) 행을 먼저 넣어 키를 선점한다. 이미 있으면 None.
@@ -303,8 +326,8 @@ async def start_redeploy(
 
 
 # CI 토큰으로 재배포 — 커밋과 저장소는 토큰의 값이다. 요청에 다른 값을 넣으면 403.
-# 빌드 사용자는 앱 주인이다(호출하는 쪽이 넘긴다). 토큰의 저장소·브랜치가 모두 같은 슬롯에만 커밋을 고정하고,
-# 나머지 슬롯(같은 저장소의 다른 브랜치, 다른 저장소)은 그 슬롯 브랜치의 최신으로 같이 다시 빌드된다.
+# 빌드 사용자는 앱 주인이다(호출하는 쪽이 넘긴다). 토큰의 저장소·브랜치가 모두 같은 슬롯은 토큰 커밋으로,
+# 나머지 슬롯(같은 저장소의 다른 브랜치, 다른 저장소)은 지금 떠 있는 커밋으로 고정해 같이 다시 빌드한다.
 async def start_ci_redeploy(
     db: Session,
     owner: User,
