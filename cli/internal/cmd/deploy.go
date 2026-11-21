@@ -92,7 +92,9 @@ func runDeploy(ctx context.Context, d *Deps, g resolved, f deployFlags) int {
 
 	resp, _, err := client.RedeployWithRetry(ctx, d.Clock, deadline, g.app, key,
 		api.RedeployRequest{CommitSHA: strings.ToLower(f.sha)},
-		func(reason string, delay time.Duration) { r.progress("%s — %s 뒤 같은 이름표로 다시 보내요", reason, delay) })
+		func(reason string, delay time.Duration) {
+			r.progress("%s — %s 뒤 같은 이름표로 다시 보내요", reason, delay)
+		})
 	if err != nil {
 		return r.requestFailed(ctx, err, f.timeout)
 	}
