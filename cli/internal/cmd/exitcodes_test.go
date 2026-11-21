@@ -44,6 +44,10 @@ func TestExitCodes(t *testing.T) {
 			f.redeploy = []reply{errBody(409, "no_successful_slot", "정적 사이트가 한 번도 성공적으로 배포되지 않아")}
 			return nil
 		}, ExitUsage, "정적 사이트가"},
+		{"409 칸 커밋 기록 없음", []string{"deploy"}, func(f *fakeKD, _ map[string]string) context.Context {
+			f.redeploy = []reply{errBody(409, "slot_commit_unknown", "이 칸의 배포 커밋 기록이 없어요")}
+			return nil
+		}, ExitUsage, "배포 커밋 기록이 없어요"},
 		{"409 code 없음", []string{"deploy"}, func(f *fakeKD, _ map[string]string) context.Context {
 			f.redeploy = []reply{{409, `{"detail":"뭔가 충돌"}`}}
 			return nil
@@ -264,7 +268,7 @@ func TestFlagsWinOverEnvironment(t *testing.T) {
 	f.redeploy = []reply{redeployOK(202, false)}
 	happyBuilds(f)
 	env := actionsEnv(f, o)
-	env["KODEPLOY_SERVER"] = "http://127.0.0.1:1"   // 플래그가 이긴다
+	env["KODEPLOY_SERVER"] = "http://127.0.0.1:1" // 플래그가 이긴다
 	env["KODEPLOY_APP"] = "not-this-app"
 	env["KODEPLOY_AUDIENCE"] = "from-env"
 	r := runCLI(t, context.Background(), env, nil, "deploy", "--server", f.srv.URL, "--app", testApp, "--audience", "from-flag", "--settle", "0")

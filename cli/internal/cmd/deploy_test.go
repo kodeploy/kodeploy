@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -84,6 +85,24 @@ func TestNoLiveDeployIsUsageWithAHint(t *testing.T) {
 	}
 	if len(f.calls) != 1 {
 		t.Fatal("다시 보내지 않는다")
+	}
+}
+
+// 토큰과 다른 칸에 떠 있는 커밋 기록이 없다 (계약 9-5) — 다시 보내도 같으니 한 번만 보내고 2로 끝낸다.
+func TestSlotCommitUnknownIsUsageAndNotRetried(t *testing.T) {
+	f, o := newFakeKD(t), newFakeOIDC(t)
+	f.redeploy = []reply{errBody(409, "slot_commit_unknown", "이 칸의 배포 커밋 기록이 없어요. 웹에서 배포하기를 한 번 한 뒤 다시 시도해 주세요")}
+	r := runCLI(t, context.Background(), actionsEnv(f, o), nil, "deploy", "--output", "json")
+	if r.code != ExitUsage || len(f.calls) != 1 {
+		t.Fatalf("exit %d calls %d\n%s\n%s", r.code, len(f.calls), r.stdout, r.stderr)
+	}
+	var out struct {
+		Result   string `json:"result"`
+		ExitCode int    `json:"exit_code"`
+		Message  string `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(r.stdout), &out); err != nil || out.ExitCode != ExitUsage || !strings.Contains(out.Message, "웹에서 배포하기") {
+		t.Fatalf("json %q (%v)", r.stdout, err)
 	}
 }
 
