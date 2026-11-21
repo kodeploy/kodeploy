@@ -50,18 +50,18 @@ type fakeKD struct {
 	mu  sync.Mutex
 	srv *httptest.Server
 
-	exchangeReply *reply           // 있으면 교환을 이 응답으로 거절
-	idTokens      []string         // 교환에 받은 ID 토큰
-	tokens        map[string]int   // 발급한 CI 토큰 → 남은 사용 횟수
-	tokenUses     int              // 토큰 하나로 받는 요청 수 (0 = 무제한). 넘으면 401 ci_token_expired
-	allowStatic   bool             // KODEPLOY_TOKEN(staticToken)을 받는다
+	exchangeReply *reply         // 있으면 교환을 이 응답으로 거절
+	idTokens      []string       // 교환에 받은 ID 토큰
+	tokens        map[string]int // 발급한 CI 토큰 → 남은 사용 횟수
+	tokenUses     int            // 토큰 하나로 받는 요청 수 (0 = 무제한). 넘으면 401 ci_token_expired
+	allowStatic   bool           // KODEPLOY_TOKEN(staticToken)을 받는다
 
-	redeploy  []reply // 재배포 응답 차례 (다 쓰면 마지막 반복)
-	calls     []redeployCall
-	builds    map[string][]any // build id → 조회마다 상태 문자열, reply(오류), map(빌드 본문 덮어쓰기)
-	gets      map[string]int
-	onGet     func(id string, n int) // 조회마다 (테스트가 끼어들 때)
-	authSeen  []string
+	redeploy []reply // 재배포 응답 차례 (다 쓰면 마지막 반복)
+	calls    []redeployCall
+	builds   map[string][]any // build id → 조회마다 상태 문자열, reply(오류), map(빌드 본문 덮어쓰기)
+	gets     map[string]int
+	onGet    func(id string, n int) // 조회마다 (테스트가 끼어들 때)
+	authSeen []string
 }
 
 func newFakeKD(t *testing.T) *fakeKD {

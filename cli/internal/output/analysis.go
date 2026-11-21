@@ -8,7 +8,8 @@ import (
 
 // 실패 진단(ai_analysis)의 모양 — core의 diagnose.Diagnosis를 JSON으로 저장한 것이다.
 // {"title", "cause", "evidence", "cause_category", "kodeploy_specific", "fix_steps": [{"text", "command"}],
-//  "alternative_label", "alternative_steps": [...]}
+//
+//	"alternative_label", "alternative_steps": [...]}
 type diagnosis struct {
 	Title    string `json:"title"`
 	Cause    string `json:"cause"`
