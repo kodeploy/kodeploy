@@ -79,3 +79,7 @@ Thumbs.db
 # ---- Logs ----
 *.log
 retry-provision.log
+
+# ---- 문서(Markdown) ----
+# 문서는 로컬에만 둔다. 이미 추적 중인 파일(루트 README.md 등)은 그대로 남는다.
+*.md
