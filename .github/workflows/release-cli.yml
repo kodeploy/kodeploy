@@ -70,8 +70,7 @@ jobs:
           go build -trimpath \
             -ldflags "-s -w -X github.com/kodeploy/kodeploy/cli/internal/cmd.version=${VERSION}" \
             -o "dist/${NAME}/kodeploy" ./cmd/kodeploy
-          cp README.md "dist/${NAME}/"
-          tar -C "dist/${NAME}" -czf "dist/${NAME}.tar.gz" kodeploy README.md
+          tar -C "dist/${NAME}" -czf "dist/${NAME}.tar.gz" kodeploy
           ls -l dist
 
       - uses: actions/upload-artifact@v4
@@ -109,4 +108,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt \
             --repo "$GITHUB_REPOSITORY" \
             --title "kodeploy CLI ${VERSION}" \
-            --notes "kodeploy CLI ${VERSION}. 설치와 사용법은 cli/README.md. 받은 파일은 checksums.txt(sha256)로 확인한다."
+            --notes "kodeploy CLI ${VERSION}. 받은 파일은 checksums.txt(sha256)로 확인한다."
