@@ -7,13 +7,18 @@
   7    event_name이 CI_ALLOWED_EVENTS 안 (403)
   8    라이브 슬롯 중 저장소와 브랜치가 모두 토큰과 같은 슬롯이 하나 이상 (403). 라이브 배포가 없으면 409
   9    sha가 40자 hex (401)
+  10   앱에 워크플로 파일을 지정했으면 job_workflow_ref가 그 저장소의 그 파일 (403 workflow_mismatch)
+  11   그 저장소의 ID를 알고 있으면 repository_id가 같음 (403 repo_id_mismatch). 모르면 이번 교환의 값을 적어 둔다
 토큰 원문은 응답으로만 나간다. DB에는 sha256만 두고, 로그에는 앱 id와 거절 코드만 남긴다.
 """
 
 import hashlib
+import json
 import logging
 import re
 import secrets
+import urllib.error
+import urllib.request
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -23,7 +28,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import config
+from app.apps import service as apps_service
 from app.apps.model import App
+from app.auth import github_app
 from app.ci import oidc
 from app.ci.model import CiBuild, CiToken
 from app.deploy.build import redeploy
@@ -134,6 +141,22 @@ def exchange(db: Session, app_id: uuid.UUID, id_token: str) -> Issued:
     if not isinstance(sha, str) or not SHA_RE.match(sha):
         raise _reject(app_id, 401, "ID 토큰의 sha가 40자 커밋 해시가 아니에요", "invalid_sha")
 
+    if app.ci_workflow and not workflow_matches(claims.get("job_workflow_ref"), repository, app.ci_workflow):
+        raise _reject(app_id, 403, f"이 앱은 {app.ci_workflow} 워크플로에서만 배포할 수 있어요", "workflow_mismatch")
+
+    repo_name = repository.lower()
+    claim_id = _repo_id_claim(claims.get("repository_id"))
+    known = dict(app.ci_repo_ids or {})
+    if repo_name in known:
+        if claim_id != known[repo_name]:
+            raise _reject(
+                app_id, 403, "저장소 ID가 허용을 켤 때와 달라요. 같은 이름으로 다시 만든 저장소면 허용을 껐다 켜 주세요",
+                "repo_id_mismatch",
+            )
+    elif claim_id is not None:
+        known[repo_name] = claim_id
+        app.ci_repo_ids = known        # 허용을 켤 때 못 받은 저장소 — 첫 교환의 값을 적어 둔다 (토큰 행과 같이 커밋)
+
     raw = TOKEN_PREFIX + secrets.token_urlsafe(32)
     now = _now()
     row = CiToken(
@@ -160,6 +183,82 @@ def exchange(db: Session, app_id: uuid.UUID, id_token: str) -> Issued:
         raise _reject(app_id, 401, "이미 교환에 쓴 ID 토큰이에요. 새 ID 토큰을 받아 주세요", "token_reused")
     logger.info("ci token issued app=%s token_id=%s", app.id, row.id)
     return Issued(token=raw, row=row)
+
+
+# --- 워크플로 파일과 저장소 ID (검사 10, 11) ------------------------------------------
+
+# job_workflow_ref = "<owner>/<repo>/<경로>@<ref>". 저장소는 대소문자를 가리지 않고, 파일 경로는 가린다(GitHub가 가린다).
+# ref는 보지 않는다 — 브랜치는 검사 8이 이미 봤고, 재사용 워크플로를 태그로 부르는 경우도 같은 파일로 친다.
+def workflow_matches(job_workflow_ref: object, repository: str, path: str) -> bool:
+    if not isinstance(job_workflow_ref, str):
+        return False
+    left, sep, _ref = job_workflow_ref.partition("@")
+    parts = left.split("/")
+    if not sep or len(parts) < 3:
+        return False
+    return "/".join(parts[:2]).lower() == repository.lower() and "/".join(parts[2:]) == path
+
+
+# repository_id 클레임은 숫자 문자열이다. 형식이 다르면 없는 것으로 본다.
+def _repo_id_claim(value: object) -> str | None:
+    if isinstance(value, int) and not isinstance(value, bool):
+        value = str(value)
+    if isinstance(value, str) and value.isdigit() and len(value) <= 20:
+        return value
+    return None
+
+
+_GITHUB_URL_RE = re.compile(r"^https://github\.com/([a-z0-9_.-]+/[a-z0-9_.-]+)$")
+
+
+# 슬롯의 저장소 주소 → "owner/repo"(소문자). GitHub 저장소가 아니면 None.
+def repo_name_of(url: str) -> str | None:
+    m = _GITHUB_URL_RE.match(repo_key(url))
+    return m.group(1) if m else None
+
+
+# GitHub 저장소 ID. 못 받으면 None (없는 저장소, 비공개인데 토큰 없음, 네트워크, rate limit).
+def github_repo_id(name: str, token: str | None = None) -> str | None:
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "kodeploy"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(f"https://api.github.com/repos/{name}", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            rid = json.load(resp).get("id")
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return None
+    return str(rid) if isinstance(rid, int) and not isinstance(rid, bool) else None
+
+
+def lookup_repo_ids(db: Session, app: App) -> dict[str, str]:
+    """허용을 켤 때 라이브 슬롯 저장소들의 ID를 받는다. 공개 저장소는 토큰 없이, 못 받으면 앱 주인의 GitHub App 설치 토큰으로
+    한 번 더. 그래도 못 받은 저장소는 빠지고, 그 저장소의 첫 교환이 repository_id 클레임으로 채운다."""
+    try:
+        live = redeploy.live_slots(db, app)
+    except redeploy.RedeployError:
+        return {}
+    out: dict[str, str] = {}
+    token: str | None = None
+    token_tried = False
+    for url, _branch in redeploy.slot_sources(live).values():
+        name = repo_name_of(url)
+        if name is None or name in out:
+            continue
+        rid = github_repo_id(name)
+        if rid is None:
+            if not token_tried:
+                token_tried = True
+                try:
+                    token = github_app.get_clone_token(apps_service.repo_installation_id(db, app))
+                except Exception as e:   # 조회는 보조 — 실패해도 허용은 켠다
+                    logger.warning("ci repo id lookup: installation token failed — %s", type(e).__name__)
+            if token:
+                rid = github_repo_id(name, token)
+        if rid is not None:
+            out[name] = rid
+    logger.info("ci repo ids app=%s found=%d", app.id, len(out))
+    return out
 
 
 # --- Bearer -------------------------------------------------------------------

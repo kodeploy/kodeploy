@@ -27,7 +27,7 @@ def _out(app: App, role: str, owner_login: str | None, admin: bool = False) -> A
     return AppOut(
         id=app.id, name=app.name, site_enabled=app.site_enabled, custom_domain=app.custom_domain,
         created_at=app.created_at, role=role, owner_login=owner_login, pipeline=app.pipeline, admin=admin,
-        ci_deploy_enabled=bool(app.ci_deploy_enabled),
+        ci_deploy_enabled=bool(app.ci_deploy_enabled), ci_workflow=app.ci_workflow,
     )
 
 
@@ -168,6 +168,8 @@ def remove_member(
 
 # 켜면 이 앱 저장소의 배포 브랜치에서 돈 GitHub Actions가 ID 토큰을 CI 토큰으로 바꿔 재배포할 수 있다 (app/ci).
 # 끄면 아직 살아 있는 CI 토큰도 바로 만료시킨다 — 토큰은 쓸 때마다 허용을 다시 보지만, 다시 켰을 때 예전 토큰이 되살아나지 않게.
+# 꺼진 상태에서 켤 때 라이브 슬롯 저장소들의 GitHub ID를 받아 둔다 (교환 검사 11). workflow를 보내면 허용할 워크플로 파일을
+# 바꾼다(검사 10) — 보내지 않으면 그대로, null이나 빈 값이면 지정을 지운다.
 @router.put("/{app_id}/ci-deploy")
 def set_ci_deploy(
     app_id: uuid.UUID,
@@ -177,11 +179,15 @@ def set_ci_deploy(
     user: User = Depends(get_current_user),
 ) -> dict:
     app = _owned_app(app_id, db, user, request)
+    if req.enabled and not app.ci_deploy_enabled:
+        app.ci_repo_ids = ci_service.lookup_repo_ids(db, app) or None
     app.ci_deploy_enabled = req.enabled
+    if "workflow" in req.model_fields_set:
+        app.ci_workflow = req.workflow
     if not req.enabled:
         ci_service.expire_tokens(db, app.id)
     db.commit()
-    return {"ci_deploy_enabled": app.ci_deploy_enabled}
+    return {"ci_deploy_enabled": app.ci_deploy_enabled, "ci_workflow": app.ci_workflow}
 
 
 # --- 받은 초대 (초대받은 쪽) ----------------------------------------------------
