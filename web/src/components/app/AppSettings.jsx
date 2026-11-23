@@ -685,8 +685,29 @@ function CiSection({ app, branch }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [open, setOpen] = useState(false);
+  // 배포를 받을 워크플로 파일 — 서버가 이 칸을 주기 전(옛 서버)에는 입력을 보이지 않는다
+  const hasWorkflow = "ci_workflow" in app;
+  const [workflow, setWorkflow] = useState(app.ci_workflow || "");
 
   useEffect(() => setEnabled(!!app.ci_deploy_enabled), [app.ci_deploy_enabled]);
+  useEffect(() => setWorkflow(app.ci_workflow || ""), [app.ci_workflow]);
+
+  const workflowChanged = workflow.trim() !== (app.ci_workflow || "");
+
+  const onSaveWorkflow = async () => {
+    if (busy || !workflowChanged) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await setCiDeploy(app.id, enabled, workflow.trim());
+      setWorkflow(res.ci_workflow || "");
+      refreshApp?.();
+    } catch (e) {
+      setError(e.message || "저장하지 못했어요");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const onToggle = async () => {
     if (busy) return;
@@ -718,6 +739,34 @@ function CiSection({ app, branch }) {
         켜면 이 앱 저장소의 배포 브랜치에서 실행된 GitHub Actions가 이 앱을 배포할 수 있어요. 저장소에 push할 수 있는
         사람이 배포할 수 있게 돼요.
       </p>
+      {hasWorkflow && (
+        <div style={{ marginTop: 12 }}>
+          <Field label="워크플로 파일">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <input
+                className="kd-input"
+                style={{ maxWidth: INPUT_W }}
+                value={workflow}
+                onChange={(e) => setWorkflow(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && onSaveWorkflow()}
+                placeholder=".github/workflows/deploy.yml"
+                spellCheck={false}
+                disabled={busy}
+              />
+              <button
+                className="kd-btn-primary kd-btn-sm shrink-0"
+                onClick={onSaveWorkflow}
+                disabled={busy || !workflowChanged}
+              >
+                저장
+              </button>
+            </div>
+          </Field>
+          <p className="kd-t-caption text-fg-3 kd-set-indent" style={{ paddingLeft: LABEL_W }}>
+            지정하면 이 파일에서 실행된 잡만 배포할 수 있어요. 비워 두면 저장소의 어느 워크플로에서든 배포할 수 있어요.
+          </p>
+        </div>
+      )}
       {error && (
         <p className="kd-t-caption" style={{ color: "var(--err-fg)", marginTop: 8 }}>
           {error}
