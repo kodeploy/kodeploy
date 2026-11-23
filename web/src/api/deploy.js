@@ -109,9 +109,11 @@ export function removeMember(appId, userId) {
 }
 
 // (앱 주인) GitHub Actions 배포 허용 — 켜면 이 앱 저장소의 배포 브랜치에서 돈 GitHub Actions가 이 앱을 재배포할 수 있다.
-// 끄면 이미 발급된 CI 토큰도 바로 무효가 된다. 응답: { ci_deploy_enabled }
-export function setCiDeploy(appId, enabled) {
-  return request(`/apps/${appId}/ci-deploy`, { method: "PUT", body: JSON.stringify({ enabled }) });
+// 끄면 이미 발급된 CI 토큰도 바로 무효가 된다. workflow를 넘기면 배포를 받을 워크플로 파일을 바꾼다(빈 값이면 지정 해제,
+// 넘기지 않으면 그대로). 응답: { ci_deploy_enabled, ci_workflow }
+export function setCiDeploy(appId, enabled, workflow) {
+  const body = workflow === undefined ? { enabled } : { enabled, workflow };
+  return request(`/apps/${appId}/ci-deploy`, { method: "PUT", body: JSON.stringify(body) });
 }
 
 // 이력의 한 배포로 되돌린다 (v2 앱, 편집 권한 이상). 이미지를 다시 빌드하지 않고 그 배포의 digest로 배포한다.
