@@ -7,7 +7,7 @@ core는 이 테이블만 읽고 쓴다. users의 같은 칸들은 옛 값으로 
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, Uuid, false
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Text, Uuid, false
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.shared.db import Base
@@ -49,6 +49,10 @@ class App(Base):
     # "GitHub Actions 배포 허용" — 켜면 이 앱 저장소의 배포 브랜치에서 돈 GitHub Actions가 ID 토큰을 CI 토큰으로 바꿔
     # 재배포할 수 있다 (app/ci). 주인만 켜고 끈다. 끄면 이미 발급한 CI 토큰도 쓸 때 거절된다.
     ci_deploy_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    # 교환을 허용할 워크플로 파일(.github/workflows/<이름>.yml). 비면 어느 워크플로든 받는다 (app/ci 검사 10).
+    ci_workflow: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # {"owner/repo"(소문자): "<GitHub 저장소 ID>"} — 허용을 켤 때 받아 두고, 못 받은 저장소는 첫 교환에서 채운다 (검사 11).
+    ci_repo_ids: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_utcnow, onupdate=_utcnow)
 
