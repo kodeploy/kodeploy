@@ -33,6 +33,8 @@ def _ensure_tenant_ns(build: Build) -> None:
     # kodeploy-exec 내부 문 키. ns를 만드는 길은 여기 하나이고 빌더 제출 전에 돌아서,
     # Argo가 exec Deployment를 그리기 전에 Secret이 있다. 이미 있으면 409로 그대로 둔다.
     docs.append(manifests.exec_hmac(ns))
+    # 내부 문 TLS 인증서도 같은 자리에서. 이미 있으면 409로 그대로 둔다 (바꾸면 떠 있는 exec Pod와 어긋난다).
+    docs.append(manifests.exec_tls(ns))
 
     # 직전 delete_app으로 ns가 Terminating 중일 수 있다. core는 ns를 읽을 권한이 없어서 만들기의 거절로 판정한다:
     # ns create는 409로 넘어가고, 그 안의 첫 생성(RoleBinding)이 NamespaceTerminating 403(막 사라졌으면 404)으로

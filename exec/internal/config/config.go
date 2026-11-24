@@ -27,6 +27,13 @@ type Config struct {
 	InternalAddr string
 	MetricsAddr  string
 
+	// 내부 문 TLS. 인증서는 core가 테넌트마다 만들어 kodeploy-exec-tls Secret에 넣고, 차트가 파일로 마운트한다.
+	// 파일이 없으면 TLS 연결은 핸드셰이크에서 실패하고 평문만 받는다 (옮기는 동안).
+	// InternalTLSRequired가 켜지면 내부 문은 평문 연결을 받지 않는다.
+	InternalTLSCert     string
+	InternalTLSKey      string
+	InternalTLSRequired bool
+
 	TicketTTL time.Duration
 	TicketMax int
 
@@ -95,6 +102,15 @@ func Load(getenv func(string) string, readFile func(string) ([]byte, error)) (*C
 		PingInterval:        duration("PING_INTERVAL", 30*time.Second),
 		RestoreMaxBytes:     integer("RESTORE_MAX_BYTES", DefaultRestoreMaxBytes),
 		RestoreWorkdir:      str("RESTORE_WORKDIR", "/tmp/kodeploy-restore"),
+		InternalTLSCert:     str("INTERNAL_TLS_CERT_FILE", "/etc/kodeploy-exec-tls/tls.crt"),
+		InternalTLSKey:      str("INTERNAL_TLS_KEY_FILE", "/etc/kodeploy-exec-tls/tls.key"),
+	}
+	switch v := strings.TrimSpace(getenv("INTERNAL_TLS_REQUIRED")); v {
+	case "", "false":
+	case "true":
+		c.InternalTLSRequired = true
+	default:
+		errs = append(errs, fmt.Errorf("INTERNAL_TLS_REQUIRED: %q is not true or false", v))
 	}
 	for _, o := range strings.Split(getenv("EXEC_ALLOWED_ORIGINS"), ",") {
 		o = strings.TrimSpace(o)

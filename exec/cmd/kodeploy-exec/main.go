@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,6 +20,7 @@ import (
 	"github.com/kodeploy/kodeploy/exec/internal/api"
 	"github.com/kodeploy/kodeploy/exec/internal/audit"
 	"github.com/kodeploy/kodeploy/exec/internal/config"
+	"github.com/kodeploy/kodeploy/exec/internal/innertls"
 	"github.com/kodeploy/kodeploy/exec/internal/session"
 	"github.com/kodeploy/kodeploy/exec/internal/target"
 	"github.com/kodeploy/kodeploy/exec/internal/ticket"
@@ -94,15 +96,27 @@ func serve(log *slog.Logger) error {
 	public := &http.Server{Addr: cfg.PublicAddr, Handler: srv.Public(), ReadHeaderTimeout: 10 * time.Second}
 	internal := &http.Server{Addr: cfg.InternalAddr, Handler: srv.Internal(), ReadHeaderTimeout: 10 * time.Second}
 	opsSrv := &http.Server{Addr: cfg.MetricsAddr, Handler: srv.Ops(), ReadHeaderTimeout: 10 * time.Second}
+	// 내부 문은 같은 포트에서 TLS와 평문을 함께 받는다(옮기는 동안). INTERNAL_TLS_REQUIRED면 TLS만.
+	internalLn, err := net.Listen("tcp", cfg.InternalAddr)
+	if err != nil {
+		return err
+	}
+	certs := &innertls.Certs{CertFile: cfg.InternalTLSCert, KeyFile: cfg.InternalTLSKey}
+	internalL := innertls.Listen(internalLn, innertls.Config(certs), cfg.InternalTLSRequired)
+
 	errc := make(chan error, 3)
-	for _, s := range []*http.Server{public, internal, opsSrv} {
-		go func(s *http.Server) {
-			if err := s.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	run := func(serve func() error) {
+		go func() {
+			if err := serve(); err != nil && err != http.ErrServerClosed {
 				errc <- err
 			}
-		}(s)
+		}()
 	}
-	log.Info("listening", "namespace", cfg.Namespace, "public", cfg.PublicAddr, "internal", cfg.InternalAddr, "metrics", cfg.MetricsAddr)
+	run(public.ListenAndServe)
+	run(func() error { return internal.Serve(internalL) })
+	run(opsSrv.ListenAndServe)
+	log.Info("listening", "namespace", cfg.Namespace, "public", cfg.PublicAddr, "internal", cfg.InternalAddr,
+		"metrics", cfg.MetricsAddr, "internal_tls_required", cfg.InternalTLSRequired)
 
 	select {
 	case err := <-errc:

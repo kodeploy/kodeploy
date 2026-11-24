@@ -80,3 +80,22 @@ func TestErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestInternalTLS(t *testing.T) {
+	c, err := Load(env(map[string]string{"EXEC_NAMESPACE": "x"}), keyFile(goodKey, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.InternalTLSCert != "/etc/kodeploy-exec-tls/tls.crt" || c.InternalTLSKey != "/etc/kodeploy-exec-tls/tls.key" || c.InternalTLSRequired {
+		t.Errorf("defaults: %q %q %v", c.InternalTLSCert, c.InternalTLSKey, c.InternalTLSRequired)
+	}
+	c, err = Load(env(map[string]string{"EXEC_NAMESPACE": "x", "INTERNAL_TLS_REQUIRED": "true",
+		"INTERNAL_TLS_CERT_FILE": "/a/c", "INTERNAL_TLS_KEY_FILE": "/a/k"}), keyFile(goodKey, nil))
+	if err != nil || !c.InternalTLSRequired || c.InternalTLSCert != "/a/c" || c.InternalTLSKey != "/a/k" {
+		t.Fatalf("%+v %v", c, err)
+	}
+	if _, err := Load(env(map[string]string{"EXEC_NAMESPACE": "x", "INTERNAL_TLS_REQUIRED": "yes"}), keyFile(goodKey, nil)); err == nil ||
+		!strings.Contains(err.Error(), "INTERNAL_TLS_REQUIRED") {
+		t.Fatalf("want INTERNAL_TLS_REQUIRED error, got %v", err)
+	}
+}

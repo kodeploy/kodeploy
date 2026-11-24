@@ -40,6 +40,11 @@ BUILDER_HMAC_SECRET = os.getenv("BUILDER_HMAC_SECRET", "")
 # 터미널·DB 콘솔·탐색·덤프·복원은 전부 exec의 내부 문·공개 문으로 간다. core에는 pods/exec 권한이 없다.
 # 웹이 붙는 공개 문 기준 주소. 경로는 /exec/<ns>/v1/sessions (테넌트 HTTPRoute가 그 ns의 exec Pod로 보낸다)
 EXEC_PUBLIC_URL = os.getenv("EXEC_PUBLIC_URL", "wss://api.kodeploy.com").rstrip("/")
+# 내부 문(8081)을 TLS로 부를 ns. 쉼표 목록이고 "*"면 전부, 비어 있으면 평문. 옮기는 동안의 스위치다:
+# 그 ns에 kodeploy-exec-tls Secret이 있고 exec Pod가 그 인증서를 마운트한 뒤에 넣는다.
+EXEC_INTERNAL_TLS_NAMESPACES = frozenset(
+    s.strip() for s in os.getenv("EXEC_INTERNAL_TLS_NAMESPACES", "").split(",") if s.strip()
+)
 
 # --- kubelet 직접 조회 (관리자 노드 현황, admin/service.py) ---
 # 노드마다 자체 서명인 kubelet 서빙 CA 묶음 — ConfigMap kubelet-serving-ca 마운트 (ansible 69-kubelet-serving-ca.yml)
