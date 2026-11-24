@@ -2,6 +2,7 @@
 //
 // 결정 순서
 //  1. KODEPLOY_TOKEN이 있으면 그대로 쓴다. 401이 나도 다시 받지 않는다 (토큰 만료).
+//     웹에서 발급한 CLI 토큰(kdcli_)이면 "웹에서 다시 발급"하라고 알린다.
 //  2. ACTIONS_ID_TOKEN_REQUEST_URL과 ACTIONS_ID_TOKEN_REQUEST_TOKEN이 있으면 GitHub ID 토큰을 받아
 //     POST /apps/{app}/ci/token으로 CI 토큰과 바꾼다. 401이 나면 새 ID 토큰으로 다시 교환한다 (실행 전체에서 최대 5번).
 //  3. 둘 다 없으면 인증 오류다.
@@ -32,6 +33,10 @@ const (
 	MaxRefreshes = 5
 
 	HintIDTokenPermission = "GitHub Actions라면 워크플로에 `permissions: id-token: write`가 있는지 확인하세요"
+
+	// 웹(앱 설정 → CLI 토큰)에서 발급한 토큰의 접두어. 마지막으로 쓴 뒤 15분, 발급 뒤 8시간이면 끝난다.
+	CLITokenPrefix     = "kdcli_"
+	MsgCLITokenExpired = "토큰이 만료됐어요. 웹에서 다시 발급해 주세요"
 )
 
 type Mode int
@@ -111,6 +116,11 @@ func New(cfg Config) (*Source, error) {
 
 func (s *Source) Mode() Mode { return s.mode }
 
+// IsCLIToken은 KODEPLOY_TOKEN이 웹에서 발급한 CLI 토큰(kdcli_)인가.
+func (s *Source) IsCLIToken() bool {
+	return s.mode == ModeStatic && strings.HasPrefix(s.static, CLITokenPrefix)
+}
+
 // Exchanged는 마지막 교환 응답이다 (OIDC가 아니거나 아직 교환 전이면 nil). 토큰 원문은 빼고 쓴다.
 func (s *Source) Exchanged() *api.ExchangeResponse { return s.exchanged }
 
@@ -129,6 +139,9 @@ func (s *Source) Token(ctx context.Context) (string, error) {
 // Refresh는 401을 받았을 때 부른다. KODEPLOY_TOKEN이면 다시 받을 방법이 없어 오류다.
 func (s *Source) Refresh(ctx context.Context) error {
 	if s.mode == ModeStatic {
+		if s.IsCLIToken() {
+			return &Error{Msg: MsgCLITokenExpired}
+		}
 		return &Error{Msg: "KODEPLOY_TOKEN이 만료됐거나 유효하지 않아요"}
 	}
 	if s.refreshes >= MaxRefreshes {

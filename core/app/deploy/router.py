@@ -3,6 +3,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 import asyncio
+import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from app.auth.deps import get_current_user, get_current_user_optional
 from app.auth.model import User
 from app.ci import service as ci_service
 from app.ci.model import CiBuild, CiToken
+from app.cli import service as cli_service
+from app.cli.model import CliToken
 from app.auth import github_app
 from app.deploy import crud, status
 from app.builder import client as builder
@@ -47,6 +50,8 @@ from app.deploy.schemas import (
 )
 from app.shared.db import get_db
 from app.shared.errors import ApiError
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/deploy", tags=["deploy"])
 
@@ -117,11 +122,30 @@ def editor_app_required(
 # Authorization: Bearer kdci_… 는 아래 두 의존성을 쓰는 라우트에서만 받는다. 나머지 라우트는 get_current_user(쿠키)만 보므로
 # Bearer만 온 요청은 401이다. Bearer 헤더가 있으면 쿠키는 보지 않는다 (잘못된 토큰이 쿠키로 넘어가 통과하지 않게).
 # 토큰은 요청마다 확인한다: 해시가 있고, 만료 안 됐고, 경로의 앱이 토큰의 앱이고, 그 앱의 허용이 아직 켜져 있다 (ci/service.py).
+#
+# CLI 토큰(Bearer kdcli_…, app/cli)은 접두어로 먼저 가른다. 받는 곳은 재배포·상태 조회·최근 커밋 조회 세 곳이고,
+# 재배포는 발급한 사람이 웹에서 배포하기를 누른 것과 같은 규칙이다 (CI 규칙은 쓰지 않는다). kdcli_가 아닌 Bearer는 지금처럼
+# CI 경로로 간다.
 @dataclass
 class DeployPrincipal:
-    user: User                  # 세션 유저. CI 토큰이면 앱 주인 — 빌드 소유·쿼터 규칙이 주인 기준으로 그대로 돈다
+    user: User                  # 세션 유저. CI 토큰이면 앱 주인, CLI 토큰이면 발급한 사람
     app: App
     ci: CiToken | None = None   # CI 토큰으로 들어왔으면 그 토큰
+    cli: CliToken | None = None  # CLI 토큰으로 들어왔으면 그 토큰
+
+
+def _cli_principal(request: Request, app_id: uuid.UUID | None, db: Session) -> DeployPrincipal | None:
+    raw = ci_service.bearer_token(request)
+    if not cli_service.is_cli_token(raw):
+        return None
+    try:
+        p = cli_service.authenticate(db, raw, app_id)
+    except cli_service.CliAuthError as e:
+        raise ApiError(e.status, e.detail, e.code)
+    # 발급한 사람이 관리자 권한(root)으로 남의 앱에 들어온 경우 — 쿠키 경로(_app_at)와 같이 바꾸는 요청을 기록한다
+    if p.by_admin and request.method != "GET":
+        audit.record(db, p.user, audit.action_of(request), app=p.app, source="cli")
+    return DeployPrincipal(user=p.user, app=p.app, cli=p.token)
 
 
 def _ci_principal(request: Request, app_id: uuid.UUID | None, db: Session) -> DeployPrincipal | None:
@@ -145,6 +169,9 @@ def redeploy_principal(
     db: Session = Depends(get_db),
     user: User | None = Depends(get_current_user_optional),
 ) -> DeployPrincipal:
+    cli = _cli_principal(request, app_id, db)
+    if cli is not None:
+        return cli
     ci = _ci_principal(request, app_id, db)
     if ci is not None:
         return ci
@@ -159,10 +186,26 @@ def status_app(
     db: Session = Depends(get_db),
     user: User | None = Depends(get_current_user_optional),
 ) -> App | None:
+    cli = _cli_principal(request, app_id, db)
+    if cli is not None:
+        return cli.app
     ci = _ci_principal(request, app_id, db)
     if ci is not None:
         return ci.app
     return _app_at(app_id, db, get_current_user(user), "viewer", request)
+
+
+# 최근 커밋 조회 — 쿠키면 editor_app_required와 같은 규칙. CLI 토큰도 받는다 (CI 토큰은 지금처럼 받지 않는다 — 쿠키만 본다).
+def commits_app(
+    request: Request,
+    app_id: uuid.UUID | None = None,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_current_user_optional),
+) -> App:
+    cli = _cli_principal(request, app_id, db)
+    if cli is not None:
+        return cli.app
+    return editor_app_required(request, app_id, db, get_current_user(user))
 
 
 def _required(app: App | None) -> App:
@@ -301,6 +344,7 @@ async def create_deploy(
 # 새로 시작하면 202, 같은 Idempotency-Key로 이미 처리한 요청이면 그때의 빌드를 200으로 돌려준다. 계약: docs/deploy-api-contract.md
 # 쿠키(웹) 또는 CI 토큰(Bearer)으로 들어온다. CI 토큰이면 커밋·저장소가 토큰의 값으로 정해지고(다르면 403), 빌드는 앱 주인
 # 이름으로 시작하고, 만든 빌드에 Actions 실행 정보를 남긴다. 오류 본문에는 기계용 code가 붙는다 (계약 문서 3-4).
+# CLI 토큰(Bearer kdcli_)이면 발급한 사람이 웹에서 배포하기를 누른 것과 같다 — 웹 경로 그대로, 빌드는 발급한 사람 이름.
 @router.post("/redeploy", response_model=RedeployResponse, status_code=202)
 async def redeploy_app(
     response: Response,
@@ -330,6 +374,9 @@ async def redeploy_app(
         raise ApiError(e.status, e.detail, e.code)
     if p.ci is not None and not result.replayed:
         ci_service.record_builds(db, p.ci, result.builds)
+    if p.cli is not None:
+        logger.info("cli redeploy app=%s user=%s token_id=%s builds=%s replayed=%s", app.id, p.user.id, p.cli.id,
+                    ",".join(b.build_id for b in result.builds), result.replayed)
     if result.replayed:
         response.status_code = 200
     return RedeployResponse(
@@ -355,7 +402,7 @@ REDEPLOY_PICK_COMMITS = 3
 @router.get("/redeploy/commits", response_model=RedeployCommitsResponse)
 def redeploy_commits(
     db: Session = Depends(get_db),
-    app: App = Depends(editor_app_required),
+    app: App = Depends(commits_app),
 ) -> RedeployCommitsResponse:
     try:
         base, current_sha = redeploy.commit_base(db, app)

@@ -68,6 +68,24 @@ type Build struct {
 	CI           *CIRun   `json:"ci"`
 }
 
+// GET /apps/{app_id}/deploy/redeploy/commits — 배포하기에서 고를 커밋. sha는 40자.
+type Commit struct {
+	SHA     string  `json:"sha"`
+	Message string  `json:"message"`
+	Date    *string `json:"date"`
+	URL     *string `json:"url"`
+}
+
+// 기준 저장소·브랜치의 최근 커밋(최신순 최대 3개)과 지금 떠 있는 커밋. GitHub 조회가 실패하면 Commits가 빈다.
+// Current는 지금 떠 있는 커밋이 Commits에 없을 때만 온다.
+type CommitsResponse struct {
+	Repo       string   `json:"repo"`
+	Branch     string   `json:"branch"`
+	CurrentSHA *string  `json:"current_sha"`
+	Commits    []Commit `json:"commits"`
+	Current    *Commit  `json:"current"`
+}
+
 // POST /apps/{app_id}/ci/token (계약 9-3)
 type ExchangeRequest struct {
 	IDToken string `json:"id_token"`

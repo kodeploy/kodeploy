@@ -171,3 +171,10 @@ CI_ALLOWED_EVENTS = [
     for e in os.getenv("CI_ALLOWED_EVENTS", "push,workflow_dispatch").split(",")
     if e.strip()
 ]
+
+# CLI 토큰 (app/cli) — 앱 주인이 웹에서 발급해 로컬 kodeploy CLI에 넣는 토큰. 마지막으로 쓴 뒤 IDLE초가 지나면 만료,
+# 쓸 때마다 IDLE초로 늘린다. 발급 뒤 MAX초가 지나면 무조건 만료. 남은 시간이 EXTEND_BELOW초 아래일 때만 DB에 늘려 쓴다
+# (상태 조회가 몇 초마다 와서 매번 쓰지 않으려고).
+CLI_TOKEN_IDLE_SECONDS = int(os.getenv("CLI_TOKEN_IDLE_SECONDS", "900"))
+CLI_TOKEN_MAX_SECONDS = int(os.getenv("CLI_TOKEN_MAX_SECONDS", str(8 * 3600)))
+CLI_TOKEN_EXTEND_BELOW_SECONDS = int(os.getenv("CLI_TOKEN_EXTEND_BELOW_SECONDS", "600"))

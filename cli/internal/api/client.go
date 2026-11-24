@@ -228,3 +228,16 @@ func (c *Client) GetBuild(ctx context.Context, app, buildID string) (*Build, err
 	}
 	return &out, nil
 }
+
+// Commits는 배포할 수 있는 최근 커밋과 지금 떠 있는 커밋이다 (웹 배포하기의 커밋 고르기와 같은 API).
+func (c *Client) Commits(ctx context.Context, app string) (*CommitsResponse, error) {
+	path := "/apps/" + url.PathEscape(app) + "/deploy/redeploy/commits"
+	var out CommitsResponse
+	if _, err := c.call(ctx, http.MethodGet, path, nil, nil, &out); err != nil {
+		return nil, err
+	}
+	if out.Commits == nil {
+		out.Commits = []Commit{}
+	}
+	return &out, nil
+}

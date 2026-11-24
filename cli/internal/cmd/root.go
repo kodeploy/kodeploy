@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"github.com/kodeploy/kodeploy/cli/internal/clock"
 )
@@ -40,7 +41,13 @@ type Deps struct {
 	Clock  clock.Clock
 	HTTP   *http.Client
 	NewKey func() string // GITHUB_RUN_ID가 없을 때의 이름표 (cli-<무작위 UUID>)
+	// 사람이 앞에 있을 때만 묻는다 (deploy --pick). Interactive는 stdin과 stderr가 모두 터미널인가.
+	// 비워 두면(테스트·임베드) 터미널이 아닌 것으로 본다.
+	Stdin       io.Reader
+	Interactive func() bool
 }
+
+func (d *Deps) interactive() bool { return d.Interactive != nil && d.Interactive() && d.Stdin != nil }
 
 // exitError는 명령이 정한 exit code다. 메시지 출력은 명령이 이미 끝냈다.
 type exitError struct{ code int }
@@ -57,7 +64,7 @@ func exit(code int) error {
 func newRoot(d *Deps) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "kodeploy",
-		Short:         "KoDeploy 재배포 CLI",
+		Short:         "KoDeploy CLI — 재배포, 커밋 고르기",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -65,7 +72,7 @@ func newRoot(d *Deps) *cobra.Command {
 	root.SetErr(d.Stderr)
 	g := &globalFlags{}
 	g.register(root)
-	root.AddCommand(newDeployCmd(d, g), newStatusCmd(d, g), newVersionCmd(d, g))
+	root.AddCommand(newDeployCmd(d, g), newCommitsCmd(d, g), newStatusCmd(d, g), newVersionCmd(d, g))
 	return root
 }
 
@@ -98,5 +105,9 @@ func Main() int {
 		Clock:  clock.Real{},
 		HTTP:   &http.Client{Timeout: 30 * time.Second},
 		NewKey: randomKey,
+		Stdin:  os.Stdin,
+		Interactive: func() bool {
+			return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd()))
+		},
 	})
 }
