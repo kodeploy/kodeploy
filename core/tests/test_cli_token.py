@@ -71,7 +71,13 @@ def h(env, monkeypatch):
     monkeypatch.setattr(deploy_router.github, "fetch_recent_commits", recent)
     monkeypatch.setattr(deploy_router.github, "fetch_commit", lambda repo_url, sha, installation_id=None: None)
 
-    state = SimpleNamespace(cookie_user=None)
+    state = SimpleNamespace(cookie_user=None, tickets=[])
+
+    async def issue_ticket(ns, **kw):
+        state.tickets.append((ns, kw))
+        return {"ticket": "TK", "expires_at": "x"}
+
+    monkeypatch.setattr(exec_router.exec_client, "issue_ticket", issue_ticket)
     api = FastAPI()
     errors.install(api)
     api.include_router(deploy_router.router)
@@ -343,12 +349,11 @@ def test_legacy_paths(h):
     ("get", "/apps/{app}"),
     ("get", "/apps"),
     ("get", "/apps/{app}/cli-token"),
-    ("post", "/apps/{app}/exec-tickets"),
 ])
 def test_other_routes_reject_a_cli_token(h, method, path):
     seed(h)
     token = h.issue()
-    kw = {"json": {"target": "app"} if "exec" in path else {}} if method in ("post", "put") else {}
+    kw = {"json": {}} if method in ("post", "put") else {}
     headers = {**h.bearer(token), "Origin": ORIGIN}
     r = getattr(h.client, method)(path.replace("{app}", str(APP_ID)), headers=headers, **kw)
     assert r.status_code == 401, (path, r.status_code, r.text)
@@ -505,3 +510,73 @@ def test_one_live_token_per_app_not_per_user(h):
     b = h.issue(app_id=OTHER_APP)
     assert h.status(a).status_code == 200                     # 다른 앱 토큰을 발급해도 그대로
     assert h.status(b, "b0000001", app_id=OTHER_APP).status_code == 200
+
+
+# --- 셸·DB 접속 티켓 (POST /apps/{id}/exec-tickets) ----------------------------------
+
+TICKETS = f"/apps/{APP_ID}/exec-tickets"
+
+
+@pytest.mark.parametrize("target,op", [("app", "shell"), ("db", "console"), ("redis", "console")])
+def test_exec_ticket_with_a_cli_token(h, target, op):
+    seed(h)
+    token = h.issue()
+    r = h.client.post(TICKETS, json={"target": target, "cols": 100, "rows": 30}, headers=h.bearer(token))
+    assert r.status_code == 200, r.text                         # CLI는 Origin을 보내지 않는다
+    assert r.json() == {"ticket": "TK", "url": f"{config.EXEC_PUBLIC_URL}/exec/app-11111111/v1/sessions",
+                        "protocol": "kodeploy.exec.v1", "expires_in": 30}
+    ns, kw = h.state.tickets[0]
+    assert ns == "app-11111111" and kw["op"] == op and kw["target"] == target
+    assert kw["user_id"] == str(OWNER) and kw["source"] == "cli" and (kw["cols"], kw["rows"]) == (100, 30)
+
+
+def test_exec_ticket_cookie_path_is_unchanged(h):
+    seed(h)
+    h.login(OWNER)
+    assert h.client.post(TICKETS, json={"target": "app"}).status_code == 403                    # Origin 없음
+    r = h.client.post(TICKETS, json={"target": "app"}, headers={"Origin": ORIGIN})
+    assert r.status_code == 200 and h.state.tickets[0][1]["source"] == "web"
+    h.login(EDITOR)
+    assert h.client.post(TICKETS, json={"target": "app"}, headers={"Origin": ORIGIN}).status_code == 403
+
+
+def test_exec_ticket_cli_token_rules(h):
+    seed(h)
+    with h.env.Session() as s:
+        s.add(App(id=OTHER_APP, owner_id=OWNER, name="other", namespace="app-99999999", pipeline="v2"))
+        s.commit()
+    token = h.issue()
+    bad_target = h.client.post(TICKETS, json={"target": "shell"}, headers=h.bearer(token))
+    assert bad_target.status_code == 422                                          # 웹과 같은 세 대상만
+    other = h.client.post(f"/apps/{OTHER_APP}/exec-tickets", json={"target": "app"}, headers=h.bearer(token))
+    assert other.status_code == 403 and other.json()["code"] == "cli_token_app_mismatch"
+    foreign = h.client.post(TICKETS, json={"target": "app"}, headers={**h.bearer(token), "Origin": "https://evil.example"})
+    assert foreign.status_code == 403                                             # Origin이 붙어 오면 허용 목록만
+    assert h.state.tickets == []
+    # 폐기한 토큰은 거절, 쿠키가 있어도 살리지 않는다
+    h.login(OWNER)
+    assert h.client.delete(f"/apps/{APP_ID}/cli-token", headers={"Origin": ORIGIN}).status_code == 200
+    r = h.client.post(TICKETS, json={"target": "app"}, headers={**h.bearer(token), "Origin": ORIGIN})
+    assert r.status_code == 401 and r.json()["code"] == "cli_token_revoked"
+    assert h.state.tickets == []
+
+
+def test_exec_ticket_does_not_take_a_ci_token(h):
+    seed(h)
+    with h.env.Session() as s:
+        s.get(App, APP_ID).ci_deploy_enabled = True
+        s.add(CiToken(token_hash=hashlib.sha256(b"kdci_x").hexdigest(), jti="j", app_id=APP_ID, repository="acme/api",
+                      ref="refs/heads/main", sha="0" * 40, event_name="push", expires_at=T + timedelta(hours=1)))
+        s.commit()
+    r = h.client.post(TICKETS, json={"target": "app"}, headers={"Authorization": "Bearer kdci_x"})
+    assert r.status_code == 401 and h.state.tickets == []                         # 쿠키만 보는 지금 그대로
+
+
+def test_exec_ticket_by_root_with_a_cli_token_is_recorded(h):
+    seed(h)
+    token = h.issue(ROOT)
+    assert h.client.post(TICKETS, json={"target": "db"}, headers=h.bearer(token)).status_code == 200
+    assert h.state.tickets[0][1]["user_id"] == str(ROOT)
+    with h.env.Session() as s:
+        actions = [a.action for a in s.query(AdminAction).order_by(AdminAction.id)]
+    assert actions == ["POST /apps/{app_id}/cli-token", "POST /apps/{app_id}/exec-tickets (cli)"]

@@ -45,6 +45,8 @@ type Deps struct {
 	// 비워 두면(테스트·임베드) 터미널이 아닌 것으로 본다.
 	Stdin       io.Reader
 	Interactive func() bool
+	// 셸·DB 접속(kodeploy shell|db|redis)이 raw 모드·창 크기에 쓰는 터미널. 비워 두면 터미널이 아닌 것으로 본다.
+	Terminal Terminal
 }
 
 func (d *Deps) interactive() bool { return d.Interactive != nil && d.Interactive() && d.Stdin != nil }
@@ -64,7 +66,7 @@ func exit(code int) error {
 func newRoot(d *Deps) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "kodeploy",
-		Short:         "KoDeploy CLI — 재배포, 커밋 고르기",
+		Short:         "KoDeploy CLI — 재배포, 커밋 고르기, 셸·DB 접속",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -73,6 +75,7 @@ func newRoot(d *Deps) *cobra.Command {
 	g := &globalFlags{}
 	g.register(root)
 	root.AddCommand(newDeployCmd(d, g), newCommitsCmd(d, g), newStatusCmd(d, g), newVersionCmd(d, g))
+	root.AddCommand(newExecCmds(d, g)...)
 	return root
 }
 
@@ -109,5 +112,6 @@ func Main() int {
 		Interactive: func() bool {
 			return term.IsTerminal(int(os.Stdin.Fd())) && term.IsTerminal(int(os.Stderr.Fd()))
 		},
+		Terminal: osTerminal{in: os.Stdin, out: os.Stdout},
 	})
 }

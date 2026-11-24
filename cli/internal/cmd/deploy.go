@@ -95,7 +95,7 @@ func runDeploy(ctx context.Context, d *Deps, g resolved, f deployFlags) int {
 		sha, err := pickCommit(ctx, bufio.NewReader(d.Stdin), d.Stderr, res)
 		switch {
 		case ctx.Err() != nil, errors.Is(err, errPickAborted):
-			return r.finish(resultInterrupted, ExitInterrupted, "커밋을 고르지 않고 끝냈어요. 배포하지 않았어요")
+			return r.finish(resultInterrupted, ExitInterrupted, "중단했어요. 커밋을 고르지 않아 배포하지 않았어요")
 		case err != nil:
 			return r.usage(err.Error())
 		}
