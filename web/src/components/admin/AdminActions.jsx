@@ -6,6 +6,7 @@ import { Hint, TableHead } from "./atoms.jsx";
 // 서버 라우트(deploy/router.py · apps/router.py · admin/router.py) — 모르는 경로는 그대로 보인다.
 const ACTION_LABEL = {
   "POST /deploy": "배포",
+  "POST /deploy/redeploy": "배포하기",
   "POST /deploy/{build_id}/rollback": "롤백",
   "PUT /deploy/env": "환경변수 변경",
   "PUT /deploy/domain": "도메인 연결",
@@ -20,6 +21,8 @@ const ACTION_LABEL = {
   "POST /deploy/db/stage-dump": "DB 덤프 올리기",
   "POST /deploy/db/restore": "DB 복원",
   "POST /apps/{app_id}/exec-tickets": "터미널 접속",
+  "POST /apps/{app_id}/cli-token": "CLI 토큰 발급",
+  "DELETE /apps/{app_id}/cli-token": "CLI 토큰 폐기",
   // 2026-11 kodeploy-exec 전환 전 기록 (core가 직접 중계하던 터미널 WebSocket)
   "WS /deploy/app/terminal": "터미널 접속",
   "WS /deploy/app/db-terminal": "DB 터미널 접속",
@@ -30,6 +33,15 @@ const ACTION_LABEL = {
   "DELETE /apps/{app_id}/members/{user_id}": "멤버 내보내기",
   "DELETE /admin/users/{user_id}": "계정 강제 탈퇴",
 };
+
+// CLI 토큰으로 한 동작은 서버가 " (cli)"를 붙여 적는다 — 라벨은 그대로 찾고 뒤에 (CLI)를 붙인다.
+function actionLabel(action) {
+  const cli = action.endsWith(" (cli)");
+  const base = cli ? action.slice(0, -" (cli)".length) : action;
+  const label = ACTION_LABEL[base];
+  if (!label) return <span className="kd-t-code">{action}</span>;
+  return cli ? `${label} (CLI)` : label;
+}
 
 export default function AdminActions({ actions, appIds }) {
   if (actions === null) return <Hint>기록을 불러오는 중…</Hint>;
@@ -48,7 +60,7 @@ export default function AdminActions({ actions, appIds }) {
                 {a.actor_login || "—"}
               </td>
               <td className="px-4" title={a.action}>
-                {ACTION_LABEL[a.action] || <span className="kd-t-code">{a.action}</span>}
+                {actionLabel(a.action)}
               </td>
               <td className="px-4">
                 {a.app_name ? (

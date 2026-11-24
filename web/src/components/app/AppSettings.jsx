@@ -31,8 +31,11 @@ import {
   apiOrigin,
   dbExportUrl,
   deleteDomain,
+  getCliToken,
   getDomain,
+  issueCliToken,
   restoreDb,
+  revokeCliToken,
   setCiDeploy,
   setDomain,
 } from "../../api/deploy.js";
@@ -40,7 +43,7 @@ import DomainStatusBadge from "../DomainStatusBadge.jsx";
 import DeleteAppModal from "../DeleteAppModal.jsx";
 import { Checkbox, Disclosure } from "../deploy/steps/wizardParts.jsx";
 import { useCurrentApp } from "./AppScope.jsx";
-import { repoSlug } from "../../lib/format.js";
+import { dayTime, repoSlug } from "../../lib/format.js";
 
 // 서브내비 + 접힌 행이 공유하는 섹션 정의.
 // danger는 파괴적이라 내비에 올리지 않는다 — 시안처럼 맨 아래 접힌 행으로만 닿는다.
@@ -49,6 +52,7 @@ const SECTIONS = [
   { id: "domain", nav: "도메인", row: "도메인 설정" },
   { id: "storage", nav: "스토리지", row: "스토리지 설정" },
   { id: "ci", nav: "GitHub Actions", row: "GitHub Actions 배포" },
+  { id: "cli", nav: "CLI 토큰", row: "CLI 토큰" },
   { id: "danger", row: "앱 삭제" },
 ];
 const SECTION_IDS = new Set(SECTIONS.map((s) => s.id));
@@ -138,6 +142,7 @@ function AppSettingsBody() {
             {section === "general" && <GeneralSection build={serverBuild} />}
             {section === "storage" && <StorageSection build={serverBuild} />}
             {section === "ci" && <CiSection app={app} branch={serverBuild?.branch} />}
+            {section === "cli" && <CliTokenSection app={app} />}
             {section === "danger" && <DangerSection onDelete={() => setDeleteOpen(true)} />}
 
             {/* 접힌 나머지 섹션 — 시안 괘선 y819/882/945, 행 높이 63 ⇒ 42(var(--row-lg)) */}
@@ -830,6 +835,178 @@ jobs:
             -H "Authorization: Bearer $TOKEN" \\
             -H "Idempotency-Key: gha-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \\
             -H 'Content-Type: application/json' -d '{}'
+`;
+}
+
+/* ─────────────────────────── CLI 토큰 ─────────────────────────── */
+
+// 로컬 터미널의 kodeploy CLI에 넣는 토큰. 주인만 이 화면에 들어온다 (서버도 주인 세션만 받는다).
+// 원문은 발급 응답에만 있어서 이 화면을 벗어나면 다시 볼 수 없다 — 잃어버리면 다시 발급한다(이전 토큰은 바로 끝난다).
+// GitHub Actions 배포 허용과는 따로다.
+function CliTokenSection({ app }) {
+  const [state, setState] = useState(null); // { current, idle_seconds, max_seconds }
+  const [raw, setRaw] = useState(null); // 방금 발급한 원문 — 이 화면에서만 들고 있는다
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const [open, setOpen] = useState(false);
+
+  const load = async () => {
+    try {
+      setState(await getCliToken(app.id));
+    } catch (e) {
+      setError(e.message || "불러오지 못했어요");
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, [app.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const run = async (fn, fallback) => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await fn();
+      await load();
+    } catch (e) {
+      setError(e.message || fallback);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onIssue = () =>
+    run(async () => {
+      const res = await issueCliToken(app.id);
+      setRaw(res.token);
+    }, "발급하지 못했어요");
+
+  const onRevoke = () =>
+    run(async () => {
+      await revokeCliToken(app.id);
+      setRaw(null);
+    }, "폐기하지 못했어요");
+
+  const current = state?.current;
+  const idleMin = Math.round((state?.idle_seconds ?? 900) / 60);
+  const maxHours = Math.round((state?.max_seconds ?? 8 * 3600) / 3600);
+  const usage = cliUsageExample(app.id);
+
+  return (
+    <>
+      <SectionHead>CLI 토큰</SectionHead>
+      <p className="kd-t-body-s text-fg-2" style={{ marginTop: 10 }}>
+        로컬 터미널의 kodeploy CLI로 이 앱을 배포할 때 쓰는 토큰이에요. 마지막으로 쓴 뒤 {idleMin}분 동안 쓰지 않으면
+        만료되고, 쓸 때마다 {idleMin}분으로 늘어나요. 발급하고 {maxHours}시간이 지나면 쓰는 중이어도 만료돼요. 앱마다 하나만
+        살아 있어서 새로 발급하면 이전 토큰은 바로 쓸 수 없어요. GitHub Actions 배포 허용과는 따로예요.
+      </p>
+
+      {raw && (
+        <div style={{ marginTop: 14 }}>
+          <Field label="토큰">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <code
+                className="kd-t-code min-w-0 overflow-auto scroll-thin whitespace-nowrap"
+                style={{
+                  maxWidth: INPUT_W,
+                  padding: "6px 10px",
+                  borderRadius: 4,
+                  background: "var(--kd-surface)",
+                  border: "1px solid var(--kd-border)",
+                  color: "var(--fg-1)",
+                }}
+              >
+                {raw}
+              </code>
+              <CopyButton text={raw} title="토큰 복사" />
+            </div>
+          </Field>
+          <p className="kd-t-caption text-fg-3 kd-set-indent" style={{ paddingLeft: LABEL_W }}>
+            이 화면을 벗어나면 다시 볼 수 없어요. 지금 복사해 두세요.
+          </p>
+        </div>
+      )}
+
+      {current && (
+        <div style={{ marginTop: raw ? 6 : 14 }}>
+          <Field label="발급" divider>
+            <span className="kd-t-body-s text-fg-1">
+              {current.issued_by_login || "—"} · {dayTime(current.issued_at)}
+            </span>
+          </Field>
+          <Field label="마지막 사용" divider>
+            <span className="kd-t-body-s text-fg-1">
+              {current.last_used_at ? dayTime(current.last_used_at) : "아직 안 썼어요"}
+            </span>
+          </Field>
+          <Field label="만료">
+            <span className="kd-t-body-s text-fg-1">
+              {dayTime(current.expires_at)}
+              <span className="text-fg-3"> · 쓰면 늘어나요, 늦어도 {dayTime(current.max_expires_at)}</span>
+            </span>
+          </Field>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2.5" style={{ marginTop: 14 }}>
+        <button className="kd-btn-primary kd-btn-sm" onClick={onIssue} disabled={busy || state === null}>
+          {current ? "다시 발급" : "발급"}
+        </button>
+        {current && (
+          <button
+            className="kd-btn-secondary kd-btn-sm"
+            style={{ color: "var(--err-fg)" }}
+            onClick={onRevoke}
+            disabled={busy}
+          >
+            폐기
+          </button>
+        )}
+      </div>
+      {error && (
+        <p className="kd-t-caption" style={{ color: "var(--err-fg)", marginTop: 8 }}>
+          {error}
+        </p>
+      )}
+
+      <div style={{ marginTop: 16, borderTop: "1px solid var(--kd-border)", paddingTop: 8 }}>
+        <Disclosure open={open} onToggle={() => setOpen((v) => !v)} label="사용 예">
+          <p className="kd-t-caption text-fg-3">
+            토큰은 셸 기록에 남지 않게 read로 넣어요. 토큰이 만료되면 CLI가 종료 코드 125로 끝나요 — 여기서 다시
+            발급하면 돼요.
+          </p>
+          <div className="relative" style={{ marginTop: 10 }}>
+            <pre
+              className="kd-t-code whitespace-pre overflow-auto scroll-thin"
+              style={{
+                padding: 12,
+                borderRadius: 4,
+                background: "var(--kd-surface)",
+                border: "1px solid var(--kd-border)",
+                color: "var(--fg-1)",
+              }}
+            >
+              {usage}
+            </pre>
+            <span className="absolute" style={{ top: 10, right: 10 }}>
+              <CopyButton text={usage} title="사용 예 복사" />
+            </span>
+          </div>
+        </Disclosure>
+      </div>
+    </>
+  );
+}
+
+function cliUsageExample(appId) {
+  return `export KODEPLOY_APP=${appId}
+read -rs KODEPLOY_TOKEN && export KODEPLOY_TOKEN   # 토큰을 붙여 넣고 엔터
+
+kodeploy commits               # 최근 커밋 3개와 지금 떠 있는 커밋
+kodeploy deploy                # 브랜치 최신으로 배포
+kodeploy deploy --pick         # 최근 커밋 3개 중에서 골라 배포
+kodeploy deploy --sha <sha>    # 그 커밋(40자)으로 배포
 `;
 }
 
