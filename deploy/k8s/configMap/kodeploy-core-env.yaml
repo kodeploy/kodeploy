@@ -10,6 +10,7 @@ data:
   DB_USER: "kodeploy"
   DB_NAME: "kodeploy"
   ALLOWED_ORIGINS: "https://app.kodeploy.com,https://kodeploy.pages.dev,http://localhost:5173,http://127.0.0.1:5173"
+  EXEC_INTERNAL_TLS_NAMESPACES: "*"                        # exec 내부 문(8081)을 모든 테넌트 ns에서 TLS로 부른다 (인증서는 ns의 kodeploy-exec-tls)
   GITHUB_OAUTH_REDIRECT_URI: "https://api.kodeploy.com/auth/github/callback"
   GITHUB_APP_ID: "3794809"                               # GitHub App 숫자 ID — installation token JWT 서명(iss)용. 공개값
   GITHUB_APP_SLUG: "kodeploy"                             # App 슬러그(github.com/apps/kodeploy) — private repo 연결 설치 페이지 링크용
