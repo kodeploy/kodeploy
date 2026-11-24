@@ -454,7 +454,7 @@ def ticket_api(monkeypatch):
     monkeypatch.setattr(config, "ALLOWED_ORIGINS", ["https://kodeploy.com"])
     api = FastAPI()
     api.include_router(exec_router.router)
-    api.dependency_overrides[exec_router.get_current_user] = lambda: SimpleNamespace(id="u1")
+    api.dependency_overrides[exec_router.get_current_user_optional] = lambda: SimpleNamespace(id="u1")
     api.dependency_overrides[exec_router.get_db] = lambda: None
     state.client = TestClient(api)
     state.app = app_row

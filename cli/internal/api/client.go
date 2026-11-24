@@ -241,3 +241,16 @@ func (c *Client) Commits(ctx context.Context, app string) (*CommitsResponse, err
 	}
 	return &out, nil
 }
+
+// ExecTicket은 셸·DB·Redis 접속 티켓을 받는다. 401이면 다른 요청처럼 한 번 새 토큰을 받아 다시 보낸다(CLI 토큰이면 그대로 실패).
+func (c *Client) ExecTicket(ctx context.Context, app string, req ExecTicketRequest) (*ExecTicket, error) {
+	path := "/apps/" + url.PathEscape(app) + "/exec-tickets"
+	var out ExecTicket
+	if _, err := c.call(ctx, http.MethodPost, path, req, nil, &out); err != nil {
+		return nil, err
+	}
+	if out.Ticket == "" || out.URL == "" {
+		return nil, &Error{Status: 200, Detail: "티켓 응답에 ticket이나 url이 없어요"}
+	}
+	return &out, nil
+}

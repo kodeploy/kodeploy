@@ -219,8 +219,9 @@ async def wait_ready(ns: str, timeout: float = READY_TIMEOUT) -> bool:
 
 # --- 티켓 (공개 문용) ----------------------------------------------------------
 
+# source: 티켓을 연 입구 — "web"(쿠키 세션) 또는 "cli"(CLI 토큰). 발급 기록(exec_ticket)에 같이 남는다.
 async def issue_ticket(ns: str, *, user_id: str, app_id: str, app_name: str, target: str, op: str,
-                       cols: int, rows: int) -> dict:
+                       cols: int, rows: int, source: str = "web") -> dict:
     rid = new_request_id()
     path = "/internal/v1/tickets"
     body = json.dumps({"user_id": user_id, "app_id": app_id, "app": app_name, "target": target,
@@ -248,7 +249,7 @@ async def issue_ticket(ns: str, *, user_id: str, app_id: str, app_name: str, tar
     data = json.loads(text)
     log_event(event="exec_ticket", ns=ns, request_id=rid,
               ticket_sha256=hashlib.sha256(data["ticket"].encode()).hexdigest(),
-              user_id=user_id, app_id=app_id, target=target, op=op, issued_at=_now())
+              user_id=user_id, app_id=app_id, target=target, op=op, source=source, issued_at=_now())
     return data
 
 

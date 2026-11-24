@@ -86,6 +86,21 @@ type CommitsResponse struct {
 	Current    *Commit  `json:"current"`
 }
 
+// POST /apps/{app_id}/exec-tickets — 셸·DB·Redis 접속 티켓 (웹 터미널과 같은 API, CLI 토큰으로 부른다)
+type ExecTicketRequest struct {
+	Target string `json:"target"` // app | db | redis
+	Cols   int    `json:"cols"`
+	Rows   int    `json:"rows"`
+}
+
+// Ticket은 1회용이고 30초 안에 URL로 붙어야 한다. 출력·로그에 남기지 않는다.
+type ExecTicket struct {
+	Ticket    string `json:"ticket"`
+	URL       string `json:"url"`
+	Protocol  string `json:"protocol"`
+	ExpiresIn int    `json:"expires_in"`
+}
+
 // POST /apps/{app_id}/ci/token (계약 9-3)
 type ExchangeRequest struct {
 	IDToken string `json:"id_token"`
