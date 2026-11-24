@@ -116,6 +116,19 @@ export function setCiDeploy(appId, enabled, workflow) {
   return request(`/apps/${appId}/ci-deploy`, { method: "PUT", body: JSON.stringify(body) });
 }
 
+// (앱 주인) CLI 토큰 — 로컬 kodeploy CLI에 넣는 토큰. 마지막으로 쓴 뒤 15분, 발급 뒤 8시간이면 끝나고 앱마다 하나만 산다.
+// getCliToken 응답: { current: { issued_at, issued_by_login, last_used_at, expires_at, max_expires_at } | null, idle_seconds, max_seconds }
+// issueCliToken 응답: { token(원문, 이 응답에만), issued_at, …, idle_seconds } — 이전 토큰은 바로 끝난다.
+export function getCliToken(appId) {
+  return request(`/apps/${appId}/cli-token`);
+}
+export function issueCliToken(appId) {
+  return request(`/apps/${appId}/cli-token`, { method: "POST" });
+}
+export function revokeCliToken(appId) {
+  return request(`/apps/${appId}/cli-token`, { method: "DELETE" });
+}
+
 // 이력의 한 배포로 되돌린다 (v2 앱, 편집 권한 이상). 이미지를 다시 빌드하지 않고 그 배포의 digest로 배포한다.
 // 응답: { build_id, runtime, status } — 새로 생긴 롤백 배포. 진행은 그 build_id로 따라간다.
 export function rollbackBuild(buildId) {
