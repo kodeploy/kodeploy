@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -19,6 +20,7 @@ var shaRE = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
 type deployFlags struct {
 	sha     string
+	pick    bool
 	timeout time.Duration
 	settle  time.Duration
 	noWait  bool
@@ -37,6 +39,7 @@ func newDeployCmd(d *Deps, g *globalFlags) *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&f.sha, "sha", "", "배포할 커밋 (40자). 없으면 브랜치 최신, CI 토큰이면 워크플로가 돈 커밋")
+	c.Flags().BoolVar(&f.pick, "pick", false, "최근 커밋 3개 중에서 골라 배포한다 (터미널에서만)")
 	c.Flags().DurationVar(&f.timeout, "timeout", 25*time.Minute, "요청부터 안정화까지 전체 시간 제한")
 	c.Flags().DurationVar(&f.settle, "settle", 60*time.Second, "모두 running이 된 뒤 더 지켜볼 시간 (0이면 바로 성공)")
 	c.Flags().BoolVar(&f.noWait, "no-wait", false, "빌드 목록만 출력하고 기다리지 않는다")
@@ -72,16 +75,38 @@ func runDeploy(ctx context.Context, d *Deps, g resolved, f deployFlags) int {
 	if g.outErr != "" {
 		return r.usage(g.outErr)
 	}
+	if f.pick && f.sha != "" {
+		return r.usage("--pick과 --sha는 같이 쓸 수 없어요")
+	}
+	if f.pick && !d.interactive() {
+		return r.usage("--pick은 터미널에서만 물어봐요. kodeploy commits로 커밋을 보고 --sha로 넘겨 주세요")
+	}
+
+	client, code := r.client(ctx, g)
+	if client == nil {
+		return code
+	}
+	// 고르는 동안은 시간 제한에 넣지 않는다 — 사람이 읽고 고르는 시간이다
+	if f.pick {
+		res, err := client.Commits(ctx, g.app)
+		if err != nil {
+			return r.commitsFailed(ctx, err)
+		}
+		sha, err := pickCommit(ctx, bufio.NewReader(d.Stdin), d.Stderr, res)
+		switch {
+		case ctx.Err() != nil, errors.Is(err, errPickAborted):
+			return r.finish(resultInterrupted, ExitInterrupted, "커밋을 고르지 않고 끝냈어요. 배포하지 않았어요")
+		case err != nil:
+			return r.usage(err.Error())
+		}
+		f.sha = sha
+	}
 
 	start := d.Clock.Now()
 	deadline := start.Add(f.timeout)
 	ctx, cancel := d.Clock.WithDeadline(ctx, deadline)
 	defer cancel()
 
-	client, code := r.client(ctx, g)
-	if client == nil {
-		return code
-	}
 	key := idempotencyKey(d)
 	r.res.AppID = g.app
 	if f.sha != "" {

@@ -12,6 +12,7 @@ from app.admin.router import router as admin_router
 from app.apps.router import invites_router, router as apps_router
 from app.auth.router import router as auth_router
 from app.ci.router import router as ci_router
+from app.cli.router import router as cli_router
 from app.community.router import router as community_router
 from app.config import ALLOWED_ORIGINS
 from app.deploy.router import router as deploy_router
@@ -46,6 +47,8 @@ app.include_router(deploy_router, prefix="/apps/{app_id}")
 app.include_router(apps_router)
 # CI 토큰 교환 (/apps/{app_id}/ci/token) — 인증 없이 열려 있고 본문의 GitHub ID 토큰이 인증이다
 app.include_router(ci_router)
+# CLI 토큰 발급·폐기 (/apps/{app_id}/cli-token) — 쿠키 세션의 앱 주인만
+app.include_router(cli_router)
 app.include_router(invites_router)
 app.include_router(community_router)
 app.include_router(admin_router)

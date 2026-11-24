@@ -27,7 +27,13 @@ def action_of(conn: HTTPConnection) -> str:
     return f"{method} {path}"
 
 
-def record(db: Session, actor: User, action: str, *, app: App | None = None, target: User | None = None) -> None:
+# source: 웹 말고 다른 입구로 들어온 동작이면 그 이름 ("cli" — CLI 토큰). 동작 뒤에 " (cli)"로 붙는다.
+def record(
+    db: Session, actor: User, action: str, *, app: App | None = None, target: User | None = None,
+    source: str | None = None,
+) -> None:
+    if source:
+        action = f"{action} ({source})"
     owner_id: uuid.UUID | None = app.owner_id if app is not None else None
     if target is None and owner_id is not None:
         target = db.get(User, owner_id)
