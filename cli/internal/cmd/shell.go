@@ -50,7 +50,7 @@ func runExec(ctx context.Context, d *Deps, g resolved, t execTarget) int {
 		return r.usage(g.outErr)
 	}
 	if d.Terminal == nil || !d.Terminal.IsTerminal() || d.Stdin == nil {
-		return r.usage(fmt.Sprintf("kodeploy %s는 터미널에서만 열 수 있어요 (stdin과 stdout이 터미널이어야 해요)", t.use))
+		return r.usage(fmt.Sprintf("%s은 터미널에서만 열 수 있어요 (stdin과 stdout이 터미널이어야 해요)", t.label))
 	}
 	client, code := r.client(ctx, g)
 	if client == nil {
