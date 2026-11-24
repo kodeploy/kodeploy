@@ -897,7 +897,7 @@ function CliTokenSection({ app }) {
     <>
       <SectionHead>CLI 토큰</SectionHead>
       <p className="kd-t-body-s text-fg-2" style={{ marginTop: 10 }}>
-        로컬 터미널의 kodeploy CLI로 이 앱을 배포할 때 쓰는 토큰이에요. 마지막으로 쓴 뒤 {idleMin}분 동안 쓰지 않으면
+        로컬 터미널의 kodeploy CLI로 이 앱을 배포하거나 셸·DB 콘솔을 열 때 쓰는 토큰이에요. 마지막으로 쓴 뒤 {idleMin}분 동안 쓰지 않으면
         만료되고, 쓸 때마다 {idleMin}분으로 늘어나요. 발급하고 {maxHours}시간이 지나면 쓰는 중이어도 만료돼요. 앱마다 하나만
         살아 있어서 새로 발급하면 이전 토큰은 바로 쓸 수 없어요. GitHub Actions 배포 허용과는 따로예요.
       </p>
@@ -1007,6 +1007,10 @@ kodeploy commits               # 최근 커밋 3개와 지금 떠 있는 커밋
 kodeploy deploy                # 브랜치 최신으로 배포
 kodeploy deploy --pick         # 최근 커밋 3개 중에서 골라 배포
 kodeploy deploy --sha <sha>    # 그 커밋(40자)으로 배포
+
+kodeploy shell                 # 앱 컨테이너 셸 (끝내려면 exit)
+kodeploy db                    # DB 콘솔
+kodeploy redis                 # Redis 콘솔
 `;
 }
 
