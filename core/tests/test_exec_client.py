@@ -493,3 +493,97 @@ def test_exec_ticket_rules(ticket_api):
     ticket_api.access = (ticket_api.app, "owner", True)
     assert c.post(URL, json={"target": "app"}, headers=ORIGIN).status_code == 200
     assert ticket_api.audited == ["POST /apps/{app_id}/exec-tickets"]
+
+
+# --- 내부 문 TLS -----------------------------------------------------------------
+# core가 만든 테넌트 인증서로 가짜 exec를 TLS로 띄우고, core가 그 인증서 하나만 믿고 붙는지 실제 연결로 확인한다.
+
+def _tenant_cert(tmp_path, name: str):
+    import base64
+
+    from app.deploy.stack import manifests
+
+    doc = manifests.exec_tls(NS)
+    crt, key = base64.b64decode(doc["data"]["tls.crt"]), base64.b64decode(doc["data"]["tls.key"])
+    (tmp_path / f"{name}.crt").write_bytes(crt)
+    (tmp_path / f"{name}.key").write_bytes(key)
+    return crt.decode(), str(tmp_path / f"{name}.crt"), str(tmp_path / f"{name}.key")
+
+
+def run_tls(fake: FakeExec, coro_fn, monkeypatch, served: tuple[str, str], pinned_pem: str):
+    """served 인증서로 가짜 exec를 TLS로 띄우고, core는 pinned_pem만 믿게 해서 돌린다. 주소 이름은 진짜와 같다."""
+    import socket
+    import ssl
+
+    from app.deploy.stack.manifests.tenant import exec_host
+
+    async def tls_pem(ns):
+        return pinned_pem
+
+    monkeypatch.setattr(config, "EXEC_INTERNAL_TLS_NAMESPACES", frozenset({NS}))
+    monkeypatch.setattr(exec_client, "_tls_pem", tls_pem)
+    monkeypatch.setattr(exec_client, "_certs", {})
+    real_gai = socket.getaddrinfo
+    monkeypatch.setattr(socket, "getaddrinfo",
+                        lambda host, *a, **k: real_gai("127.0.0.1" if host == exec_host(NS) else host, *a, **k))
+
+    async def main():
+        app = web.Application()
+        app.router.add_post("/internal/v1/tickets", fake.tickets)
+        app.router.add_get("/internal/v1/sessions/{op}", fake.session)
+        sctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        sctx.load_cert_chain(*served)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0, ssl_context=sctx)
+        await site.start()
+        monkeypatch.setattr(exec_client, "INTERNAL_PORT", site._server.sockets[0].getsockname()[1])
+        try:
+            return await coro_fn()
+        finally:
+            await runner.cleanup()
+
+    return asyncio.run(main())
+
+
+def test_base_url_follows_tls_switch(monkeypatch):
+    monkeypatch.setattr(config, "EXEC_INTERNAL_TLS_NAMESPACES", frozenset())
+    assert exec_client.base_url(NS) == f"http://kodeploy-exec.{NS}.svc:8081"
+    monkeypatch.setattr(config, "EXEC_INTERNAL_TLS_NAMESPACES", frozenset({NS}))
+    assert exec_client.base_url(NS) == f"https://kodeploy-exec.{NS}.svc:8081"
+    assert exec_client.base_url("app-11112222").startswith("http://")         # 목록에 없는 ns는 그대로 평문
+    monkeypatch.setattr(config, "EXEC_INTERNAL_TLS_NAMESPACES", frozenset({"*"}))
+    assert exec_client.base_url("app-11112222").startswith("https://")
+
+
+def test_internal_tls_ticket_and_session(wired, monkeypatch, tmp_path):
+    pem, crt, key = _tenant_cert(tmp_path, "tenant")
+    fake = FakeExec()
+    fake.reply["query"] = ([(1, b"x\n1\n"), (3, status(0))], 1000)
+
+    async def both():
+        ticket = await exec_client.issue_ticket(NS, user_id="u1", app_id="a1", app_name="web", target="app",
+                                                op="shell", cols=80, rows=24)
+        out = await exec_client.run_capture(NS, "query", "SELECT 1")
+        return ticket, out
+
+    ticket, (stdout, _, code) = run_tls(fake, both, monkeypatch, (crt, key), pem)
+    assert ticket["ticket"] == "T" * 43                                         # POST가 TLS로 갔다
+    assert stdout == "x\n1\n" and code == 0                                      # WebSocket 세션도 TLS로 갔다
+    assert [c[1] for c in fake.calls] == ["/internal/v1/tickets", "/internal/v1/sessions/query"]
+
+
+def test_internal_tls_refuses_other_cert(wired, monkeypatch, tmp_path):
+    _, crt, key = _tenant_cert(tmp_path, "served")
+    other_pem, _, _ = _tenant_cert(tmp_path, "other")                            # 같은 이름이지만 다른 인증서
+    fake = FakeExec()
+
+    async def ticket():
+        return await exec_client.issue_ticket(NS, user_id="u1", app_id="a1", app_name="web", target="app",
+                                              op="shell", cols=80, rows=24)
+
+    with pytest.raises(exec_client.ExecError) as e:
+        run_tls(fake, ticket, monkeypatch, (crt, key), other_pem)
+    assert e.value.message == exec_client.CERT_ERROR
+    assert NS not in exec_client._certs                                         # 다음 호출은 인증서를 새로 읽는다
+    assert fake.calls == []                                                      # 서명한 요청이 서버에 닿지 않았다

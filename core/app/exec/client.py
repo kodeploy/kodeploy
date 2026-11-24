@@ -3,6 +3,7 @@
 core는 이 클라이언트로 테넌트 ns의 exec Pod(kodeploy-exec.<ns>.svc:8081)에 서명한 요청을 보낸다.
 - 서명: app/builder/sign.py 그대로 (path는 쿼리를 뺀 원문). 그래서 작업 이름과 restore 기대값은 경로에 싣는다.
 - 키: 테넌트 ns의 kodeploy-exec-hmac Secret (core가 ns를 만들 때 같이 만든다).
+- TLS: EXEC_INTERNAL_TLS_NAMESPACES에 든 ns는 https로 부르고, 그 ns의 kodeploy-exec-tls 인증서 하나만 믿는다(자체 서명).
 - 프레임: 첫 바이트가 채널 번호 (0 stdin, 1 stdout, 2 stderr, 3 종료 상태, 255 CLOSE).
 - X-Kodeploy-Request-Id: 서명 밖 값이라 exec는 기록에만 쓴다. core 로그에도 같은 id를 남겨 두 기록을 잇는다.
 """
@@ -12,6 +13,7 @@ import base64
 import hashlib
 import json
 import logging
+import ssl
 import sys
 import time
 import uuid
@@ -21,8 +23,9 @@ import aiohttp
 from kubernetes_asyncio import client
 from kubernetes_asyncio.client.exceptions import ApiException
 
+from app import config
 from app.builder import sign
-from app.deploy.stack.manifests.tenant import EXEC_HMAC_KEY, EXEC_HMAC_SECRET
+from app.deploy.stack.manifests.tenant import EXEC_HMAC_KEY, EXEC_HMAC_SECRET, EXEC_TLS_SECRET, exec_host
 
 PROTOCOL = "kodeploy.exec.v1"
 HEADER_REQUEST_ID = "X-Kodeploy-Request-Id"
@@ -91,8 +94,14 @@ def new_request_id() -> str:
     return uuid.uuid4().hex
 
 
+def internal_tls(ns: str) -> bool:
+    on = config.EXEC_INTERNAL_TLS_NAMESPACES
+    return "*" in on or ns in on
+
+
 def base_url(ns: str) -> str:
-    return f"http://kodeploy-exec.{ns}.svc:{INTERNAL_PORT}"
+    scheme = "https" if internal_tls(ns) else "http"
+    return f"{scheme}://{exec_host(ns)}:{INTERNAL_PORT}"
 
 
 # --- 키 ---------------------------------------------------------------------
@@ -121,6 +130,42 @@ async def _key(ns: str) -> bytes:
     key = base64.b64decode(raw)
     _keys[ns] = (key, time.monotonic())
     return key
+
+
+# --- 내부 문 TLS --------------------------------------------------------------
+# 그 ns의 인증서 하나만 신뢰 목록에 넣는다. 키와 같은 주기로 다시 읽고, 확인에 실패하면 바로 버린다(바꿨을 수 있다).
+_certs: dict[str, tuple[ssl.SSLContext, float]] = {}
+
+CERT_ERROR = "exec 서비스의 인증서를 확인하지 못했습니다 — 이 앱의 kodeploy-exec-tls와 exec Pod의 인증서가 같은지 확인하세요"
+
+
+async def _tls_pem(ns: str) -> str:
+    await _ensure_loaded()
+    async with client.ApiClient() as api:
+        try:
+            secret = await client.CoreV1Api(api).read_namespaced_secret(name=EXEC_TLS_SECRET, namespace=ns)
+        except ApiException as e:
+            raise ExecError("exec 인증서(kodeploy-exec-tls)를 읽지 못했습니다", http_status=502) from e
+    raw = (secret.data or {}).get("tls.crt")
+    if not raw:
+        raise ExecError("exec 인증서(kodeploy-exec-tls)가 비어 있습니다", http_status=502)
+    return base64.b64decode(raw).decode()
+
+
+async def _ssl(ns: str) -> ssl.SSLContext | bool:
+    """aiohttp의 ssl 인자. 평문 ns면 True(기본값, http라 쓰이지 않는다)."""
+    if not internal_tls(ns):
+        return True
+    hit = _certs.get(ns)
+    if hit and time.monotonic() - hit[1] < _KEY_TTL:
+        return hit[0]
+    try:
+        ctx = ssl.create_default_context(cadata=await _tls_pem(ns))
+    except ssl.SSLError as e:
+        raise ExecError("exec 인증서(kodeploy-exec-tls)를 읽지 못했습니다", http_status=502) from e
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+    _certs[ns] = (ctx, time.monotonic())
+    return ctx
 
 
 def _headers(key: bytes, method: str, path: str, body: bytes, request_id: str) -> dict[str, str]:
@@ -181,12 +226,16 @@ async def issue_ticket(ns: str, *, user_id: str, app_id: str, app_name: str, tar
     body = json.dumps({"user_id": user_id, "app_id": app_id, "app": app_name, "target": target,
                        "op": op, "cols": cols, "rows": rows}, separators=(",", ":")).encode()
     key = await _key(ns)
+    tls = await _ssl(ns)
     headers = {**_headers(key, "POST", path, body, rid), "Content-Type": "application/json"}
     try:
         async with aiohttp.ClientSession(timeout=_TIMEOUT) as http:
-            async with http.post(base_url(ns) + path, data=body, headers=headers) as resp:
+            async with http.post(base_url(ns) + path, data=body, headers=headers, ssl=tls) as resp:
                 text = await resp.text()
                 status = resp.status
+    except aiohttp.ClientConnectorCertificateError as e:
+        _certs.pop(ns, None)
+        raise ExecError(CERT_ERROR) from e
     except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         raise ExecError("exec 서비스에 연결할 수 없습니다 — 이 앱의 kodeploy-exec가 떠 있는지 확인하세요") from e
     if status != 201:
@@ -237,6 +286,7 @@ class _Session:
 
     async def __aenter__(self):
         key = await _key(self.ns)
+        tls = await _ssl(self.ns)
         self._http = aiohttp.ClientSession(timeout=_TIMEOUT)
         try:
             self.ws = await self._http.ws_connect(
@@ -245,6 +295,7 @@ class _Session:
                 protocols=(PROTOCOL,),
                 autoping=True,
                 max_msg_size=8 << 20,
+                ssl=tls,
             )
         except aiohttp.WSServerHandshakeError as e:
             await self._http.close()
@@ -252,6 +303,10 @@ class _Session:
                 _keys.pop(self.ns, None)
             raise ExecError(f"exec 세션을 열지 못했습니다 ({e.status})",
                             http_status=503 if e.status == 503 else 502) from e
+        except aiohttp.ClientConnectorCertificateError as e:
+            await self._http.close()
+            _certs.pop(self.ns, None)
+            raise ExecError(CERT_ERROR) from e
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             await self._http.close()
             raise ExecError("exec 서비스에 연결할 수 없습니다 — 이 앱의 kodeploy-exec가 떠 있는지 확인하세요") from e

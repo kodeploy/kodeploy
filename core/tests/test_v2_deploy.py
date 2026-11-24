@@ -290,7 +290,7 @@ def test_tenant_ns_binds_core_before_writing_secrets(monkeypatch):
     rbac = MagicMock()
     rbac.create_namespaced_role_binding.side_effect = lambda namespace, body: order.append(
         ("RoleBinding", body["roleRef"]["name"], [(s["kind"], s["name"], s["namespace"]) for s in body["subjects"]]))
-    allowed = iter([False, True, True])                        # 첫 확인은 아직 반영 전
+    allowed = iter([False, True, True, True])                  # 첫 확인은 아직 반영 전
     authz = MagicMock()
     authz.create_self_subject_access_review.side_effect = lambda body: order.append("review") or SimpleNamespace(
         status=SimpleNamespace(allowed=next(allowed)))
@@ -307,6 +307,8 @@ def test_tenant_ns_binds_core_before_writing_secrets(monkeypatch):
         ("Secret", "ghcr-auth"),
         "review",
         ("Secret", "kodeploy-exec-hmac"),                     # kodeploy-exec 내부 문 키 (exec Pod가 마운트)
+        "review",
+        ("Secret", "kodeploy-exec-tls"),                      # kodeploy-exec 내부 문 TLS 인증서 (exec Pod가 마운트)
     ]
     assert not core.delete_namespaced_resource_quota.called    # 옛 quota 청소는 지웠다
     assert not core.read_namespace.called                      # core엔 ns 읽기 권한이 없다
@@ -360,7 +362,7 @@ def test_tenant_ns_waits_out_a_terminating_namespace(monkeypatch):
         _api_error(404),
     ])
     resources._ensure_tenant_ns(make_build())
-    assert order == ["Namespace", "RoleBinding", "Namespace", "RoleBinding", "Namespace", "RoleBinding", "Secret", "Secret"]
+    assert order == ["Namespace", "RoleBinding", "Namespace", "RoleBinding", "Namespace", "RoleBinding", "Secret", "Secret", "Secret"]
     assert sleeps == [2, 2]
 
 
@@ -1131,6 +1133,29 @@ def test_exec_hmac_secret_is_random_32_bytes_per_tenant():
     assert a["data"]["hmac"] != b["data"]["hmac"]              # 만들 때마다 새 키
 
 
+def test_exec_tls_secret_is_self_signed_for_service_host():
+    import base64
+    from datetime import datetime, timezone
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    from app.deploy.stack import manifests
+
+    a, b = manifests.exec_tls("tenant-0a1b2c3d"), manifests.exec_tls("tenant-0a1b2c3d")
+    assert a["metadata"]["name"] == "kodeploy-exec-tls" and a["metadata"]["namespace"] == "tenant-0a1b2c3d"
+    assert a["type"] == "kubernetes.io/tls"
+    cert = x509.load_pem_x509_certificate(base64.b64decode(a["data"]["tls.crt"]))
+    key = load_pem_private_key(base64.b64decode(a["data"]["tls.key"]), password=None)
+    assert cert.public_key().public_numbers() == key.public_key().public_numbers()   # 짝이 맞는 키
+    assert cert.issuer == cert.subject                                                # 자체 서명
+    assert cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca    # core가 신뢰 목록에 넣는 CA
+    names = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
+    assert names == ["kodeploy-exec.tenant-0a1b2c3d.svc", "kodeploy-exec.tenant-0a1b2c3d.svc.cluster.local"]
+    assert (cert.not_valid_after_utc - datetime.now(timezone.utc)).days >= 3649
+    assert a["data"]["tls.crt"] != b["data"]["tls.crt"]                               # 만들 때마다 새 키
+
+
 def test_exec_hmac_secret_kept_when_present(monkeypatch):
     # 이미 있는 키를 바꾸면 떠 있는 exec Pod와 어긋난다 — 409면 그대로 둔다
     from app.deploy.stack import resources
@@ -1146,3 +1171,6 @@ def test_exec_hmac_secret_kept_when_present(monkeypatch):
     monkeypatch.setattr(resources.k8s, "authorization_v1", lambda: authz)
     resources._ensure_tenant_ns(make_build())
     assert not core.replace_namespaced_secret.called and not core.patch_namespaced_secret.called
+    # HMAC 키와 같은 자리에서 TLS 인증서도 만들러 간다 (이미 있으면 409로 둔다)
+    made = [c.kwargs["body"]["metadata"]["name"] for c in core.create_namespaced_secret.call_args_list]
+    assert "kodeploy-exec-hmac" in made and "kodeploy-exec-tls" in made
